@@ -219,6 +219,10 @@ enum Commands {
         /// Maximum ply depth to index (default: 24, i.e. 12 full moves)
         #[arg(long, default_value = "24")]
         max_ply: usize,
+
+        /// Number of worker threads (default: all available CPU cores)
+        #[arg(long)]
+        threads: Option<usize>,
     },
 
     /// Query the instant opening tree for any board position (FEN or starting board)
@@ -593,13 +597,12 @@ fn main() -> Result<()> {
             println!("==========================================================================================");
             println!("Overall Benchmark Duration: {:.2} ms ({:.2} s)\n", report.total_time_ms, report.total_time_ms / 1000.0);
         }
-        Some(Commands::BuildPosIdx { db_path, max_ply }) => {
-            let path_str = db_path.to_string_lossy().to_lowercase();
+        Some(Commands::BuildPosIdx { db_path, max_ply, threads }) => {
             let start = std::time::Instant::now();
-            println!("Building companion .pos.idx for {} (depth: {} plies)...", db_path.display(), max_ply);
+            let path_str = db_path.to_string_lossy();
             let idx = if path_str.ends_with(".pgn") {
                 let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
-                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, |scanned, total, positions| {
+                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, threads, |scanned, total, positions| {
                     print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 })?
@@ -608,7 +611,7 @@ fn main() -> Result<()> {
                 let games_path = db.games_path().to_path_buf();
                 let entries = db.entries();
                 let db_path_buf = db.index_path().to_path_buf();
-                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, |scanned, total, positions| {
+                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, threads, |scanned, total, positions| {
                     print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 })?

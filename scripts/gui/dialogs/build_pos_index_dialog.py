@@ -1,3 +1,4 @@
+import os
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QFormLayout, QSpinBox,
@@ -7,10 +8,10 @@ from ..backend_client import BackendClient
 
 class BuildPosIndexDialog(QDialog):
     """Dialog for creating / rebuilding .pos.idx companion file with streaming progress."""
-    def __init__(self, client: BackendClient, default_ply: int = 24, parent=None):
+    def __init__(self, client: BackendClient, default_ply: int = 16, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Build Fast Position Index (.pos.idx)")
-        self.resize(480, 260)
+        self.resize(500, 290)
         self.client = client
 
         layout = QVBoxLayout(self)
@@ -29,6 +30,13 @@ class BuildPosIndexDialog(QDialog):
         self.spin_depth.setValue(default_ply)
         self.spin_depth.setSuffix(" plies (half-moves)")
         form.addRow("Indexing Depth:", self.spin_depth)
+
+        cpu_count = os.cpu_count() or 4
+        self.spin_threads = QSpinBox()
+        self.spin_threads.setRange(1, cpu_count)
+        self.spin_threads.setValue(max(1, cpu_count // 2))
+        self.spin_threads.setSuffix(f" threads (of {cpu_count} CPU cores)")
+        form.addRow("CPU Worker Threads:", self.spin_threads)
         layout.addLayout(form)
 
         self.progress_bar = QProgressBar()
@@ -57,9 +65,14 @@ class BuildPosIndexDialog(QDialog):
             return
         self.btn_build.setEnabled(False)
         self.spin_depth.setEnabled(False)
+        self.spin_threads.setEnabled(False)
         self.progress_bar.setValue(0)
-        self.lbl_progress.setText("Building index across CPU cores...")
-        self.client.send_request("build_pos_index", {"max_ply": self.spin_depth.value()})
+        threads = self.spin_threads.value()
+        self.lbl_progress.setText(f"Building index using {threads} worker threads...")
+        self.client.send_request("build_pos_index", {
+            "max_ply": self.spin_depth.value(),
+            "threads": threads,
+        })
 
     def update_progress(self, scanned: int, total: int, positions: int, percent: float):
         self.progress_bar.setValue(int(percent))
@@ -70,5 +83,6 @@ class BuildPosIndexDialog(QDialog):
         self.lbl_progress.setText(f"✅ Finished in {elapsed_ms:,.1f} ms! Indexed {unique_positions:,} unique positions.")
         self.btn_build.setEnabled(True)
         self.spin_depth.setEnabled(True)
+        self.spin_threads.setEnabled(True)
 
 

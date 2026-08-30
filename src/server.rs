@@ -432,14 +432,14 @@ fn handle_command(
 
             // ⚡ Instant Sub-Millisecond lookup if PositionIndex is active
             if let Some(pos_idx) = current_pos_index.as_ref() {
-                if let Ok(fen_parsed) = fen.trim().parse::<shakmaty::fen::Fen>() {
-                    if let Ok(pos) = fen_parsed.into_position::<shakmaty::Chess>(shakmaty::CastlingMode::Standard) {
+                if let Ok(f) = fen.trim().parse::<shakmaty::fen::Fen>() {
+                    if let Ok(p) = f.into_position::<shakmaty::Chess>(shakmaty::CastlingMode::Standard) {
                         use shakmaty::zobrist::ZobristHash;
-                        let h: shakmaty::zobrist::Zobrist64 = pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-                        if let Some(game_ids) = pos_idx.get_position_game_ids(h.0) {
+                        let h: shakmaty::zobrist::Zobrist64 = p.zobrist_hash(shakmaty::EnPassantMode::Legal);
+                        if let Some(game_ids) = pos_idx.get_position_sample_games(h.0) {
                             let matches: Vec<crate::position_search::PositionMatch> = game_ids
                                 .iter()
-                                .map(|&gid| crate::position_search::PositionMatch { game_id: gid, ply: 0 })
+                                .map(|&gid| crate::position_search::PositionMatch { game_id: gid as usize, ply: 0 })
                                 .collect();
                             let total_games = match db {
                                 DatabaseBackend::Scid(s) => s.game_count(),
@@ -610,6 +610,7 @@ fn handle_command(
             };
 
             let max_ply = req.params.get("max_ply").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
+            let threads = req.params.get("threads").and_then(|v| v.as_u64()).map(|t| t as usize);
             let start = Instant::now();
 
             let res = match db {
@@ -617,7 +618,7 @@ fn handle_command(
                     let games_path = s.games_path().to_path_buf();
                     let entries = s.entries();
                     let db_path = s.index_path().to_path_buf();
-                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, |scanned, total, positions| {
+                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, threads, |scanned, total, positions| {
                         let event_json = serde_json::json!({
                             "event": "build_pos_index_progress",
                             "data": {
@@ -638,7 +639,7 @@ fn handle_command(
                     let db_path = p.pgn_path.clone();
                     let entries = &p.entries;
                     let mmap = p.mmap_ref();
-                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, |scanned, total, positions| {
+                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, threads, |scanned, total, positions| {
                         let event_json = serde_json::json!({
                             "event": "build_pos_index_progress",
                             "data": {
