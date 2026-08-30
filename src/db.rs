@@ -6,6 +6,7 @@ use chess_scid_rw::names::NameTables;
 use chess_scid_rw::pgn_ingest;
 use chess_scid_rw::{Si4Paths, Si5Paths};
 use memmap2::Mmap;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -90,6 +91,10 @@ pub struct ScidDatabaseWrapper {
     games_mmap: Option<Mmap>,
     pending_games: Vec<u8>,
     dirty: bool,
+    player_ranks: std::sync::OnceLock<Vec<u32>>,
+    event_ranks: std::sync::OnceLock<Vec<u32>>,
+    site_ranks: std::sync::OnceLock<Vec<u32>>,
+    round_ranks: std::sync::OnceLock<Vec<u32>>,
 }
 
 pub fn result_code_to_str(res: u8) -> &'static str {
@@ -177,6 +182,10 @@ impl ScidDatabaseWrapper {
             games_mmap,
             pending_games: Vec::new(),
             dirty: false,
+            player_ranks: std::sync::OnceLock::new(),
+            event_ranks: std::sync::OnceLock::new(),
+            site_ranks: std::sync::OnceLock::new(),
+            round_ranks: std::sync::OnceLock::new(),
         })
     }
 
@@ -206,6 +215,62 @@ impl ScidDatabaseWrapper {
             games_mmap: None,
             pending_games: Vec::new(),
             dirty: true,
+            player_ranks: std::sync::OnceLock::new(),
+            event_ranks: std::sync::OnceLock::new(),
+            site_ranks: std::sync::OnceLock::new(),
+            round_ranks: std::sync::OnceLock::new(),
+        })
+    }
+
+    pub fn get_player_ranks(&self) -> &[u32] {
+        self.player_ranks.get_or_init(|| {
+            let names = &self.names.players;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
+        })
+    }
+
+    pub fn get_event_ranks(&self) -> &[u32] {
+        self.event_ranks.get_or_init(|| {
+            let names = &self.names.events;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
+        })
+    }
+
+    pub fn get_site_ranks(&self) -> &[u32] {
+        self.site_ranks.get_or_init(|| {
+            let names = &self.names.sites;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
+        })
+    }
+
+    pub fn get_round_ranks(&self) -> &[u32] {
+        self.round_ranks.get_or_init(|| {
+            let names = &self.names.rounds;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
         })
     }
 
@@ -662,157 +727,232 @@ impl ScidDatabaseWrapper {
             })
         });
 
-        let mut matched_indices = Vec::new();
+        let has_filter = pos_matches.is_some()
+            || mat_matches.is_some()
+            || only_del
+            || !include_del
+            || result_filter.is_some()
+            || eco_filter.is_some()
+            || date_filter.is_some()
+            || player_matches.is_some()
+            || white_matches.is_some()
+            || black_matches.is_some()
+            || event_matches.is_some()
+            || site_matches.is_some();
 
-        // O(1) integer-level matching per game
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if let Some(ref p_set) = pos_matches {
-                if !p_set.contains(&idx) {
-                    continue;
-                }
-            }
-
-            if let Some(ref m_set) = mat_matches {
-                if !m_set.contains(&idx) {
-                    continue;
-                }
-            }
-
-            if only_del {
-                if !entry.deleted {
-                    continue;
-                }
-            } else if !include_del && entry.deleted {
-                continue;
-            }
-
-            if let Some(res) = result_filter {
-                if res != "All" && !res.is_empty() {
-                    let actual_res = result_code_to_str(entry.result);
-                    if actual_res != res {
-                        continue;
+        let mut matched_indices: Vec<usize> = if has_filter {
+            self.entries
+                .par_iter()
+                .enumerate()
+                .filter_map(|(idx, entry)| {
+                    if let Some(ref p_set) = pos_matches {
+                        if !p_set.contains(&idx) {
+                            return None;
+                        }
                     }
-                }
-            }
-
-            if let Some(eco_prefix) = &eco_filter {
-                if !eco_prefix.is_empty() {
-                    let actual_eco = eco_to_string(entry.eco_code).unwrap_or_default();
-                    if !actual_eco.starts_with(eco_prefix) {
-                        continue;
+                    if let Some(ref m_set) = mat_matches {
+                        if !m_set.contains(&idx) {
+                            return None;
+                        }
                     }
-                }
-            }
-
-            if let Some(date_pat) = date_filter {
-                if !date_pat.is_empty() {
-                    let actual_date = date_to_pgn(entry.date);
-                    if !actual_date.contains(date_pat) {
-                        continue;
+                    if only_del {
+                        if !entry.deleted {
+                            return None;
+                        }
+                    } else if !include_del && entry.deleted {
+                        return None;
                     }
-                }
-            }
+                    if let Some(res) = result_filter {
+                        if res != "All" && !res.is_empty() {
+                            let actual_res = result_code_to_str(entry.result);
+                            if actual_res != res {
+                                return None;
+                            }
+                        }
+                    }
+                    if let Some(eco_prefix) = &eco_filter {
+                        if !eco_prefix.is_empty() {
+                            let actual_eco = eco_to_string(entry.eco_code).unwrap_or_default();
+                            if !actual_eco.starts_with(eco_prefix) {
+                                return None;
+                            }
+                        }
+                    }
+                    if let Some(date_pat) = date_filter {
+                        if !date_pat.is_empty() {
+                            let actual_date = date_to_pgn(entry.date);
+                            if !actual_date.contains(date_pat) {
+                                return None;
+                            }
+                        }
+                    }
+                    if let Some(ref m) = player_matches {
+                        let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        if !w_ok && !b_ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = white_matches {
+                        let ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = black_matches {
+                        let ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = event_matches {
+                        let ok = (entry.event_id as usize) < m.len() && m[entry.event_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = site_matches {
+                        let ok = (entry.site_id as usize) < m.len() && m[entry.site_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    Some(idx)
+                })
+                .collect()
+        } else {
+            (0..self.entries.len()).collect()
+        };
 
-            if let Some(ref m) = player_matches {
-                let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
-                let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
-                if !w_ok && !b_ok {
-                    continue;
-                }
-            }
-
-            if let Some(ref m) = white_matches {
-                let ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
-                if !ok {
-                    continue;
-                }
-            }
-
-            if let Some(ref m) = black_matches {
-                let ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
-                if !ok {
-                    continue;
-                }
-            }
-
-            if let Some(ref m) = event_matches {
-                let ok = (entry.event_id as usize) < m.len() && m[entry.event_id as usize];
-                if !ok {
-                    continue;
-                }
-            }
-
-            if let Some(ref m) = site_matches {
-                let ok = (entry.site_id as usize) < m.len() && m[entry.site_id as usize];
-                if !ok {
-                    continue;
-                }
-            }
-
-            matched_indices.push(idx);
-        }
-
-        // Fast Multi-Field Sorting
+        // Ultra-Fast Parallel Multi-Field Sorting
         if let Some(ref sort_field) = filter.sort_by {
             let is_asc = filter.sort_asc.unwrap_or(true);
+            let entries = &self.entries;
+
             match sort_field.to_lowercase().as_str() {
                 "date" => {
-                    matched_indices.sort_unstable_by_key(|&i| self.entries[i].date);
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].date);
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].date.cmp(&entries[a].date));
+                    }
                 }
                 "white_elo" => {
-                    matched_indices.sort_unstable_by_key(|&i| self.entries[i].white_elo);
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].white_elo);
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].white_elo.cmp(&entries[a].white_elo));
+                    }
                 }
                 "black_elo" => {
-                    matched_indices.sort_unstable_by_key(|&i| self.entries[i].black_elo);
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].black_elo);
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].black_elo.cmp(&entries[a].black_elo));
+                    }
                 }
                 "eco" => {
-                    matched_indices.sort_unstable_by_key(|&i| self.entries[i].eco_code);
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].eco_code);
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].eco_code.cmp(&entries[a].eco_code));
+                    }
                 }
                 "result" => {
-                    matched_indices.sort_unstable_by_key(|&i| self.entries[i].result);
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].result);
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].result.cmp(&entries[a].result));
+                    }
                 }
                 "white" => {
-                    matched_indices.sort_unstable_by(|&a, &b| {
-                        let wa = self.names.player(self.entries[a].white_id);
-                        let wb = self.names.player(self.entries[b].white_id);
-                        wa.cmp(wb)
-                    });
+                    let ranks = self.get_player_ranks();
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].white_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].white_id as usize).copied().unwrap_or(u32::MAX);
+                            ra.cmp(&rb)
+                        });
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].white_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].white_id as usize).copied().unwrap_or(u32::MAX);
+                            rb.cmp(&ra)
+                        });
+                    }
                 }
                 "black" => {
-                    matched_indices.sort_unstable_by(|&a, &b| {
-                        let ba = self.names.player(self.entries[a].black_id);
-                        let bb = self.names.player(self.entries[b].black_id);
-                        ba.cmp(bb)
-                    });
+                    let ranks = self.get_player_ranks();
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].black_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].black_id as usize).copied().unwrap_or(u32::MAX);
+                            ra.cmp(&rb)
+                        });
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].black_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].black_id as usize).copied().unwrap_or(u32::MAX);
+                            rb.cmp(&ra)
+                        });
+                    }
                 }
                 "event" => {
-                    matched_indices.sort_unstable_by(|&a, &b| {
-                        let ea = self.names.event(self.entries[a].event_id);
-                        let eb = self.names.event(self.entries[b].event_id);
-                        ea.cmp(eb)
-                    });
+                    let ranks = self.get_event_ranks();
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].event_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].event_id as usize).copied().unwrap_or(u32::MAX);
+                            ra.cmp(&rb)
+                        });
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].event_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].event_id as usize).copied().unwrap_or(u32::MAX);
+                            rb.cmp(&ra)
+                        });
+                    }
                 }
                 "site" => {
-                    matched_indices.sort_unstable_by(|&a, &b| {
-                        let sa = self.names.site(self.entries[a].site_id);
-                        let sb = self.names.site(self.entries[b].site_id);
-                        sa.cmp(sb)
-                    });
+                    let ranks = self.get_site_ranks();
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].site_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].site_id as usize).copied().unwrap_or(u32::MAX);
+                            ra.cmp(&rb)
+                        });
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].site_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].site_id as usize).copied().unwrap_or(u32::MAX);
+                            rb.cmp(&ra)
+                        });
+                    }
                 }
                 "round" => {
-                    matched_indices.sort_unstable_by(|&a, &b| {
-                        let ra = self.names.round(self.entries[a].round_id);
-                        let rb = self.names.round(self.entries[b].round_id);
-                        ra.cmp(rb)
-                    });
+                    let ranks = self.get_round_ranks();
+                    if is_asc {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].round_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].round_id as usize).copied().unwrap_or(u32::MAX);
+                            ra.cmp(&rb)
+                        });
+                    } else {
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            let ra = ranks.get(entries[a].round_id as usize).copied().unwrap_or(u32::MAX);
+                            let rb = ranks.get(entries[b].round_id as usize).copied().unwrap_or(u32::MAX);
+                            rb.cmp(&ra)
+                        });
+                    }
                 }
                 "id" | "index" => {
-                    matched_indices.sort_unstable();
+                    if !is_asc {
+                        matched_indices.par_sort_unstable_by(|a, b| b.cmp(a));
+                    } else {
+                        matched_indices.par_sort_unstable();
+                    }
                 }
                 _ => {}
-            }
-            if !is_asc {
-                matched_indices.reverse();
             }
         }
 

@@ -939,6 +939,42 @@ fn handle_command(
             }
         }
 
+        "benchmark" | "bench" => {
+            let db = match current_db {
+                Some(db) => db,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    }
+                }
+            };
+
+            let path = match db {
+                DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+            };
+
+            let heavy = req.params.get("heavy").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            match crate::benchmark::run_benchmark(&path, heavy) {
+                Ok(report) => ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::to_value(&report).unwrap_or_default()),
+                    error: None,
+                },
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("Benchmark failed: {}", e)),
+                },
+            }
+        }
+
         unknown => ResponseMessage {
             id,
             status: "error".to_string(),

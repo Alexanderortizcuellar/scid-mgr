@@ -1,3 +1,4 @@
+pub mod benchmark;
 mod db;
 pub mod pgn_db;
 pub mod pgn_utils;
@@ -195,6 +196,17 @@ enum Commands {
         /// Format: "si4" or "si5"
         #[arg(long, default_value = "si5")]
         format: String,
+    },
+
+    /// Run comprehensive performance benchmarks (load, sort, filter, search, seek)
+    Bench {
+        /// Path to database file (.si5, .si4, or .pgn)
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Include heavy search operations (e.g. full position search on large databases)
+        #[arg(long)]
+        heavy: bool,
     },
 
     /// Run the interactive JSON-RPC server
@@ -491,6 +503,30 @@ fn main() -> Result<()> {
             let mut db = ScidDatabaseWrapper::create(&db_path, fmt)?;
             db.save().context("Saving empty database")?;
             println!("Created new empty {} database at {}", fmt, db.index_path().display());
+        }
+        Some(Commands::Bench { db_path, heavy }) => {
+            println!("Running performance benchmarks on {}...", db_path.display());
+            let report = benchmark::run_benchmark(&db_path, heavy)?;
+
+            println!("\n==========================================================================================");
+            println!("                      DATABASE PERFORMANCE BENCHMARK REPORT                              ");
+            println!("==========================================================================================");
+            println!("Database:     {}", report.db_path);
+            println!("Format:       {}", report.format);
+            println!("Total Games:  {}", report.total_games);
+            if report.total_players > 0 {
+                println!("Entities:     {} players, {} events, {} sites", report.total_players, report.total_events, report.total_sites);
+            }
+            println!("Disk Size:    {:.2} MB", report.file_size_mb);
+            println!("------------------------------------------------------------------------------------------");
+            println!("{:<22} | {:<42} | {:>10} | {:<20}", "Category", "Benchmark Operation", "Time (ms)", "Details / Speed");
+            println!("{:-<22}-+-{:-<42}-+-{:-<10}-+-{:-<20}", "", "", "", "");
+
+            for item in &report.results {
+                println!("{:<22} | {:<42} | {:>10.2} | {:<20}", item.category, item.name, item.elapsed_ms, item.notes);
+            }
+            println!("==========================================================================================");
+            println!("Overall Benchmark Duration: {:.2} ms ({:.2} s)\n", report.total_time_ms, report.total_time_ms / 1000.0);
         }
         Some(Commands::Interactive { db_path }) => {
             server::run_interactive_server(db_path)?;
