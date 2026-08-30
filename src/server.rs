@@ -46,11 +46,6 @@ pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
             if path_str.ends_with(".pgn") {
                 match PgnDatabaseWrapper::open(&path) {
                     Ok(pgn) => {
-                        let total = pgn.game_count();
-                        let (idx_status, _) = PositionIndex::check_status(&path, total);
-                        if idx_status == IndexStatus::Valid {
-                            current_pos_index = PositionIndex::load(&path).ok();
-                        }
                         eprintln!("[Server] Auto-opened PGN database: {}", path.display());
                         current_db = Some(DatabaseBackend::Pgn(pgn));
                     }
@@ -61,11 +56,6 @@ pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
             } else {
                 match ScidDatabaseWrapper::open(&path) {
                     Ok(db) => {
-                        let total = db.game_count();
-                        let (idx_status, _) = PositionIndex::check_status(&path, total);
-                        if idx_status == IndexStatus::Valid {
-                            current_pos_index = PositionIndex::load(&path).ok();
-                        }
                         eprintln!("[Server] Auto-opened SCID database: {}", path.display());
                         current_db = Some(DatabaseBackend::Scid(db));
                     }

@@ -907,8 +907,8 @@ class MainWindow(QMainWindow):
             self.update_pos_index_badge("valid", unique_pos)
             if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
                 self.build_pos_dialog.on_complete(unique_pos, elapsed)
-            self.status_bar.showMessage(f"⚡ Position Index Built in {elapsed:,.1f} ms ({unique_pos:,} positions).", 5000)
-            self.opening_tree_widget.refresh_current_position()
+            if "Opening Tree" in self.tabs.tabText(self.tabs.currentIndex()):
+                self.opening_tree_widget.refresh_current_position()
 
         # Handle Opening Tree Report
         if "moves" in resp_data and "white_pct" in resp_data:
