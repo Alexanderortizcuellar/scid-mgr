@@ -389,12 +389,38 @@ fn handle_command(
                         error: Some(format!("Position search failed: {}", e)),
                     },
                 },
-                DatabaseBackend::Pgn(_) => ResponseMessage {
-                    id,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some("Direct position search is optimized for .si5/.si4 databases. Please import this PGN into .si5 for fast binary move-stream position search.".to_string()),
-                },
+                DatabaseBackend::Pgn(p) => {
+                    let res = p.search_position(fen, max_ply, |scanned, total, matches_len| {
+                        let event_json = serde_json::json!({
+                            "event": "search_progress",
+                            "data": {
+                                "scanned": scanned,
+                                "total": total,
+                                "matches": matches_len,
+                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            }
+                        });
+                        if let Ok(line) = serde_json::to_string(&event_json) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", line);
+                            let _ = out.flush();
+                        }
+                    });
+                    match res {
+                        Ok(res) => ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::to_value(&res).unwrap_or_default()),
+                            error: None,
+                        },
+                        Err(e) => ResponseMessage {
+                            id,
+                            status: "error".to_string(),
+                            data: None,
+                            error: Some(format!("Position search failed: {}", e)),
+                        },
+                    }
+                }
             }
         }
 
@@ -437,12 +463,46 @@ fn handle_command(
                         error: Some(format!("Material search failed: {}", e)),
                     },
                 },
-                DatabaseBackend::Pgn(_) => ResponseMessage {
-                    id,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some("Material search is optimized for .si5/.si4 databases. Please import this PGN into .si5 for high-speed bitboard material search.".to_string()),
-                },
+                DatabaseBackend::Pgn(p) => {
+                    let res = p.search_material(&filter, |scanned, total, matches_len| {
+                        let event_json = serde_json::json!({
+                            "event": "search_progress",
+                            "data": {
+                                "scanned": scanned,
+                                "total": total,
+                                "matches": matches_len,
+                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            }
+                        });
+                        if let Ok(line) = serde_json::to_string(&event_json) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", line);
+                            let _ = out.flush();
+                        }
+                    });
+                    match res {
+                        Ok(matches) => {
+                            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            ResponseMessage {
+                                id,
+                                status: "ok".to_string(),
+                                data: Some(serde_json::json!({
+                                    "matches": matches,
+                                    "match_count": matches.len(),
+                                    "total_games": p.game_count(),
+                                    "elapsed_ms": elapsed_ms,
+                                })),
+                                error: None,
+                            }
+                        }
+                        Err(e) => ResponseMessage {
+                            id,
+                            status: "error".to_string(),
+                            data: None,
+                            error: Some(format!("Material search failed: {}", e)),
+                        },
+                    }
+                }
             }
         }
 

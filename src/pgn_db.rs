@@ -8,6 +8,8 @@ use anyhow::{anyhow, Context, Result};
 use memmap2::Mmap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use shakmaty::zobrist::ZobristHash;
+use shakmaty::Position;
 
 use crate::db::{GameFilter, GameSummary};
 
@@ -315,8 +317,36 @@ impl PgnDatabaseWrapper {
         let event_pat = filter.event.as_ref().map(|s| s.to_lowercase());
         let site_pat = filter.site.as_ref().map(|s| s.to_lowercase());
 
+        let pos_matches = filter.fen.as_deref().and_then(|f| {
+            if f.trim().is_empty() {
+                None
+            } else {
+                self.search_position(f, None, |_, _, _| {}).ok().map(|res| {
+                    res.matches.into_iter().map(|m| m.game_id).collect::<std::collections::HashSet<usize>>()
+                })
+            }
+        });
+
+        let mat_matches = filter.material.as_ref().and_then(|m| {
+            self.search_material(m, |_, _, _| {}).ok().map(|vec| {
+                vec.into_iter().collect::<std::collections::HashSet<usize>>()
+            })
+        });
+
         let mut matching_indices: Vec<usize> = (0..self.entries.len())
+            .into_par_iter()
             .filter(|&idx| {
+                if let Some(ref p_set) = pos_matches {
+                    if !p_set.contains(&idx) {
+                        return false;
+                    }
+                }
+                if let Some(ref m_set) = mat_matches {
+                    if !m_set.contains(&idx) {
+                        return false;
+                    }
+                }
+
                 let entry = &self.entries[idx];
 
                 if let Some(res) = result_filter {
@@ -370,16 +400,19 @@ impl PgnDatabaseWrapper {
 
         let total_count = matching_indices.len();
 
-        // Sorting
+        // Parallel Sorting
         if let Some(ref sort_by) = filter.sort_by {
             let asc = filter.sort_asc.unwrap_or(true);
-            matching_indices.sort_by(|&a, &b| {
-                let ea = &self.entries[a];
-                let eb = &self.entries[b];
-                let ord = match sort_by.as_str() {
+            let entries = &self.entries;
+            matching_indices.par_sort_unstable_by(|&a, &b| {
+                let ea = &entries[a];
+                let eb = &entries[b];
+                let ord = match sort_by.to_lowercase().as_str() {
                     "id" => a.cmp(&b),
                     "white" => ea.white.cmp(&eb.white),
                     "black" => ea.black.cmp(&eb.black),
+                    "white_elo" => ea.white_elo.unwrap_or(0).cmp(&eb.white_elo.unwrap_or(0)),
+                    "black_elo" => ea.black_elo.unwrap_or(0).cmp(&eb.black_elo.unwrap_or(0)),
                     "result" => ea.result.cmp(&eb.result),
                     "eco" => ea.eco.cmp(&eb.eco),
                     "date" => ea.date.cmp(&eb.date),
@@ -426,5 +459,255 @@ impl PgnDatabaseWrapper {
             .collect();
 
         (games, total_count)
+    }
+
+    /// Search games by board position or partial piece placement across raw PGN move streams
+    pub fn search_position<F>(
+        &self,
+        fen_str: &str,
+        max_ply: Option<usize>,
+        mut progress: F,
+    ) -> Result<crate::position_search::PositionSearchResult>
+    where
+        F: FnMut(usize, usize, usize),
+    {
+        let start = Instant::now();
+        let target_fen = fen_str.trim();
+        let max_ply_val = max_ply.unwrap_or(500);
+
+        let (target_hash, target_pieces) = if let Ok(fen) = target_fen.parse::<shakmaty::fen::Fen>() {
+            if let Ok(pos) = fen.into_position::<shakmaty::Chess>(shakmaty::CastlingMode::Standard) {
+                let h: shakmaty::zobrist::Zobrist64 = pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
+                (Some(h.0), Vec::new())
+            } else {
+                let pieces = crate::position_search::parse_piece_placements(target_fen);
+                (None, pieces)
+            }
+        } else {
+            let pieces = crate::position_search::parse_piece_placements(target_fen);
+            (None, pieces)
+        };
+
+        let total = self.entries.len();
+        let chunk_size = 1000;
+        let mut matches = Vec::new();
+        let mut scanned = 0;
+
+        for chunk_idx in (0..total).step_by(chunk_size) {
+            let end_idx = (chunk_idx + chunk_size).min(total);
+            let chunk = &self.entries[chunk_idx..end_idx];
+
+            let chunk_matches: Vec<crate::position_search::PositionMatch> = chunk
+                .par_iter()
+                .enumerate()
+                .filter_map(|(sub_idx, entry)| {
+                    let game_id = chunk_idx + sub_idx;
+                    let slice = &self.mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
+                    let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
+                    let mut finder = PositionFinder::new(target_hash, target_pieces.clone(), max_ply_val);
+                    if let Ok(Some(Some(ply))) = reader.read_game(&mut finder) {
+                        Some(crate::position_search::PositionMatch { game_id, ply })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            matches.extend(chunk_matches);
+            scanned = end_idx;
+            progress(scanned, total, matches.len());
+        }
+
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        Ok(crate::position_search::PositionSearchResult {
+            target_fen: target_fen.to_string(),
+            target_hash: target_hash.unwrap_or(0),
+            matches,
+            total_games_searched: total,
+            elapsed_ms,
+        })
+    }
+
+    /// Search games by piece count and opposite/same-colored bishops across raw PGN move streams
+    pub fn search_material<F>(
+        &self,
+        filter: &crate::position_search::MaterialFilter,
+        mut progress: F,
+    ) -> Result<Vec<usize>>
+    where
+        F: FnMut(usize, usize, usize),
+    {
+        let total = self.entries.len();
+        let chunk_size = 1000;
+        let mut matches = Vec::new();
+        let mut scanned = 0;
+
+        for chunk_idx in (0..total).step_by(chunk_size) {
+            let end_idx = (chunk_idx + chunk_size).min(total);
+            let chunk = &self.entries[chunk_idx..end_idx];
+
+            let chunk_matches: Vec<usize> = chunk
+                .par_iter()
+                .enumerate()
+                .filter_map(|(sub_idx, entry)| {
+                    let game_id = chunk_idx + sub_idx;
+                    let slice = &self.mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
+                    let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
+                    let mut finder = MaterialFinder::new(filter.clone());
+                    if let Ok(Some(true)) = reader.read_game(&mut finder) {
+                        Some(game_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            matches.extend(chunk_matches);
+            scanned = end_idx;
+            progress(scanned, total, matches.len());
+        }
+
+        Ok(matches)
+    }
+}
+
+struct PositionFinder {
+    target_hash: Option<u64>,
+    target_pieces: Vec<(shakmaty::Square, shakmaty::Role, shakmaty::Color)>,
+    found_ply: Option<usize>,
+    ply: usize,
+    max_ply: usize,
+    pos: shakmaty::Chess,
+}
+
+impl PositionFinder {
+    fn new(
+        target_hash: Option<u64>,
+        target_pieces: Vec<(shakmaty::Square, shakmaty::Role, shakmaty::Color)>,
+        max_ply: usize,
+    ) -> Self {
+        Self {
+            target_hash,
+            target_pieces,
+            found_ply: None,
+            ply: 0,
+            max_ply,
+            pos: shakmaty::Chess::default(),
+        }
+    }
+
+    fn check_current_pos(&mut self) {
+        if self.found_ply.is_some() {
+            return;
+        }
+        if let Some(target_hash) = self.target_hash {
+            let current_hash: shakmaty::zobrist::Zobrist64 = self.pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
+            if current_hash.0 == target_hash {
+                self.found_ply = Some(self.ply);
+            }
+        } else if !self.target_pieces.is_empty() {
+            let board = self.pos.board();
+            let matches_all = self.target_pieces.iter().all(|&(sq, role, color)| {
+                board.piece_at(sq) == Some(shakmaty::Piece { color, role })
+            });
+            if matches_all {
+                self.found_ply = Some(self.ply);
+            }
+        }
+    }
+}
+
+impl pgn_reader::Visitor for PositionFinder {
+    type Result = Option<usize>;
+
+    fn begin_game(&mut self) {
+        self.check_current_pos();
+    }
+
+    fn begin_variation(&mut self) -> pgn_reader::Skip {
+        pgn_reader::Skip(true)
+    }
+
+    fn san(&mut self, san_plus: shakmaty::san::SanPlus) {
+        if self.found_ply.is_some() || self.ply >= self.max_ply {
+            return;
+        }
+
+        if let Ok(m) = san_plus.san.to_move(&self.pos) {
+            self.pos.play_unchecked(&m);
+            self.ply += 1;
+            self.check_current_pos();
+        }
+    }
+
+    fn end_game(&mut self) -> Self::Result {
+        self.found_ply
+    }
+}
+
+struct MaterialFinder {
+    filter: crate::position_search::MaterialFilter,
+    matched: bool,
+    ply: usize,
+    max_ply: usize,
+    match_any_ply: bool,
+    pos: shakmaty::Chess,
+}
+
+impl MaterialFinder {
+    fn new(filter: crate::position_search::MaterialFilter) -> Self {
+        let max_ply = filter.max_ply.unwrap_or(500);
+        let match_any_ply = filter.match_any_ply;
+        let mut mf = Self {
+            filter,
+            matched: false,
+            ply: 0,
+            max_ply,
+            match_any_ply,
+            pos: shakmaty::Chess::default(),
+        };
+        if mf.match_any_ply && mf.check_material() {
+            mf.matched = true;
+        }
+        mf
+    }
+
+    fn check_material(&self) -> bool {
+        crate::position_search::matches_material(&self.pos, &self.filter)
+    }
+}
+
+impl pgn_reader::Visitor for MaterialFinder {
+    type Result = bool;
+
+    fn begin_variation(&mut self) -> pgn_reader::Skip {
+        pgn_reader::Skip(true)
+    }
+
+    fn san(&mut self, san_plus: shakmaty::san::SanPlus) {
+        if self.matched && !self.match_any_ply {
+            return;
+        }
+        if self.ply >= self.max_ply {
+            return;
+        }
+
+        if let Ok(m) = san_plus.san.to_move(&self.pos) {
+            self.pos.play_unchecked(&m);
+            self.ply += 1;
+            if self.match_any_ply && !self.matched {
+                if self.check_material() {
+                    self.matched = true;
+                }
+            }
+        }
+    }
+
+    fn end_game(&mut self) -> Self::Result {
+        if !self.match_any_ply {
+            self.check_material()
+        } else {
+            self.matched
+        }
     }
 }

@@ -23,7 +23,7 @@ from typing import Optional, Dict, Any, Set
 import chess
 import chess.svg
 import qtawesome as qta
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QAbstractTableModel, QModelIndex, QTimer, QSize, QByteArray, QMimeData
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QAbstractTableModel, QModelIndex, QTimer, QSize, QByteArray, QMimeData, QSettings
 from PyQt5.QtGui import QFont, QColor, QPixmap, QPainter, QIcon, QDrag
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
@@ -54,6 +54,12 @@ from PyQt5.QtWidgets import (
     QRadioButton,
     QButtonGroup,
     QSpinBox,
+    QTableWidgetItem,
+    QProgressBar,
+    QTableWidget,
+    QMenu,
+    QAction,
+    QScrollArea,
 )
 
 
@@ -1340,6 +1346,73 @@ class BenchmarkDialog(QDialog):
         QMessageBox.information(self, "Copied", "Benchmark report copied to clipboard!")
 
 
+class ColumnsConfigDialog(QDialog):
+    """Dialog allowing user to check/uncheck columns to display in the database table."""
+    def __init__(self, table_view: QTableView, headers: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configure Column Visibility")
+        self.resize(360, 420)
+        self.table_view = table_view
+        self.headers = headers
+        self.checkboxes = []
+
+        layout = QVBoxLayout(self)
+
+        info_lbl = QLabel("Check columns to display in the database table:")
+        info_lbl.setStyleSheet("font-weight: bold; margin-bottom: 6px;")
+        layout.addWidget(info_lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+
+        for col, name in enumerate(self.headers):
+            cb = QCheckBox(f"{col + 1}. {name}")
+            cb.setChecked(not self.table_view.isColumnHidden(col))
+            self.checkboxes.append((col, cb))
+            scroll_layout.addWidget(cb)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+
+        btn_row1 = QHBoxLayout()
+        btn_all = QPushButton("Select All")
+        btn_all.clicked.connect(self.select_all)
+        btn_row1.addWidget(btn_all)
+
+        btn_reset = QPushButton("Reset Defaults")
+        btn_reset.clicked.connect(self.reset_defaults)
+        btn_row1.addWidget(btn_reset)
+        layout.addLayout(btn_row1)
+
+        btn_row2 = QHBoxLayout()
+        btn_apply = QPushButton("Apply")
+        btn_apply.setStyleSheet("font-weight: bold; background-color: #0288d1; color: white;")
+        btn_apply.clicked.connect(self.apply_changes)
+        btn_row2.addWidget(btn_apply)
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_row2.addWidget(btn_close)
+        layout.addLayout(btn_row2)
+
+    def select_all(self):
+        for _, cb in self.checkboxes:
+            cb.setChecked(True)
+
+    def reset_defaults(self):
+        for _, cb in self.checkboxes:
+            cb.setChecked(True)
+
+    def apply_changes(self):
+        for col, cb in self.checkboxes:
+            self.table_view.setColumnHidden(col, not cb.isChecked())
+        if self.parent() and hasattr(self.parent(), "save_column_settings"):
+            self.parent().save_column_settings()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1592,6 +1665,8 @@ class MainWindow(QMainWindow):
         header.setSectionsClickable(True)
         header.setStretchLastSection(True)
         header.sectionClicked.connect(self.table_model.toggle_sort_column)
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self.show_header_context_menu)
 
         self.table_view.verticalHeader().setDefaultSectionSize(26)
         self.table_view.selectionModel().selectionChanged.connect(self.on_table_selection_changed)
@@ -1599,6 +1674,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.table_view)
 
         self._set_default_column_widths()
+        self.load_column_settings()
 
         # Virtual Scroll Status Bar
         vscroll_bar = QHBoxLayout()
@@ -1606,6 +1682,12 @@ class MainWindow(QMainWindow):
         self.lbl_vscroll_info.setStyleSheet("color: #444; font-size: 11px; padding: 2px;")
         vscroll_bar.addWidget(self.lbl_vscroll_info)
         vscroll_bar.addStretch()
+
+        btn_columns = QPushButton("⚙ Columns...")
+        btn_columns.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        btn_columns.setToolTip("Configure visible columns")
+        btn_columns.clicked.connect(self.open_columns_dialog)
+        vscroll_bar.addWidget(btn_columns)
 
         left_layout.addLayout(vscroll_bar)
         splitter.addWidget(left_container)
@@ -1687,6 +1769,64 @@ class MainWindow(QMainWindow):
         widths = [50, 140, 50, 140, 50, 65, 50, 80, 130, 110, 50, 60]
         for col, w in enumerate(widths):
             self.table_view.setColumnWidth(col, w)
+
+    def show_header_context_menu(self, pos):
+        menu = QMenu(self)
+        menu.setStyleSheet("font-size: 12px;")
+
+        # Title
+        title_action = menu.addAction("👁 Column Visibility:")
+        title_action.setEnabled(False)
+        menu.addSeparator()
+
+        for col, name in enumerate(VirtualScidTableModel.HEADERS):
+            act = QAction(f"{col + 1}. {name}", menu, checkable=True)
+            act.setChecked(not self.table_view.isColumnHidden(col))
+            act.setData(col)
+            act.triggered.connect(lambda checked, c=col: self.toggle_column_visibility(c, checked))
+            menu.addAction(act)
+
+        menu.addSeparator()
+        act_dialog = menu.addAction("⚙ Configure Columns...")
+        act_dialog.triggered.connect(self.open_columns_dialog)
+
+        act_show_all = menu.addAction("Show All Columns")
+        act_show_all.triggered.connect(self.show_all_columns)
+
+        act_reset_widths = menu.addAction("Reset Column Widths")
+        act_reset_widths.triggered.connect(self._set_default_column_widths)
+
+        menu.exec_(self.table_view.horizontalHeader().mapToGlobal(pos))
+
+    def toggle_column_visibility(self, col: int, visible: bool):
+        self.table_view.setColumnHidden(col, not visible)
+        self.save_column_settings()
+
+    def show_all_columns(self):
+        for col in range(len(VirtualScidTableModel.HEADERS)):
+            self.table_view.setColumnHidden(col, False)
+        self.save_column_settings()
+
+    def open_columns_dialog(self):
+        dlg = ColumnsConfigDialog(self.table_view, VirtualScidTableModel.HEADERS, self)
+        dlg.exec_()
+
+    def save_column_settings(self):
+        settings = QSettings("ChessScidMgr", "ScidGui")
+        hidden_cols = [col for col in range(len(VirtualScidTableModel.HEADERS)) if self.table_view.isColumnHidden(col)]
+        settings.setValue("columns_hidden", hidden_cols)
+
+    def load_column_settings(self):
+        settings = QSettings("ChessScidMgr", "ScidGui")
+        hidden_cols = settings.value("columns_hidden", [])
+        if isinstance(hidden_cols, list):
+            for col in hidden_cols:
+                try:
+                    c = int(col)
+                    if 0 <= c < len(VirtualScidTableModel.HEADERS):
+                        self.table_view.setColumnHidden(c, True)
+                except (ValueError, TypeError):
+                    pass
 
     def auto_detect_defaults(self):
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2079,6 +2219,15 @@ class MainWindow(QMainWindow):
                 self.export_progress_dialog.setValue(percent)
 
             self.status_bar.showMessage(f"Exporting: {percent}% | {exported:,} games ({speed:,.0f} g/s, ETA: {eta}s)")
+            return
+
+        if data.get("event") == "search_progress":
+            prog = data.get("data", {})
+            scanned = prog.get("scanned", 0)
+            total = prog.get("total", 0)
+            matches = prog.get("matches", 0)
+            pct = prog.get("percent", 0.0)
+            self.status_bar.showMessage(f"🔍 Searching PGN: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
             return
 
         # Log to tab

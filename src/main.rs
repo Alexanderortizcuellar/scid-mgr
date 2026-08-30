@@ -307,8 +307,29 @@ fn main() -> Result<()> {
             fen,
             max_ply,
         }) => {
-            let db = ScidDatabaseWrapper::open(&db_path)?;
-            let result = db.search_position(&fen, Some(max_ply))?;
+            let path_str = db_path.to_string_lossy().to_lowercase();
+            let (result, summaries) = if path_str.ends_with(".pgn") {
+                let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                let res = pgn_db.search_position(&fen, Some(max_ply), |_, _, _| {})?;
+                let mut summs = std::collections::HashMap::new();
+                for m in res.matches.iter().take(50) {
+                    if let Some(e) = pgn_db.entries.get(m.game_id) {
+                        summs.insert(m.game_id, (e.white.clone(), e.black.clone(), e.result.clone(), e.date.clone()));
+                    }
+                }
+                (res, summs)
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                let res = db.search_position(&fen, Some(max_ply))?;
+                let mut summs = std::collections::HashMap::new();
+                for m in res.matches.iter().take(50) {
+                    if let Some(g) = db.get_game_summary(m.game_id) {
+                        summs.insert(m.game_id, (g.white, g.black, g.result, g.date));
+                    }
+                }
+                (res, summs)
+            };
+
             println!(
                 "Position search completed in {:.2} ms across {} games:",
                 result.elapsed_ms, result.total_games_searched
@@ -321,14 +342,14 @@ fn main() -> Result<()> {
                 "", "", "", "", "", "");
 
             for m in result.matches.iter().take(50) {
-                if let Some(g) = db.get_game_summary(m.game_id) {
+                if let Some((w, b, r, d)) = summaries.get(&m.game_id) {
                     println!("{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
                         m.game_id,
                         m.ply,
-                        truncate_str(&g.white, 20),
-                        truncate_str(&g.black, 20),
-                        g.result,
-                        g.date
+                        truncate_str(w, 20),
+                        truncate_str(b, 20),
+                        r,
+                        d
                     );
                 }
             }
@@ -352,7 +373,6 @@ fn main() -> Result<()> {
             opposite_bishops,
             same_bishops,
         }) => {
-            let db = ScidDatabaseWrapper::open(&db_path)?;
             let mat_filter = position_search::MaterialFilter {
                 white_queens: wq,
                 white_rooks: wr,
@@ -370,14 +390,36 @@ fn main() -> Result<()> {
                 max_ply: None,
             };
 
+            let path_str = db_path.to_string_lossy().to_lowercase();
             let start = std::time::Instant::now();
-            let matches = db.search_material(&mat_filter)?;
+
+            let (matches, total_count, summaries) = if path_str.ends_with(".pgn") {
+                let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                let matches = pgn_db.search_material(&mat_filter, |_, _, _| {})?;
+                let mut summs = std::collections::HashMap::new();
+                for &gid in matches.iter().take(50) {
+                    if let Some(e) = pgn_db.entries.get(gid) {
+                        summs.insert(gid, (e.white.clone(), e.black.clone(), e.result.clone(), e.date.clone()));
+                    }
+                }
+                (matches, pgn_db.game_count(), summs)
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                let matches = db.search_material(&mat_filter)?;
+                let mut summs = std::collections::HashMap::new();
+                for &gid in matches.iter().take(50) {
+                    if let Some(g) = db.get_game_summary(gid) {
+                        summs.insert(gid, (g.white, g.black, g.result, g.date));
+                    }
+                }
+                (matches, db.game_count(), summs)
+            };
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
             println!(
                 "Material search completed in {:.2} ms across {} games (mode: {}):",
                 elapsed_ms,
-                db.game_count(),
+                total_count,
                 if any_move { "any move" } else { "final position" }
             );
             println!("Found {} matching games.\n", matches.len());
@@ -388,13 +430,13 @@ fn main() -> Result<()> {
                 "", "", "", "", "");
 
             for &game_id in matches.iter().take(50) {
-                if let Some(g) = db.get_game_summary(game_id) {
+                if let Some((w, b, r, d)) = summaries.get(&game_id) {
                     println!("{:<6} | {:<20} | {:<20} | {:<7} | {:<10}",
                         game_id,
-                        truncate_str(&g.white, 20),
-                        truncate_str(&g.black, 20),
-                        g.result,
-                        g.date
+                        truncate_str(w, 20),
+                        truncate_str(b, 20),
+                        r,
+                        d
                     );
                 }
             }
