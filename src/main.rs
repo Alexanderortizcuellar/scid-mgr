@@ -1,4 +1,5 @@
 mod db;
+pub mod pgn_db;
 pub mod pgn_utils;
 pub mod position_search;
 mod server;
@@ -216,20 +217,28 @@ fn main() -> Result<()> {
             test_suite::run_full_test_suite()?;
         }
         Some(Commands::Info { db_path }) => {
-            let db = ScidDatabaseWrapper::open(&db_path)?;
-            let stats = db.stats();
-            println!("Database: {}", stats.index_path);
-            println!("Format:   {}", stats.format);
-            println!("Total Games:    {}", stats.total_games);
-            println!("Active Games:   {}", stats.active_games);
-            println!("Deleted Games:  {}", stats.deleted_games);
-            println!("Unique Players: {}", stats.players_count);
-            println!("Unique Events:  {}", stats.events_count);
-            println!("Unique Sites:   {}", stats.sites_count);
-            println!("Unique Rounds:  {}", stats.rounds_count);
-            println!("Index Size:     {} bytes", stats.index_file_size);
-            println!("Names Size:     {} bytes", stats.namebase_file_size);
-            println!("Games Size:     {} bytes", stats.games_file_size);
+            let path_str = db_path.to_string_lossy().to_lowercase();
+            if path_str.ends_with(".pgn") {
+                let pgn = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                println!("File:        {}", pgn.pgn_path.display());
+                println!("Format:      PGN (Plain Text Database)");
+                println!("Total Games: {}", pgn.game_count());
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                let stats = db.stats();
+                println!("Database: {}", stats.index_path);
+                println!("Format:   {}", stats.format);
+                println!("Total Games:    {}", stats.total_games);
+                println!("Active Games:   {}", stats.active_games);
+                println!("Deleted Games:  {}", stats.deleted_games);
+                println!("Unique Players: {}", stats.players_count);
+                println!("Unique Events:  {}", stats.events_count);
+                println!("Unique Sites:   {}", stats.sites_count);
+                println!("Unique Rounds:  {}", stats.rounds_count);
+                println!("Index Size:     {} bytes", stats.index_file_size);
+                println!("Names Size:     {} bytes", stats.namebase_file_size);
+                println!("Games Size:     {} bytes", stats.games_file_size);
+            }
         }
         Some(Commands::List {
             db_path,
@@ -240,7 +249,6 @@ fn main() -> Result<()> {
             sort_by,
             desc,
         }) => {
-            let db = ScidDatabaseWrapper::open(&db_path)?;
             let filter = GameFilter {
                 player,
                 eco,
@@ -248,7 +256,14 @@ fn main() -> Result<()> {
                 sort_asc: Some(!desc),
                 ..Default::default()
             };
-            let (games, total) = db.query_games(&filter, page, page_size);
+            let path_str = db_path.to_string_lossy().to_lowercase();
+            let (games, total) = if path_str.ends_with(".pgn") {
+                let pgn = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                pgn.query_games(&filter, page, page_size)
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                db.query_games(&filter, page, page_size)
+            };
             println!(
                 "Displaying games {}-{} of {} total matching:\n",
                 page * page_size,
@@ -376,8 +391,14 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Get { db_path, index }) => {
-            let db = ScidDatabaseWrapper::open(&db_path)?;
-            let pgn = db.game_pgn(index)?;
+            let path_str = db_path.to_string_lossy().to_lowercase();
+            let pgn = if path_str.ends_with(".pgn") {
+                let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                pgn_db.get_game_pgn(index)?
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                db.game_pgn(index)?
+            };
             println!("{}", pgn);
         }
         Some(Commands::Import {

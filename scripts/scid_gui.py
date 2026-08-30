@@ -1226,11 +1226,12 @@ class MainWindow(QMainWindow):
         btn_browse_bin.clicked.connect(self.browse_binary)
         conn_layout.addWidget(btn_browse_bin, 0, 2)
 
-        # SCID Database Path
-        conn_layout.addWidget(QLabel("SCID Database (.si5/.si4):"), 1, 0)
+        # Database Path (SCID or PGN)
+        conn_layout.addWidget(QLabel("Chess DB / PGN:"), 1, 0)
         self.db_input = QLineEdit()
+        self.db_input.setPlaceholderText("Select .si5, .si4, or .pgn file...")
         conn_layout.addWidget(self.db_input, 1, 1)
-        btn_browse_db = QPushButton("Open DB...")
+        btn_browse_db = QPushButton("Open DB / PGN...")
         btn_browse_db.clicked.connect(self.browse_db)
         conn_layout.addWidget(btn_browse_db, 1, 2)
 
@@ -1566,9 +1567,9 @@ class MainWindow(QMainWindow):
     def browse_db(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select SCID Database File",
+            "Select Chess Database or PGN File",
             "",
-            "SCID Databases (*.si5 *.si4 *.sn5 *.sn4 *.sg5 *.sg4);;All Files (*)",
+            "Chess Databases (*.si5 *.si4 *.pgn);;SCID Databases (*.si5 *.si4 *.sn5 *.sn4 *.sg5 *.sg4);;PGN Files (*.pgn);;All Files (*)",
         )
         if path:
             self.db_input.setText(path)

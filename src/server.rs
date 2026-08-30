@@ -1,10 +1,16 @@
 use crate::db::{GameFilter, ScidDatabaseWrapper, ScidFormat};
+use crate::pgn_db::PgnDatabaseWrapper;
 use crate::pgn_utils::import_pgn_file_with_progress;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+
+pub enum DatabaseBackend {
+    Scid(ScidDatabaseWrapper),
+    Pgn(PgnDatabaseWrapper),
+}
 
 #[derive(Debug, Deserialize)]
 pub struct RequestMessage {
@@ -29,17 +35,30 @@ pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
     let mut stdout = io::stdout();
     let mut reader = stdin.lock();
 
-    let mut current_db: Option<ScidDatabaseWrapper> = None;
+    let mut current_db: Option<DatabaseBackend> = None;
 
     if let Some(path) = initial_db_path {
         if path.exists() {
-            match ScidDatabaseWrapper::open(&path) {
-                Ok(db) => {
-                    eprintln!("[Server] Auto-opened database: {}", path.display());
-                    current_db = Some(db);
+            let path_str = path.to_string_lossy().to_lowercase();
+            if path_str.ends_with(".pgn") {
+                match PgnDatabaseWrapper::open(&path) {
+                    Ok(pgn) => {
+                        eprintln!("[Server] Auto-opened PGN database: {}", path.display());
+                        current_db = Some(DatabaseBackend::Pgn(pgn));
+                    }
+                    Err(e) => {
+                        eprintln!("[Server] Failed to auto-open {}: {}", path.display(), e);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[Server] Failed to auto-open {}: {}", path.display(), e);
+            } else {
+                match ScidDatabaseWrapper::open(&path) {
+                    Ok(db) => {
+                        eprintln!("[Server] Auto-opened SCID database: {}", path.display());
+                        current_db = Some(DatabaseBackend::Scid(db));
+                    }
+                    Err(e) => {
+                        eprintln!("[Server] Failed to auto-open {}: {}", path.display(), e);
+                    }
                 }
             }
         }
@@ -91,7 +110,7 @@ pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
 }
 
 fn handle_command(
-    current_db: &mut Option<ScidDatabaseWrapper>,
+    current_db: &mut Option<DatabaseBackend>,
     req: RequestMessage,
 ) -> ResponseMessage {
     let id = req.id;
@@ -111,27 +130,64 @@ fn handle_command(
                 }
             };
 
-            match ScidDatabaseWrapper::open(Path::new(path_str)) {
-                Ok(db) => {
-                    let stats = db.stats();
-                    *current_db = Some(db);
-                    ResponseMessage {
-                        id,
-                        status: "ok".to_string(),
-                        data: Some(serde_json::json!({
-                            "stats": stats,
-                            "format": stats.format.to_string(),
-                            "total_games": stats.total_games
-                        })),
-                        error: None,
+            let path = Path::new(path_str);
+            if path_str.to_lowercase().ends_with(".pgn") {
+                match PgnDatabaseWrapper::open(path) {
+                    Ok(pgn) => {
+                        let total_games = pgn.game_count();
+                        let pgn_path_str = pgn.pgn_path.to_string_lossy().to_string();
+                        *current_db = Some(DatabaseBackend::Pgn(pgn));
+                        ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "stats": {
+                                    "format": "pgn",
+                                    "total_games": total_games,
+                                    "active_games": total_games,
+                                    "deleted_games": 0,
+                                    "players_count": 0,
+                                    "events_count": 0,
+                                    "sites_count": 0,
+                                    "rounds_count": 0,
+                                    "path": pgn_path_str
+                                },
+                                "format": "pgn",
+                                "total_games": total_games
+                            })),
+                            error: None,
+                        }
                     }
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Failed to open PGN database: {}", e)),
+                    },
                 }
-                Err(e) => ResponseMessage {
-                    id,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some(format!("Failed to open database: {}", e)),
-                },
+            } else {
+                match ScidDatabaseWrapper::open(path) {
+                    Ok(db) => {
+                        let stats = db.stats();
+                        *current_db = Some(DatabaseBackend::Scid(db));
+                        ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "stats": stats,
+                                "format": stats.format.to_string(),
+                                "total_games": stats.total_games
+                            })),
+                            error: None,
+                        }
+                    }
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Failed to open SCID database: {}", e)),
+                    },
+                }
             }
         }
 
@@ -161,7 +217,7 @@ fn handle_command(
             match ScidDatabaseWrapper::create(Path::new(path_str), format) {
                 Ok(db) => {
                     let stats = db.stats();
-                    *current_db = Some(db);
+                    *current_db = Some(DatabaseBackend::Scid(db));
                     ResponseMessage {
                         id,
                         status: "ok".to_string(),
@@ -195,22 +251,55 @@ fn handle_command(
                 }
             };
 
-            let stats = db.stats();
-            ResponseMessage {
-                id,
-                status: "ok".to_string(),
-                data: Some(serde_json::json!({
-                    "stats": stats,
-                    "format": stats.format.to_string(),
-                    "total_games": stats.total_games,
-                    "active_games": stats.active_games,
-                    "deleted_games": stats.deleted_games,
-                    "players_count": stats.players_count,
-                    "events_count": stats.events_count,
-                    "sites_count": stats.sites_count,
-                    "rounds_count": stats.rounds_count,
-                })),
-                error: None,
+            match db {
+                DatabaseBackend::Scid(s) => {
+                    let stats = s.stats();
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "stats": stats,
+                            "format": stats.format.to_string(),
+                            "total_games": stats.total_games,
+                            "active_games": stats.active_games,
+                            "deleted_games": stats.deleted_games,
+                            "players_count": stats.players_count,
+                            "events_count": stats.events_count,
+                            "sites_count": stats.sites_count,
+                            "rounds_count": stats.rounds_count,
+                        })),
+                        error: None,
+                    }
+                }
+                DatabaseBackend::Pgn(p) => {
+                    let total = p.game_count();
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "stats": {
+                                "format": "pgn",
+                                "total_games": total,
+                                "active_games": total,
+                                "deleted_games": 0,
+                                "players_count": 0,
+                                "events_count": 0,
+                                "sites_count": 0,
+                                "rounds_count": 0,
+                                "path": p.pgn_path.to_string_lossy().to_string()
+                            },
+                            "format": "pgn",
+                            "total_games": total,
+                            "active_games": total,
+                            "deleted_games": 0,
+                            "players_count": 0,
+                            "events_count": 0,
+                            "sites_count": 0,
+                            "rounds_count": 0,
+                        })),
+                        error: None,
+                    }
+                }
             }
         }
 
@@ -236,7 +325,10 @@ fn handle_command(
                 .unwrap_or(100) as usize;
 
             let filter: GameFilter = serde_json::from_value(req.params.clone()).unwrap_or_default();
-            let (games, total) = db.query_games(&filter, page, page_size);
+            let (games, total) = match db {
+                DatabaseBackend::Scid(s) => s.query_games(&filter, page, page_size),
+                DatabaseBackend::Pgn(p) => p.query_games(&filter, page, page_size),
+            };
 
             ResponseMessage {
                 id,
@@ -282,18 +374,26 @@ fn handle_command(
                 .and_then(|v| v.as_u64())
                 .map(|p| p as usize);
 
-            match db.search_position(fen, max_ply) {
-                Ok(res) => ResponseMessage {
-                    id,
-                    status: "ok".to_string(),
-                    data: Some(serde_json::to_value(&res).unwrap_or_default()),
-                    error: None,
+            match db {
+                DatabaseBackend::Scid(s) => match s.search_position(fen, max_ply) {
+                    Ok(res) => ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::to_value(&res).unwrap_or_default()),
+                        error: None,
+                    },
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Position search failed: {}", e)),
+                    },
                 },
-                Err(e) => ResponseMessage {
+                DatabaseBackend::Pgn(_) => ResponseMessage {
                     id,
                     status: "error".to_string(),
                     data: None,
-                    error: Some(format!("Position search failed: {}", e)),
+                    error: Some("Direct position search is optimized for .si5/.si4 databases. Please import this PGN into .si5 for fast binary move-stream position search.".to_string()),
                 },
             }
         }
@@ -314,26 +414,34 @@ fn handle_command(
             let filter: crate::position_search::MaterialFilter =
                 serde_json::from_value(req.params.clone()).unwrap_or_default();
             let start = std::time::Instant::now();
-            match db.search_material(&filter) {
-                Ok(matches) => {
-                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    ResponseMessage {
-                        id,
-                        status: "ok".to_string(),
-                        data: Some(serde_json::json!({
-                            "matches": matches,
-                            "match_count": matches.len(),
-                            "total_games": db.game_count(),
-                            "elapsed_ms": elapsed_ms,
-                        })),
-                        error: None,
+            match db {
+                DatabaseBackend::Scid(s) => match s.search_material(&filter) {
+                    Ok(matches) => {
+                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "matches": matches,
+                                "match_count": matches.len(),
+                                "total_games": s.game_count(),
+                                "elapsed_ms": elapsed_ms,
+                            })),
+                            error: None,
+                        }
                     }
-                }
-                Err(e) => ResponseMessage {
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Material search failed: {}", e)),
+                    },
+                },
+                DatabaseBackend::Pgn(_) => ResponseMessage {
                     id,
                     status: "error".to_string(),
                     data: None,
-                    error: Some(format!("Material search failed: {}", e)),
+                    error: Some("Material search is optimized for .si5/.si4 databases. Please import this PGN into .si5 for high-speed bitboard material search.".to_string()),
                 },
             }
         }
@@ -368,7 +476,12 @@ fn handle_command(
                 }
             };
 
-            match db.game_pgn(index) {
+            let res = match db {
+                DatabaseBackend::Scid(s) => s.game_pgn(index),
+                DatabaseBackend::Pgn(p) => p.get_game_pgn(index),
+            };
+
+            match res {
                 Ok(pgn) => ResponseMessage {
                     id,
                     status: "ok".to_string(),
@@ -389,7 +502,15 @@ fn handle_command(
 
         "add_game" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Direct editing is not supported on raw .pgn files. Please import this PGN into a SCID (.si5) database.".to_string()),
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -433,7 +554,15 @@ fn handle_command(
 
         "update_game" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Direct editing is not supported on raw .pgn files. Please import this PGN into a SCID (.si5) database.".to_string()),
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -491,7 +620,15 @@ fn handle_command(
 
         "delete_game" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Deleting games is only supported on SCID (.si5) databases.".to_string()),
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -537,7 +674,15 @@ fn handle_command(
 
         "undelete_game" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Undeleting games is only supported on SCID (.si5) databases.".to_string()),
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -583,7 +728,15 @@ fn handle_command(
 
         "compact" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Compacting is only supported on SCID (.si5) databases.".to_string()),
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -612,7 +765,15 @@ fn handle_command(
 
         "save" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({ "message": "PGN file is saved on disk." })),
+                        error: None,
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -644,7 +805,15 @@ fn handle_command(
 
         "import_pgn" => {
             let db = match current_db {
-                Some(db) => db,
+                Some(DatabaseBackend::Scid(s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Importing into an existing raw PGN is not supported. Please create or open a SCID (.si5) database.".to_string()),
+                    }
+                }
                 None => {
                     return ResponseMessage {
                         id,
@@ -735,17 +904,24 @@ fn handle_command(
             };
 
             let out_path = Path::new(out_path_str);
-            let export_result = crate::pgn_utils::export_pgn_ultra_fast(db, out_path, |prog| {
-                let event_json = serde_json::json!({
-                    "event": "export_progress",
-                    "data": prog
-                });
-                if let Ok(line) = serde_json::to_string(&event_json) {
-                    let mut out = io::stdout().lock();
-                    let _ = writeln!(out, "{}", line);
-                    let _ = out.flush();
+            let export_result = match db {
+                DatabaseBackend::Scid(s) => crate::pgn_utils::export_pgn_ultra_fast(s, out_path, |prog| {
+                    let event_json = serde_json::json!({
+                        "event": "export_progress",
+                        "data": prog
+                    });
+                    if let Ok(line) = serde_json::to_string(&event_json) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", line);
+                        let _ = out.flush();
+                    }
+                }),
+                DatabaseBackend::Pgn(p) => {
+                    std::fs::copy(&p.pgn_path, out_path)
+                        .map(|_| p.game_count())
+                        .map_err(|e| anyhow::anyhow!("Failed to export PGN: {}", e))
                 }
-            });
+            };
 
             match export_result {
                 Ok(exported) => ResponseMessage {
