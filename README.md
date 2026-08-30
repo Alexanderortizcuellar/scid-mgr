@@ -4,6 +4,17 @@ A high-performance Rust backend and PyQt5 GUI for Shane's Chess Information Data
 
 ---
 
+## 📚 Documentation & Technical Guides
+
+Comprehensive documentation is available in the [`docs/`](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs) directory:
+- 📖 [**Architecture & End-to-End Workflow**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/ARCHITECTURE_AND_WORKFLOW.md)
+- ⚡ [**Performance & Engineering Optimizations**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/PERFORMANCE_AND_OPTIMIZATIONS.md)
+- 📊 [**Benchmarks & Performance Metrics (10.35M Games)**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/BENCHMARKS_AND_METRICS.md)
+- 📜 [**CQLi (Chess Query Language) Integration Guide**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/CQL_INTEGRATION_GUIDE.md)
+- 🔌 [**JSON-RPC Server API Reference**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/API_REFERENCE.md)
+
+---
+
 ## Architecture & Features
 
 ### 1. Rust Core Engine (`scid-mgr`)
