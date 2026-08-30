@@ -2,6 +2,7 @@ pub mod benchmark;
 mod db;
 pub mod pgn_db;
 pub mod pgn_utils;
+pub mod position_index;
 pub mod position_search;
 mod server;
 mod test_suite;
@@ -207,6 +208,28 @@ enum Commands {
         /// Include heavy search operations (e.g. full position search on large databases)
         #[arg(long)]
         heavy: bool,
+    },
+
+    /// Build companion .pos.idx position index for ultra-fast searches and opening tree
+    BuildPosIdx {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Maximum ply depth to index (default: 24, i.e. 12 full moves)
+        #[arg(long, default_value = "24")]
+        max_ply: usize,
+    },
+
+    /// Query the instant opening tree for any board position (FEN or starting board)
+    Tree {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Optional FEN position (defaults to initial board)
+        #[arg(long)]
+        fen: Option<String>,
     },
 
     /// Run the interactive JSON-RPC server
@@ -569,6 +592,51 @@ fn main() -> Result<()> {
             }
             println!("==========================================================================================");
             println!("Overall Benchmark Duration: {:.2} ms ({:.2} s)\n", report.total_time_ms, report.total_time_ms / 1000.0);
+        }
+        Some(Commands::BuildPosIdx { db_path, max_ply }) => {
+            let path_str = db_path.to_string_lossy().to_lowercase();
+            let start = std::time::Instant::now();
+            println!("Building companion .pos.idx for {} (depth: {} plies)...", db_path.display(), max_ply);
+            let idx = if path_str.ends_with(".pgn") {
+                let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, |scanned, total, positions| {
+                    print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                })?
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                let games_path = db.games_path().to_path_buf();
+                let entries = db.entries();
+                let db_path_buf = db.index_path().to_path_buf();
+                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, |scanned, total, positions| {
+                    print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                })?
+            };
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            println!("\n[OK] Built {} in {:.2} ms ({} unique positions).", idx.path.display(), elapsed_ms, idx.data.positions.len());
+        }
+        Some(Commands::Tree { db_path, fen }) => {
+            let idx = position_index::PositionIndex::load(&db_path)?;
+            let fen_str = fen.as_deref().unwrap_or("");
+            if let Some(tree) = idx.query_tree(fen_str) {
+                println!("Opening Tree for position (Total Games: {} | +{:.1}% / ={:.1}% / -{:.1}%):", tree.total_games, tree.white_pct, tree.draw_pct, tree.black_pct);
+                println!("{:<6} | {:<8} | {:<10} | {:<7} | {:<7} | {:<7} | {:<8}",
+                    "Move", "UCI", "Games", "1-0 %", "1/2 %", "0-1 %", "Avg Elo");
+                println!("{:-<6}-+-{:-<8}-+-{:-<10}-+-{:-<7}-+-{:-<7}-+-{:-<7}-+-{:-<8}",
+                    "", "", "", "", "", "", "");
+                for m in tree.moves {
+                    let avg_elo_str = match (m.avg_white_elo, m.avg_black_elo) {
+                        (Some(w), Some(b)) => format!("{}/{}", w, b),
+                        (Some(w), None) => format!("{}/-", w),
+                        _ => "-".to_string(),
+                    };
+                    println!("{:<6} | {:<8} | {:<10} | {:<6.1}% | {:<6.1}% | {:<6.1}% | {:<8}",
+                        m.san, m.uci, m.total_games, m.white_pct, m.draw_pct, m.black_pct, avg_elo_str);
+                }
+            } else {
+                println!("No games found reaching this position in the opening index.");
+            }
         }
         Some(Commands::Interactive { db_path }) => {
             server::run_interactive_server(db_path)?;

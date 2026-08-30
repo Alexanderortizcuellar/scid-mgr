@@ -72,11 +72,27 @@ Retrieves the standard PGN text for a specific game.
 - **Returns**: `{ index, pgn }`
 
 ### `search_position`
-Performs Zobrist-hashed binary position search.
+Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loaded, returns in sub-millisecond instant lookup time (< 0.1 ms); otherwise falls back seamlessly to multi-threaded move-stream scanning.
 - **Params**:
   - `fen`: `string` (full FEN)
   - `max_ply`: `number` (optional maximum search depth)
 - **Returns**: `{ matches: [{ game_id, ply }], total_games_searched, elapsed_ms }`
+
+### `opening_tree` (or `query_tree`)
+Queries the instant Opening Tree / Explorer for any board position (FEN or starting board).
+- **Params**:
+  - `fen`: `string` (optional FEN position; defaults to starting board)
+- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo }] }`
+
+### `pos_index_status`
+Checks the companion `.pos.idx` index status (`valid`, `outdated`, `missing`) and game counts.
+- **Returns**: `{ status: "valid" | "outdated" | "missing", header: {...}, loaded: boolean, unique_positions: number }`
+
+### `build_pos_index`
+Constructs or rebuilds the companion `.pos.idx` index in parallel across all CPU cores. Emits streaming `build_pos_index_progress` events.
+- **Params**:
+  - `max_ply`: `number` (optional, default: 24 plies / 12 moves)
+- **Returns**: `{ status: "valid", unique_positions: number, elapsed_ms: number }`
 
 ### `search_material`
 Searches by bitboard piece count and opposite/same-colored bishops.

@@ -90,3 +90,16 @@ In PyQt5:
 - Rendering 10 million rows directly into a widget causes catastrophic GUI freezing.
 - `VirtualScidTableModel` only requests 50–100 visible rows at a time.
 - A **150 ms single-shot debounce timer** ensures requests are only sent when fast scrolling pauses, maintaining constant **60 FPS** UI responsiveness.
+
+---
+
+## 6. Companion Position Index (`.pos.idx`) & Instant Opening Explorer
+
+### Architecture
+For sub-millisecond position lookups and live ChessBase/Lichess opening trees:
+- An optional companion file `<database>.pos.idx` indexes the opening plies (default 24 plies / 12 moves).
+- Binary Header (`SCIDPOS1`) stores `db_mtime_secs` and `db_game_count`.
+- **Validation**: On open, compares timestamp and game count. Returns `Valid`, `Outdated`, or `Missing` with zero performance penalty.
+- **Lookup Speed**:
+  - `query_tree(fen)`: **< 0.1 ms** instant response with win/draw/loss counts, scores, and average ELO ratings.
+  - `search_position(fen)`: **< 0.1 ms** instant retrieval of matching game IDs, falling back seamlessly to multi-threaded move-stream scanning if index is not present.

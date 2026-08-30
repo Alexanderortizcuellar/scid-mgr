@@ -1413,6 +1413,276 @@ class ColumnsConfigDialog(QDialog):
             self.parent().save_column_settings()
 
 
+class BuildPosIndexDialog(QDialog):
+    """Dialog for creating / rebuilding .pos.idx companion file with streaming progress."""
+    def __init__(self, client: BackendClient, default_ply: int = 24, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Build Fast Position Index (.pos.idx)")
+        self.resize(480, 260)
+        self.client = client
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        info = QLabel(
+            "<b>Companion Position Index (.pos.idx)</b> enables sub-millisecond position searches\n"
+            "and instant Lichess/ChessBase style opening trees with win/draw/loss statistics."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.spin_depth = QSpinBox()
+        self.spin_depth.setRange(4, 100)
+        self.spin_depth.setValue(default_ply)
+        self.spin_depth.setSuffix(" plies (half-moves)")
+        form.addRow("Indexing Depth:", self.spin_depth)
+        layout.addLayout(form)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
+        self.lbl_progress = QLabel("Status: Ready to build")
+        self.lbl_progress.setStyleSheet("color: #555; font-size: 11px;")
+        layout.addWidget(self.lbl_progress)
+
+        btn_box = QHBoxLayout()
+        self.btn_build = QPushButton("⚡ Start Indexing")
+        self.btn_build.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 16px;")
+        self.btn_build.clicked.connect(self.start_build)
+        btn_box.addWidget(self.btn_build)
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+        layout.addLayout(btn_box)
+
+    def start_build(self):
+        if not self.client.is_running():
+            QMessageBox.warning(self, "Offline", "Backend is not running.")
+            return
+        self.btn_build.setEnabled(False)
+        self.spin_depth.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.lbl_progress.setText("Building index across CPU cores...")
+        self.client.send_request("build_pos_index", {"max_ply": self.spin_depth.value()})
+
+    def update_progress(self, scanned: int, total: int, positions: int, percent: float):
+        self.progress_bar.setValue(int(percent))
+        self.lbl_progress.setText(f"Indexed: {scanned:,} / {total:,} games ({percent:.1f}%) | Unique positions: {positions:,}")
+
+    def on_complete(self, unique_positions: int, elapsed_ms: float):
+        self.progress_bar.setValue(100)
+        self.lbl_progress.setText(f"✅ Finished in {elapsed_ms:,.1f} ms! Indexed {unique_positions:,} unique positions.")
+        self.btn_build.setEnabled(True)
+        self.spin_depth.setEnabled(True)
+
+
+class OpeningTreeWidget(QWidget):
+    """
+    Interactive Opening Explorer & Tree View (Lichess/ChessBase style).
+    - Clicking any move instantly fetches the next branch in < 1ms.
+    - Displays win/draw/loss % bars and average ELO.
+    """
+    def __init__(self, client: BackendClient, main_window, parent=None):
+        super().__init__(parent)
+        self.client = client
+        self.main_window = main_window
+        self.board = chess.Board()
+        self.move_history = [] # list of (Move, san)
+        self.current_report = None
+
+        self.init_ui()
+
+    def init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
+
+        # Header toolbar
+        tb_layout = QHBoxLayout()
+        self.btn_start = QPushButton("⏮ Start")
+        self.btn_start.clicked.connect(self.go_to_start)
+        tb_layout.addWidget(self.btn_start)
+
+        self.btn_back = QPushButton("◀ Back")
+        self.btn_back.clicked.connect(self.go_back)
+        tb_layout.addWidget(self.btn_back)
+
+        self.lbl_moves_seq = QLabel("1. Starting Position")
+        self.lbl_moves_seq.setStyleSheet("font-weight: bold; font-size: 12px; color: #1976d2; margin-left: 8px;")
+        tb_layout.addWidget(self.lbl_moves_seq)
+
+        tb_layout.addStretch()
+
+        self.btn_rebuild = QPushButton("⚡ Rebuild Index")
+        self.btn_rebuild.setStyleSheet("font-weight: bold; padding: 3px 8px; font-size: 11px;")
+        self.btn_rebuild.clicked.connect(self.main_window.prompt_build_pos_index)
+        tb_layout.addWidget(self.btn_rebuild)
+
+        main_layout.addLayout(tb_layout)
+
+        # Summary Bar (Games count, Win/Draw/Loss percentages)
+        self.summary_card = QFrame()
+        self.summary_card.setFrameShape(QFrame.StyledPanel)
+        self.summary_card.setStyleSheet("background-color: #f1f3f4; border-radius: 4px; padding: 4px;")
+        sum_box = QHBoxLayout(self.summary_card)
+        sum_box.setContentsMargins(8, 4, 8, 4)
+
+        self.lbl_summary_games = QLabel("Total Games: -")
+        self.lbl_summary_games.setStyleSheet("font-weight: bold; font-size: 12px;")
+        sum_box.addWidget(self.lbl_summary_games)
+
+        sum_box.addSpacing(15)
+        self.lbl_summary_score = QLabel("⚪ White: -% | 🤝 Draw: -% | ⚫ Black: -%")
+        self.lbl_summary_score.setStyleSheet("font-weight: bold; font-size: 12px;")
+        sum_box.addWidget(self.lbl_summary_score)
+
+        sum_box.addStretch()
+        self.lbl_index_badge = QLabel("⚡ Fast Index Active")
+        self.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        sum_box.addWidget(self.lbl_index_badge)
+
+        main_layout.addWidget(self.summary_card)
+
+        # Splitter (Board on left, Moves Tree Table on right)
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left: Board Container
+        board_panel = QWidget()
+        b_box = QVBoxLayout(board_panel)
+        b_box.setContentsMargins(0, 0, 0, 0)
+        self.board_editor = ChessBoardEditorWidget(self)
+        b_box.addWidget(self.board_editor)
+        splitter.addWidget(board_panel)
+
+        # Right: Tree Table & Top Games
+        right_panel = QWidget()
+        r_box = QVBoxLayout(right_panel)
+        r_box.setContentsMargins(0, 0, 0, 0)
+        r_box.setSpacing(6)
+
+        # Tree Table
+        self.tree_table = QTableWidget()
+        self.tree_table.setColumnCount(7)
+        self.tree_table.setHorizontalHeaderLabels([
+            "Move", "Games", "Score", "1-0 %", "1/2 %", "0-1 %", "Avg Elo (W/B)"
+        ])
+        header = self.tree_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        self.tree_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tree_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tree_table.doubleClicked.connect(self.on_row_double_clicked)
+        r_box.addWidget(self.tree_table)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 6)
+
+        main_layout.addWidget(splitter)
+
+    def refresh_current_position(self):
+        if not self.client.is_running():
+            return
+        fen = self.board.fen()
+        self.board_editor.board = self.board.copy()
+        self.board_editor.update_board_ui()
+        self._update_history_label()
+        self.client.send_request("opening_tree", {"fen": fen})
+
+    def go_to_start(self):
+        self.board = chess.Board()
+        self.move_history.clear()
+        self.refresh_current_position()
+
+    def go_back(self):
+        if self.move_history:
+            self.board.pop()
+            self.move_history.pop()
+            self.refresh_current_position()
+
+    def play_move_san(self, san: str):
+        try:
+            mv = self.board.parse_san(san)
+            self.board.push(mv)
+            self.move_history.append((mv, san))
+            self.refresh_current_position()
+        except Exception as e:
+            QMessageBox.warning(self, "Invalid Move", f"Could not play move {san}: {e}")
+
+    def on_row_double_clicked(self, index):
+        row = index.row()
+        item = self.tree_table.item(row, 0)
+        if item:
+            san = item.text().strip()
+            self.play_move_san(san)
+
+    def _update_history_label(self):
+        if not self.move_history:
+            self.lbl_moves_seq.setText("1. Starting Position")
+            return
+        text_parts = []
+        for i, (_, san) in enumerate(self.move_history):
+            if i % 2 == 0:
+                text_parts.append(f"{i // 2 + 1}. {san}")
+            else:
+                text_parts.append(san)
+        self.lbl_moves_seq.setText(" ".join(text_parts))
+
+    def on_tree_report(self, report: dict):
+        self.current_report = report
+        total_games = report.get("total_games", 0)
+        w_pct = report.get("white_pct", 0.0)
+        d_pct = report.get("draw_pct", 0.0)
+        b_pct = report.get("black_pct", 0.0)
+
+        self.lbl_summary_games.setText(f"Total Games in Position: {total_games:,}")
+        self.lbl_summary_score.setText(f"⚪ White: {w_pct:.1f}% | 🤝 Draw: {d_pct:.1f}% | ⚫ Black: {b_pct:.1f}%")
+
+        moves = report.get("moves", [])
+        self.tree_table.setRowCount(len(moves))
+
+        for row, m in enumerate(moves):
+            san = m.get("san", "")
+            g_count = m.get("total_games", 0)
+            mw_pct = m.get("white_pct", 0.0)
+            md_pct = m.get("draw_pct", 0.0)
+            mb_pct = m.get("black_pct", 0.0)
+            score = mw_pct + (md_pct / 2.0)
+            avg_w = m.get("avg_white_elo")
+            avg_b = m.get("avg_black_elo")
+            elo_str = f"{avg_w or '-'}/{avg_b or '-'}"
+
+            item_san = QTableWidgetItem(san)
+            item_san.setFont(QFont("Arial", 10, QFont.Bold))
+            item_games = QTableWidgetItem(f"{g_count:,}")
+            item_games.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_score = QTableWidgetItem(f"{score:.1f}%")
+            item_score.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_w = QTableWidgetItem(f"{mw_pct:.1f}%")
+            item_w.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_w.setForeground(QColor("#2e7d32"))
+            item_d = QTableWidgetItem(f"{md_pct:.1f}%")
+            item_d.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_d.setForeground(QColor("#757575"))
+            item_b = QTableWidgetItem(f"{mb_pct:.1f}%")
+            item_b.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_b.setForeground(QColor("#c62828"))
+            item_elo = QTableWidgetItem(elo_str)
+            item_elo.setTextAlignment(Qt.AlignCenter)
+
+            self.tree_table.setItem(row, 0, item_san)
+            self.tree_table.setItem(row, 1, item_games)
+            self.tree_table.setItem(row, 2, item_score)
+            self.tree_table.setItem(row, 3, item_w)
+            self.tree_table.setItem(row, 4, item_d)
+            self.tree_table.setItem(row, 5, item_b)
+            self.tree_table.setItem(row, 6, item_elo)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1553,6 +1823,13 @@ class MainWindow(QMainWindow):
         stats_layout.addSpacing(15)
         self.lbl_events_count = QLabel("Events: -")
         stats_layout.addWidget(self.lbl_events_count)
+
+        stats_layout.addSpacing(15)
+        self.btn_pos_index = QPushButton("⚡ Build Fast Index")
+        self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
+        self.btn_pos_index.setToolTip("Position Companion Index (.pos.idx) for sub-millisecond opening tree & position search")
+        self.btn_pos_index.clicked.connect(self.prompt_build_pos_index)
+        stats_layout.addWidget(self.btn_pos_index)
 
         stats_layout.addStretch()
         btn_refresh_info = QPushButton("Refresh Info")
@@ -1736,6 +2013,11 @@ class MainWindow(QMainWindow):
         pgn_layout.addWidget(self.pgn_viewer)
 
         self.tabs.addTab(pgn_widget, "PGN Game Text")
+
+        # 🌲 Opening Tree Tab
+        self.opening_tree_widget = OpeningTreeWidget(self.client, self)
+        self.tabs.addTab(self.opening_tree_widget, "🌲 Opening Tree")
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
         # JSON Logs Tab
         logs_widget = QWidget()
@@ -2230,6 +2512,17 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"🔍 Searching PGN: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
             return
 
+        if data.get("event") == "build_pos_index_progress":
+            prog = data.get("data", {})
+            scanned = prog.get("scanned", 0)
+            total = prog.get("total", 0)
+            positions = prog.get("positions", 0)
+            pct = prog.get("percent", 0.0)
+            if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
+                self.build_pos_dialog.update_progress(scanned, total, positions, pct)
+            self.status_bar.showMessage(f"⚡ Indexing Positions: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}")
+            return
+
         # Log to tab
         self.log_viewer.append(json.dumps(data, indent=2))
 
@@ -2257,8 +2550,30 @@ class MainWindow(QMainWindow):
             self.lbl_players_count.setText(f"Players: {stats.get('players_count', 0):,}")
             self.lbl_events_count.setText(f"Events: {stats.get('events_count', 0):,}")
 
+            # Position Index status badge update
+            pos_status = stats.get("pos_index_status", resp_data.get("pos_index_status", "missing"))
+            pos_count = stats.get("pos_index_unique_positions", resp_data.get("pos_index_unique_positions", 0))
+            self.update_pos_index_badge(pos_status, pos_count)
+
             # Reload model
             self.table_model.set_filters(self.table_model.filters)
+
+        # Handle Position Index Status or Complete
+        if "pos_index_status" in resp_data:
+            self.update_pos_index_badge(resp_data.get("pos_index_status"), resp_data.get("pos_index_unique_positions", 0))
+
+        if "unique_positions" in resp_data and "elapsed_ms" in resp_data and "moves" not in resp_data:
+            unique_pos = resp_data.get("unique_positions", 0)
+            elapsed = resp_data.get("elapsed_ms", 0.0)
+            self.update_pos_index_badge("valid", unique_pos)
+            if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
+                self.build_pos_dialog.on_complete(unique_pos, elapsed)
+            self.status_bar.showMessage(f"⚡ Position Index Built in {elapsed:,.1f} ms ({unique_pos:,} positions).", 5000)
+            self.opening_tree_widget.refresh_current_position()
+
+        # Handle Opening Tree Report
+        if "moves" in resp_data and "white_pct" in resp_data:
+            self.opening_tree_widget.on_tree_report(resp_data)
 
         # Handle PGN response
         if "pgn" in resp_data:
@@ -2296,6 +2611,34 @@ class MainWindow(QMainWindow):
         if "results" in resp_data and "total_time_ms" in resp_data:
             if hasattr(self, "benchmark_dialog") and self.benchmark_dialog:
                 self.benchmark_dialog.display_report(resp_data)
+
+    def on_tab_changed(self, index: int):
+        if "Opening Tree" in self.tabs.tabText(index):
+            self.opening_tree_widget.refresh_current_position()
+
+    def prompt_build_pos_index(self):
+        if not self.client.is_running():
+            QMessageBox.warning(self, "Backend Offline", "Please start backend and open a database first.")
+            return
+        self.build_pos_dialog = BuildPosIndexDialog(self.client, parent=self)
+        self.build_pos_dialog.show()
+
+    def update_pos_index_badge(self, status: str, count: int = 0):
+        if status == "valid":
+            self.btn_pos_index.setText(f"🟢 Fast Index: Active ({count:,})")
+            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
+            self.opening_tree_widget.lbl_index_badge.setText(f"🟢 Fast Index: Active ({count:,} pos)")
+            self.opening_tree_widget.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        elif status == "outdated":
+            self.btn_pos_index.setText("🟠 Fast Index: Outdated [Rebuild]")
+            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #fff3e0; color: #e65100; border: 1px solid #ffb74d; border-radius: 3px;")
+            self.opening_tree_widget.lbl_index_badge.setText("🟠 Fast Index: Outdated (Rebuild Recommended)")
+            self.opening_tree_widget.lbl_index_badge.setStyleSheet("color: #e65100; font-weight: bold; font-size: 11px;")
+        else:
+            self.btn_pos_index.setText("⚡ Build Fast Index")
+            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
+            self.opening_tree_widget.lbl_index_badge.setText("⚪ Fast Index: Not Built")
+            self.opening_tree_widget.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
 
     def open_benchmark_dialog(self):
         if not self.client.is_running():

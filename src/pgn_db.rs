@@ -282,6 +282,10 @@ impl PgnDatabaseWrapper {
         self.entries.len()
     }
 
+    pub fn mmap_ref(&self) -> &Mmap {
+        &self.mmap
+    }
+
     /// Returns the exact raw PGN text directly from memory-mapped disk in 0.01 ms
     pub fn get_game_pgn(&self, index: usize) -> Result<String> {
         let entry = self

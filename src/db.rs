@@ -437,6 +437,10 @@ impl ScidDatabaseWrapper {
         self.entries.get(index).map(|e| e.deleted)
     }
 
+    pub fn games_path(&self) -> &Path {
+        &self.games_path
+    }
+
     pub fn compact(&mut self) -> Result<usize> {
         let mut compacted_entries = Vec::with_capacity(self.entries.len());
         let mut compacted_games = Vec::new();
