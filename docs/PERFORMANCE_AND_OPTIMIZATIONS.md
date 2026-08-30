@@ -93,13 +93,22 @@ In PyQt5:
 
 ---
 
-## 6. Companion Position Index (`.pos.idx`) & Instant Opening Explorer
+## 6. Static Disk-Backed Position Index (`.pos.idx` v2) & Instant Opening Explorer
 
-### Architecture
-For sub-millisecond position lookups and live ChessBase/Lichess opening trees:
-- An optional companion file `<database>.pos.idx` indexes the opening plies (default 24 plies / 12 moves).
-- Binary Header (`SCIDPOS1`) stores `db_mtime_secs` and `db_game_count`.
-- **Validation**: On open, compares timestamp and game count. Returns `Valid`, `Outdated`, or `Missing` with zero performance penalty.
+### Architecture & Format
+For sub-millisecond position lookups and live ChessBase/Lichess opening trees without memory overhead:
+- **Binary Header (64 bytes, `SCIDPOS2`)**: Stores `db_mtime_secs`, `db_game_count`, `max_ply_depth`, and byte offsets.
+- **Sorted Hash Table (16 bytes per unique position)**:
+  - `hash: u64` (64-bit Zobrist Hash)
+  - `data_offset: u32` (relative offset into data payload)
+  - `data_len: u32` (byte length of record payload)
+  - Records are sorted strictly by Zobrist hash for **in-place binary search** (`binary_search_by_key`).
+- **Variable-Length Data Payload Section**:
+  - Encodes total game counts, win/draw/loss counters, sample game ID posting lists, and branching move statistics (UCI, SAN, ELO sums, scores).
+- **Zero Heap RAM Overhead (`memmap2`)**:
+  - The index is never deserialized into heap memory or HashMaps.
+  - Lookups execute directly on the memory-mapped virtual address space, keeping heap memory at **0 MB** extra.
+- **Validation**: On open, compares timestamp and game count in $< 0.01\text{ ms}$. Returns `Valid`, `Outdated`, or `Missing`.
 - **Lookup Speed**:
-  - `query_tree(fen)`: **< 0.1 ms** instant response with win/draw/loss counts, scores, and average ELO ratings.
-  - `search_position(fen)`: **< 0.1 ms** instant retrieval of matching game IDs, falling back seamlessly to multi-threaded move-stream scanning if index is not present.
+  - `query_tree(fen)`: **0.34 ms (348 µs)** average response with win/draw/loss counts, scores, and average ELO ratings.
+  - `search_position(fen)`: **< 0.1 ms** instant retrieval of matching game IDs, falling back seamlessly to multi-threaded move-stream scanning if the index is not present.

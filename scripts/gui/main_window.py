@@ -450,21 +450,29 @@ class MainWindow(QMainWindow):
                     pass
 
     def auto_detect_defaults(self):
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        bin_names = ["scid-mgr.exe", "scid-mgr"]
-        target_dirs = [
-            os.path.join(project_root, "target", "release"),
-            os.path.join(project_root, "target", "debug"),
-        ]
+        settings = QSettings("ChessScidMgr", "ScidGui")
+        saved_bin = settings.value("binary_path", "")
+        if saved_bin and os.path.exists(saved_bin):
+            self.binary_input.setText(saved_bin)
 
-        for t_dir in target_dirs:
-            for b_name in bin_names:
-                candidate = os.path.join(t_dir, b_name)
-                if os.path.exists(candidate):
-                    self.binary_input.setText(candidate)
+        if not self.binary_input.text():
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            bin_names = ["scid-mgr.exe", "scid-mgr"]
+            target_dirs = [
+                os.path.join(project_root, "target", "release"),
+                os.path.join(project_root, "target", "debug"),
+                os.path.join(os.getcwd(), "target", "release"),
+                os.path.join(os.getcwd(), "target", "debug"),
+            ]
+
+            for t_dir in target_dirs:
+                for b_name in bin_names:
+                    candidate = os.path.join(t_dir, b_name)
+                    if os.path.exists(candidate):
+                        self.binary_input.setText(os.path.abspath(candidate))
+                        break
+                if self.binary_input.text():
                     break
-            if self.binary_input.text():
-                break
 
         # Auto-detect official SCID C++ engine
         downloads_scid = r"C:\Users\ASUS\Downloads\scid-v5.2.202603_windows_x64\scid_windows_x64\bin\scid.exe"
@@ -491,6 +499,8 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.binary_input.setText(path)
+            settings = QSettings("ChessScidMgr", "ScidGui")
+            settings.setValue("binary_path", path)
 
     def browse_db(self):
         path, _ = QFileDialog.getOpenFileName(

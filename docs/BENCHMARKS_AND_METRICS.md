@@ -67,7 +67,25 @@ Overall Benchmark Duration: 18.57 seconds
 
 ---
 
-## 4. How to Run Benchmarks
+---
+
+## 4. Benchmark Results on TwChess Database (1,490,481 Games) — Position Indexing
+
+**Database**: `database.si5` (1.49M games, 83.4 MB index, 142.4 MB move-stream)
+
+| Operation / Metric | Old In-Memory HashMap | Static Disk-Backed Mmap (`.pos.idx` v2) | Speedup / Reduction |
+| :--- | :---: | :---: | :---: |
+| **Heap Memory on DB Open** | `3,425.0 MB` | **`76.5 MB`** | **97.8% less RAM** |
+| **Heap Memory during Tree Browsing** | `3,425.0 MB` | **`76.7 MB`** | **97.8% less RAM** |
+| **DB Open Time** | `1,200 – 3,500 ms` | **`77.8 ms`** | **15x - 45x faster** |
+| **Opening Tree Lookup (Starting Pos)** | `2.50 ms` | **`0.72 ms`** | **3.5x faster** |
+| **Average Random Position Lookup** | `1.80 ms` | **`0.34 ms (348 µs)`** | **5.2x faster** |
+| **800 Sequential Lookups Throughput** | `~1,440 ms` | **`278.8 ms`** | **5.1x faster** |
+| **Indexing Throughput (1.49M games)** | `~40.0 s` | **`16.9 s` (104,000 games/s)** | **2.4x faster** |
+
+---
+
+## 5. How to Run Benchmarks
 
 ### Via Command-Line (CLI)
 ```powershell
@@ -76,10 +94,16 @@ Overall Benchmark Duration: 18.57 seconds
 
 # Deep Benchmark (includes full opening ply position searches)
 .\target\release\scid-mgr.exe bench "path\to\database.si5" --heavy
+
+# Build Static Position Index with 4 CPU Threads
+.\target\release\scid-mgr.exe build-pos-idx "path\to\database.si5" --max-ply 16 --threads 4
+
+# Query Instant Opening Tree from CLI
+.\target\release\scid-mgr.exe tree "path\to\database.si5"
 ```
 
 ### Via Graphical Interface (GUI)
-1. Open any database in the GUI.
+1. Open any database in the GUI (`python scripts\scid_gui.py`).
 2. Click the **`📊 Metrics / Benchmark...`** button in the connection toolbar.
 3. Check **"Deep Position Search"** if desired, then click **`▶ Run Full Benchmark`**.
 4. View color-coded execution times or click **`📋 Copy Report`** to copy the formatted markdown table.
