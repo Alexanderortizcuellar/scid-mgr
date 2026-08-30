@@ -586,7 +586,7 @@ fn handle_command(
                     "status": status_str,
                     "header": header,
                     "loaded": current_pos_index.is_some(),
-                    "unique_positions": current_pos_index.as_ref().map(|i| i.data.positions.len()).unwrap_or(0),
+                    "unique_positions": current_pos_index.as_ref().map(|i| i.header.unique_positions as usize).unwrap_or(0),
                 })),
                 error: None,
             }
@@ -657,7 +657,7 @@ fn handle_command(
             match res {
                 Ok(idx) => {
                     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    let unique_positions = idx.data.positions.len();
+                    let unique_positions = idx.header.unique_positions as usize;
                     *current_pos_index = Some(idx);
                     ResponseMessage {
                         id,

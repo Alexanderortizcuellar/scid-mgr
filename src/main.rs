@@ -617,7 +617,7 @@ fn main() -> Result<()> {
                 })?
             };
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            println!("\n[OK] Built {} in {:.2} ms ({} unique positions).", idx.path.display(), elapsed_ms, idx.data.positions.len());
+            println!("\n[OK] Built {} in {:.2} ms ({} unique positions).", idx.path.display(), elapsed_ms, idx.header.unique_positions);
         }
         Some(Commands::Tree { db_path, fen }) => {
             let idx = position_index::PositionIndex::load(&db_path)?;
