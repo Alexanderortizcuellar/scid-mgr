@@ -132,7 +132,7 @@ fn handle_command(
 
     match cmd {
         "open" => {
-            let path_str = match req.params.get("path").and_then(|v| v.as_str()) {
+            let path_str = match req.params.get("path").or_else(|| req.params.get("params").and_then(|p| p.get("path"))).and_then(|v| v.as_str()) {
                 Some(p) => p,
                 None => {
                     return ResponseMessage {
@@ -151,22 +151,14 @@ fn handle_command(
                         let total_games = pgn.game_count();
                         let pgn_path_str = pgn.pgn_path.to_string_lossy().to_string();
 
-                        let (idx_status, _) = PositionIndex::check_status(path, total_games);
+                        let (idx_status, header_opt) = PositionIndex::check_status(path, total_games);
                         let status_str = match idx_status {
-                            IndexStatus::Valid => {
-                                *current_pos_index = PositionIndex::load(path).ok();
-                                "valid"
-                            }
-                            IndexStatus::Outdated => {
-                                *current_pos_index = None;
-                                "outdated"
-                            }
-                            IndexStatus::Missing => {
-                                *current_pos_index = None;
-                                "missing"
-                            }
+                            IndexStatus::Valid => "valid",
+                            IndexStatus::Outdated => "outdated",
+                            IndexStatus::Missing => "missing",
                         };
-                        let pos_count = current_pos_index.as_ref().map(|i| i.data.positions.len()).unwrap_or(0);
+                        let pos_count = header_opt.as_ref().map(|h| h.unique_positions).unwrap_or(0);
+                        *current_pos_index = None; // Keep index unloaded in RAM until explicitly requested
 
                         *current_db = Some(DatabaseBackend::Pgn(pgn));
                         ResponseMessage {
@@ -207,22 +199,14 @@ fn handle_command(
                         let total_games = db.game_count();
                         let mut stats = serde_json::to_value(db.stats()).unwrap_or_default();
 
-                        let (idx_status, _) = PositionIndex::check_status(path, total_games);
+                        let (idx_status, header_opt) = PositionIndex::check_status(path, total_games);
                         let status_str = match idx_status {
-                            IndexStatus::Valid => {
-                                *current_pos_index = PositionIndex::load(path).ok();
-                                "valid"
-                            }
-                            IndexStatus::Outdated => {
-                                *current_pos_index = None;
-                                "outdated"
-                            }
-                            IndexStatus::Missing => {
-                                *current_pos_index = None;
-                                "missing"
-                            }
+                            IndexStatus::Valid => "valid",
+                            IndexStatus::Outdated => "outdated",
+                            IndexStatus::Missing => "missing",
                         };
-                        let pos_count = current_pos_index.as_ref().map(|i| i.data.positions.len()).unwrap_or(0);
+                        let pos_count = header_opt.as_ref().map(|h| h.unique_positions).unwrap_or(0);
+                        *current_pos_index = None; // Keep index unloaded in RAM until explicitly requested
 
                         if let Some(obj) = stats.as_object_mut() {
                             obj.insert("pos_index_status".to_string(), serde_json::json!(status_str));
@@ -521,6 +505,18 @@ fn handle_command(
 
         "opening_tree" | "query_tree" => {
             let fen = req.params.get("fen").and_then(|v| v.as_str()).unwrap_or("");
+            
+            // Lazy-load on demand if not already loaded in memory
+            if current_pos_index.is_none() {
+                if let Some(db) = current_db {
+                    let db_path = match db {
+                        DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                        DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+                    };
+                    *current_pos_index = PositionIndex::load(&db_path).ok();
+                }
+            }
+
             if let Some(pos_idx) = current_pos_index.as_ref() {
                 if let Some(report) = pos_idx.query_tree(fen) {
                     ResponseMessage {
@@ -543,7 +539,7 @@ fn handle_command(
                             "white_pct": 0.0,
                             "draw_pct": 0.0,
                             "black_pct": 0.0,
-                            "game_ids": [],
+                            "sample_game_ids": [],
                         })),
                         error: None,
                     }
@@ -553,8 +549,18 @@ fn handle_command(
                     id,
                     status: "error".to_string(),
                     data: None,
-                    error: Some("Position Index (.pos.idx) is not loaded. Click 'Build Position Index' to generate the fast opening tree.".to_string()),
+                    error: Some("Position Index (.pos.idx) is not present. Click '⚡ Build Fast Index' to create it.".to_string()),
                 }
+            }
+        }
+
+        "unload_pos_index" => {
+            *current_pos_index = None;
+            ResponseMessage {
+                id,
+                status: "ok".to_string(),
+                data: Some(serde_json::json!({ "unloaded": true })),
+                error: None,
             }
         }
 

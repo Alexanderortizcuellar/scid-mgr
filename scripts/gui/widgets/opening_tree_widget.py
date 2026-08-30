@@ -45,6 +45,12 @@ class OpeningTreeWidget(QWidget):
 
         tb_layout.addStretch()
 
+        self.btn_unload = QPushButton("🧹 Free Memory")
+        self.btn_unload.setToolTip("Unloads the position index from RAM")
+        self.btn_unload.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        self.btn_unload.clicked.connect(self.unload_index)
+        tb_layout.addWidget(self.btn_unload)
+
         self.btn_rebuild = QPushButton("⚡ Rebuild Index")
         self.btn_rebuild.setStyleSheet("font-weight: bold; padding: 3px 8px; font-size: 11px;")
         self.btn_rebuild.clicked.connect(self.main_window.prompt_build_pos_index)
@@ -209,5 +215,13 @@ class OpeningTreeWidget(QWidget):
             self.tree_table.setItem(row, 4, item_d)
             self.tree_table.setItem(row, 5, item_b)
             self.tree_table.setItem(row, 6, item_elo)
+
+    def unload_index(self):
+        if self.client.is_running():
+            self.client.send_request("unload_pos_index")
+            self.main_window.status_bar.showMessage("Position index unloaded from RAM.", 4000)
+            self.lbl_index_badge.setText("⚪ Fast Index: On Disk (Unloaded)")
+            self.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
+
 
 
