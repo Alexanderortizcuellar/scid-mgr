@@ -4,6 +4,7 @@ from .advanced_search_dialog import AdvancedSearchDialog
 from .benchmark_dialog import BenchmarkDialog
 from .columns_dialog import ColumnsConfigDialog
 from .build_pos_index_dialog import BuildPosIndexDialog
+from .search_progress_dialog import SearchProgressDialog
 
 __all__ = [
     'NewDatabaseDialog',
@@ -12,4 +13,5 @@ __all__ = [
     'BenchmarkDialog',
     'ColumnsConfigDialog',
     'BuildPosIndexDialog',
+    'SearchProgressDialog',
 ]

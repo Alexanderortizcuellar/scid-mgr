@@ -352,17 +352,39 @@ fn handle_command(
                 }
             };
 
-            let page = req.params.get("page").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let page = req
+                .params
+                .get("page")
+                .or_else(|| req.params.get("params").and_then(|p| p.get("page")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
             let page_size = req
                 .params
                 .get("page_size")
                 .or_else(|| req.params.get("limit"))
+                .or_else(|| req.params.get("params").and_then(|p| p.get("page_size").or_else(|| p.get("limit"))))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(100) as usize;
 
-            let filter: GameFilter = serde_json::from_value(req.params.clone()).unwrap_or_default();
+            let filter_value = req.params.get("params").unwrap_or(&req.params);
+            let filter: GameFilter = serde_json::from_value(filter_value.clone()).unwrap_or_default();
             let (games, total) = match db {
-                DatabaseBackend::Scid(s) => s.query_games(&filter, page, page_size),
+                DatabaseBackend::Scid(s) => s.query_games_with_progress(&filter, page, page_size, |scanned, total, matches_len| {
+                    let event_json = serde_json::json!({
+                        "event": "search_progress",
+                        "data": {
+                            "scanned": scanned,
+                            "total": total,
+                            "matches": matches_len,
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                        }
+                    });
+                    if let Ok(line) = serde_json::to_string(&event_json) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", line);
+                        let _ = out.flush();
+                    }
+                }),
                 DatabaseBackend::Pgn(p) => p.query_games(&filter, page, page_size),
             };
 
@@ -392,7 +414,12 @@ fn handle_command(
                 }
             };
 
-            let fen = match req.params.get("fen").and_then(|v| v.as_str()) {
+            let fen = match req
+                .params
+                .get("fen")
+                .or_else(|| req.params.get("params").and_then(|p| p.get("fen")))
+                .and_then(|v| v.as_str())
+            {
                 Some(f) => f,
                 None => {
                     return ResponseMessage {
@@ -400,7 +427,7 @@ fn handle_command(
                         status: "error".to_string(),
                         data: None,
                         error: Some("Missing 'fen' parameter".to_string()),
-                    }
+                    };
                 }
             };
 
@@ -440,11 +467,27 @@ fn handle_command(
             let max_ply = req
                 .params
                 .get("max_ply")
+                .or_else(|| req.params.get("params").and_then(|p| p.get("max_ply")))
                 .and_then(|v| v.as_u64())
                 .map(|p| p as usize);
 
             match db {
-                DatabaseBackend::Scid(s) => match s.search_position(fen, max_ply) {
+                DatabaseBackend::Scid(s) => match s.search_position_with_progress(fen, max_ply, |scanned, total, matches_len| {
+                    let event_json = serde_json::json!({
+                        "event": "search_progress",
+                        "data": {
+                            "scanned": scanned,
+                            "total": total,
+                            "matches": matches_len,
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                        }
+                    });
+                    if let Ok(line) = serde_json::to_string(&event_json) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", line);
+                        let _ = out.flush();
+                    }
+                }) {
                     Ok(res) => ResponseMessage {
                         id,
                         status: "ok".to_string(),

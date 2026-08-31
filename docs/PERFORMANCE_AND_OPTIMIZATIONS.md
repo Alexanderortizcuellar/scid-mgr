@@ -154,3 +154,25 @@ pub fn skip_extra_tags(blob: &[u8], cursor: &mut usize) -> bool {
 When scanning across massive 10M+ game databases with multi-threading, custom variants or corrupted move streams are safeguarded with fast bitboard move validation (`pos.is_legal(&mv)`) before in-place application:
 - Prevents panics from illegal King moves or variant end conditions.
 - Seamlessly scans across **10.35 million games in ~14 seconds** without building an index, or in **< 1 ms** with the static disk-backed `.pos.idx`.
+
+---
+
+## 8. Real-Time Streaming Search Progress System
+
+For large multi-gigabyte collections (e.g. 10.35M games in `LumbrasGigaBase_OTB.si5`), full parallel linear scans take a few seconds. To ensure a smooth, non-blocking user experience in both GUI and headless pipelines:
+
+### 1. Zero-Contention Chunked Search & Progress Callbacks
+- Rayon parallel iterators use `entries.par_chunks(chunk_size)` (scaled to ~1% increments or 50,000 games).
+- Thread-safe `AtomicUsize` counters track games scanned and matches found without heap allocation or mutex contention on the inner loop.
+- The search engine fires streaming events per chunk:
+  ```json
+  {"event": "search_progress", "data": {"scanned": 5281254, "total": 10355488, "matches": 165936, "percent": 51.0}}
+  ```
+
+### 2. Live GUI Search Progress Dialog (`SearchProgressDialog`)
+- Shows animated progress bar (0% - 100%).
+- Displays live games scanned count (`scanned / total (percent%)`).
+- Real-time matches counter (`🎯 Matches found: X`).
+- Live scanning speed estimation (e.g. `⚡ Scanning Speed: ~750,000 games/sec`).
+- Seamlessly auto-closes once the query results arrive and populate the table view.
+

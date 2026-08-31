@@ -539,20 +539,25 @@ impl ScidDatabaseWrapper {
         })
     }
 
-    pub fn search_position(
+    pub fn search_position_with_progress<F>(
         &self,
         fen_str: &str,
         max_ply: Option<usize>,
-    ) -> Result<crate::position_search::PositionSearchResult> {
+        progress: F,
+    ) -> Result<crate::position_search::PositionSearchResult>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
         let trimmed = fen_str.trim();
         // If full legal chess position, run fast Zobrist exact matching
         if let Ok(fen) = trimmed.parse::<shakmaty::fen::Fen>() {
             if let Ok(pos) = fen.into_position(shakmaty::CastlingMode::Standard) {
-                return crate::position_search::search_position_mmap(
+                return crate::position_search::search_position_mmap_with_progress(
                     &self.entries,
                     &self.games_path,
                     &pos,
                     max_ply,
+                    progress,
                 );
             }
         }
@@ -564,12 +569,13 @@ impl ScidDatabaseWrapper {
         }
 
         let start_time = std::time::Instant::now();
-        let matches_vec = crate::position_search::search_piece_placements_mmap(
+        let matches_vec = crate::position_search::search_piece_placements_mmap_with_progress(
             &self.entries,
             &self.games_path,
             &pieces,
             true,
             max_ply,
+            progress,
         )?;
         let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
@@ -588,19 +594,42 @@ impl ScidDatabaseWrapper {
         })
     }
 
+    pub fn search_position(
+        &self,
+        fen_str: &str,
+        max_ply: Option<usize>,
+    ) -> Result<crate::position_search::PositionSearchResult> {
+        self.search_position_with_progress(fen_str, max_ply, |_, _, _| {})
+    }
+
+    pub fn search_material_with_progress<F>(
+        &self,
+        filter: &crate::position_search::MaterialFilter,
+        progress: F,
+    ) -> Result<Vec<usize>>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
+        crate::position_search::search_material_mmap_with_progress(&self.entries, &self.games_path, filter, progress)
+    }
+
     pub fn search_material(
         &self,
         filter: &crate::position_search::MaterialFilter,
     ) -> Result<Vec<usize>> {
-        crate::position_search::search_material_mmap(&self.entries, &self.games_path, filter)
+        self.search_material_with_progress(filter, |_, _, _| {})
     }
 
-    pub fn query_games(
+    pub fn query_games_with_progress<F>(
         &self,
         filter: &GameFilter,
         page: usize,
         page_size: usize,
-    ) -> (Vec<GameSummary>, usize) {
+        progress: F,
+    ) -> (Vec<GameSummary>, usize)
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
         let eco_filter = filter.eco.as_ref().map(|s| s.to_uppercase());
         let date_filter = filter.date.as_ref().map(|s| s.trim());
         let result_filter = filter.result.as_ref().map(|s| s.as_str());
@@ -687,7 +716,7 @@ impl ScidDatabaseWrapper {
             let trimmed = f.trim();
             if trimmed.is_empty() {
                 None
-            } else if let Ok(res) = self.search_position(trimmed, None) {
+            } else if let Ok(res) = self.search_position_with_progress(trimmed, None, &progress) {
                 // If legal chess position or valid FEN, fast exact match
                 Some(
                     res.matches
@@ -700,12 +729,13 @@ impl ScidDatabaseWrapper {
                 if pieces.is_empty() {
                     None
                 } else {
-                    crate::position_search::search_piece_placements_mmap(
+                    crate::position_search::search_piece_placements_mmap_with_progress(
                         &self.entries,
                         &self.games_path,
                         &pieces,
                         true,
                         None,
+                        &progress,
                     )
                     .ok()
                     .map(|v| v.into_iter().collect::<std::collections::HashSet<usize>>())
@@ -714,7 +744,7 @@ impl ScidDatabaseWrapper {
         });
 
         let mat_matches = filter.material.as_ref().and_then(|m| {
-            self.search_material(m).ok().map(|vec| {
+            self.search_material_with_progress(m, &progress).ok().map(|vec| {
                 vec.into_iter().collect::<std::collections::HashSet<usize>>()
             })
         });
@@ -961,6 +991,15 @@ impl ScidDatabaseWrapper {
             .collect();
 
         (summaries, total_matches)
+    }
+
+    pub fn query_games(
+        &self,
+        filter: &GameFilter,
+        page: usize,
+        page_size: usize,
+    ) -> (Vec<GameSummary>, usize) {
+        self.query_games_with_progress(filter, page, page_size, |_, _, _| {})
     }
 
     pub fn stats(&self) -> DbStats {

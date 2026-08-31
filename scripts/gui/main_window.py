@@ -21,6 +21,7 @@ from .dialogs.advanced_search_dialog import AdvancedSearchDialog
 from .dialogs.benchmark_dialog import BenchmarkDialog
 from .dialogs.columns_dialog import ColumnsConfigDialog
 from .dialogs.build_pos_index_dialog import BuildPosIndexDialog
+from .dialogs.search_progress_dialog import SearchProgressDialog
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -858,7 +859,17 @@ class MainWindow(QMainWindow):
             total = prog.get("total", 0)
             matches = prog.get("matches", 0)
             pct = prog.get("percent", 0.0)
-            self.status_bar.showMessage(f"🔍 Searching PGN: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
+
+            if not hasattr(self, "search_progress_dialog") or self.search_progress_dialog is None:
+                self.search_progress_dialog = SearchProgressDialog("Searching Database Games...", self)
+
+            if not self.search_progress_dialog.isVisible() and pct < 98.0:
+                self.search_progress_dialog.show()
+
+            if self.search_progress_dialog.isVisible():
+                self.search_progress_dialog.update_progress(scanned, total, matches, pct)
+
+            self.status_bar.showMessage(f"🔍 Searching: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
             return
 
         if data.get("event") == "build_pos_index_progress":
@@ -882,10 +893,19 @@ class MainWindow(QMainWindow):
                 self.import_progress_dialog.close()
             if hasattr(self, "export_progress_dialog") and self.export_progress_dialog:
                 self.export_progress_dialog.close()
+            if hasattr(self, "search_progress_dialog") and self.search_progress_dialog:
+                self.search_progress_dialog.close()
             self.status_bar.showMessage(f"Error: {err}", 5000)
             return
 
         resp_data = data.get("data", {})
+
+        # Handle games query response
+        if "games" in resp_data:
+            total_matches = resp_data.get("total", 0)
+            if hasattr(self, "search_progress_dialog") and self.search_progress_dialog and self.search_progress_dialog.isVisible():
+                self.search_progress_dialog.on_finished(total_matches)
+            self.status_bar.showMessage(f"Search complete: {total_matches:,} matching games found.", 5000)
 
         # Handle stats updates
         if "stats" in resp_data:

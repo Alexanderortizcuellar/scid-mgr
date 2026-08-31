@@ -6,6 +6,7 @@ use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{Chess, Color, EnPassantMode, Move, Position, Role, Square};
 use std::fs::File;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 const ENCODE_END_GAME: u8 = 15;
@@ -256,13 +257,17 @@ pub(crate) fn decode_raw_move(
     Some((mv, piece_idx, u8::from(to_sq), is_castle_k, is_castle_q, captured_sq))
 }
 
-/// Search for a target position across all games directly in .sg5 / .sg4 via memory mapping
-pub fn search_position_mmap(
+/// Search for a target position across all games directly in .sg5 / .sg4 via memory mapping with streaming progress
+pub fn search_position_mmap_with_progress<F>(
     entries: &[chess_scid_rw::entry::IndexEntry],
     games_path: &Path,
     target_pos: &Chess,
     max_ply: Option<usize>,
-) -> Result<PositionSearchResult> {
+    progress: F,
+) -> Result<PositionSearchResult>
+where
+    F: Fn(usize, usize, usize) + Sync,
+{
     let start_time = Instant::now();
     let file = File::open(games_path)
         .with_context(|| format!("Failed to open games file: {}", games_path.display()))?;
@@ -275,95 +280,114 @@ pub fn search_position_mmap(
     let initial_hash: Zobrist64 = Chess::default().zobrist_hash(EnPassantMode::Legal);
     let is_initial_pos = target_hash == initial_hash;
 
+    let total = entries.len();
+    let chunk_size = 50_000.max(total / 100).max(1);
+    let scanned_counter = AtomicUsize::new(0);
+    let match_counter = AtomicUsize::new(0);
+
     let matches: Vec<PositionMatch> = entries
-        .par_iter()
+        .par_chunks(chunk_size)
         .enumerate()
-        .filter_map(|(game_id, entry)| {
-            if entry.deleted {
-                return None;
-            }
+        .flat_map(|(chunk_idx, chunk)| {
+            let chunk_start_id = chunk_idx * chunk_size;
+            let chunk_matches: Vec<PositionMatch> = chunk
+                .iter()
+                .enumerate()
+                .filter_map(|(local_id, entry)| {
+                    let game_id = chunk_start_id + local_id;
+                    if entry.deleted {
+                        return None;
+                    }
 
-            if is_initial_pos {
-                return Some(PositionMatch { game_id, ply: 0 });
-            }
+                    if is_initial_pos {
+                        return Some(PositionMatch { game_id, ply: 0 });
+                    }
 
-            let start = entry.offset as usize;
-            let end = start + entry.length as usize;
-            if end > mmap.len() || start >= end {
-                return None;
-            }
+                    let start = entry.offset as usize;
+                    let end = start + entry.length as usize;
+                    if end > mmap.len() || start >= end {
+                        return None;
+                    }
 
-            let blob = &mmap[start..end];
-            if blob.len() < 2 {
-                return None;
-            }
+                    let blob = &mmap[start..end];
+                    if blob.len() < 2 {
+                        return None;
+                    }
 
-            let mut cursor = 0;
-            let mut pos = parse_start_position(blob, &mut cursor)?;
+                    let mut cursor = 0;
+                    let mut pos = parse_start_position(blob, &mut cursor)?;
 
-            let mut slots = standard_piece_slots();
-            let mut counts = [16usize, 16];
-            let mut ply = 0;
+                    let mut slots = standard_piece_slots();
+                    let mut counts = [16usize, 16];
+                    let mut ply = 0;
 
-            // Step through move stream
-            while cursor < blob.len() && ply <= max_search_ply {
-                let byte = blob[cursor];
-                cursor += 1;
+                    // Step through move stream
+                    while cursor < blob.len() && ply <= max_search_ply {
+                        let byte = blob[cursor];
+                        cursor += 1;
 
-                if byte == ENCODE_END_GAME {
-                    break;
-                }
-                if byte == 11 {
-                    // NAG
-                    cursor += 1;
-                    continue;
-                }
-                if byte == 12 {
-                    // Comment marker
-                    continue;
-                }
-                if byte == 13 || byte == 14 {
-                    // Variation markers - skip or follow mainline
-                    continue;
-                }
+                        if byte == ENCODE_END_GAME {
+                            break;
+                        }
+                        if byte == 11 {
+                            // NAG
+                            cursor += 1;
+                            continue;
+                        }
+                        if byte == 12 {
+                            // Comment marker
+                            continue;
+                        }
+                        if byte == 13 || byte == 14 {
+                            // Variation markers - skip or follow mainline
+                            continue;
+                        }
 
-                let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
-                    byte,
-                    &mut cursor,
-                    blob,
-                    &pos,
-                    &slots,
-                    &counts,
-                ) {
-                    Some(m) => m,
-                    None => break,
-                };
+                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
+                            byte,
+                            &mut cursor,
+                            blob,
+                            &pos,
+                            &slots,
+                            &counts,
+                        ) {
+                            Some(m) => m,
+                            None => break,
+                        };
 
-                let side_idx = usize::from(pos.turn() == Color::Black);
-                update_slots_on_move(
-                    &mut slots,
-                    &mut counts,
-                    side_idx,
-                    piece_idx,
-                    to_sq,
-                    is_castle_k,
-                    is_castle_q,
-                    captured_sq,
-                );
+                        let side_idx = usize::from(pos.turn() == Color::Black);
+                        update_slots_on_move(
+                            &mut slots,
+                            &mut counts,
+                            side_idx,
+                            piece_idx,
+                            to_sq,
+                            is_castle_k,
+                            is_castle_q,
+                            captured_sq,
+                        );
 
-                if !pos.is_legal(&mv) {
-                    break;
-                }
-                pos.play_unchecked(&mv);
-                ply += 1;
+                        if !pos.is_legal(&mv) {
+                            break;
+                        }
+                        pos.play_unchecked(&mv);
+                        ply += 1;
 
-                let h: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
-                if h.0 == target_hash_u64 {
-                    return Some(PositionMatch { game_id, ply });
-                }
-            }
+                        let h: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+                        if h.0 == target_hash_u64 {
+                            return Some(PositionMatch { game_id, ply });
+                        }
+                    }
 
-            None
+                    None
+                })
+                .collect();
+
+            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed) + chunk_matches.len();
+            let cur_s = scanned_counter.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
+            progress(cur_s.min(total), total, cur_m);
+
+            chunk_matches
         })
         .collect();
 
@@ -377,6 +401,16 @@ pub fn search_position_mmap(
         total_games_searched: entries.len(),
         elapsed_ms,
     })
+}
+
+/// Search for a target position across all games directly in .sg5 / .sg4 via memory mapping
+pub fn search_position_mmap(
+    entries: &[chess_scid_rw::entry::IndexEntry],
+    games_path: &Path,
+    target_pos: &Chess,
+    max_ply: Option<usize>,
+) -> Result<PositionSearchResult> {
+    search_position_mmap_with_progress(entries, games_path, target_pos, max_ply, |_, _, _| {})
 }
 
 /// Parses FEN or partial board string into list of required (Square, Role, Color) pieces
@@ -436,14 +470,18 @@ pub fn matches_piece_placements(pos: &Chess, required: &[(Square, Role, Color)])
     true
 }
 
-/// Search for games matching specific piece placements (e.g. Queen on d4) across all games
-pub fn search_piece_placements_mmap(
+/// Search for games matching specific piece placements (e.g. Queen on d4) across all games with streaming progress
+pub fn search_piece_placements_mmap_with_progress<F>(
     entries: &[chess_scid_rw::entry::IndexEntry],
     games_path: &Path,
     required: &[(Square, Role, Color)],
     match_any_ply: bool,
     max_ply: Option<usize>,
-) -> Result<Vec<usize>> {
+    progress: F,
+) -> Result<Vec<usize>>
+where
+    F: Fn(usize, usize, usize) + Sync,
+{
     if required.is_empty() {
         return Ok(Vec::new());
     }
@@ -453,96 +491,125 @@ pub fn search_piece_placements_mmap(
     let mmap = unsafe { Mmap::map(&file)? };
 
     let max_search_ply = max_ply.unwrap_or(250);
+    let total = entries.len();
+    let chunk_size = 50_000.max(total / 100).max(1);
+    let scanned_counter = AtomicUsize::new(0);
+    let match_counter = AtomicUsize::new(0);
 
     let matches: Vec<usize> = entries
-        .par_iter()
+        .par_chunks(chunk_size)
         .enumerate()
-        .filter_map(|(game_id, entry)| {
-            if entry.deleted {
-                return None;
-            }
+        .flat_map(|(chunk_idx, chunk)| {
+            let chunk_start_id = chunk_idx * chunk_size;
+            let chunk_matches: Vec<usize> = chunk
+                .iter()
+                .enumerate()
+                .filter_map(|(local_id, entry)| {
+                    let game_id = chunk_start_id + local_id;
+                    if entry.deleted {
+                        return None;
+                    }
 
-            let start = entry.offset as usize;
-            let end = start + entry.length as usize;
-            if end > mmap.len() || start >= end {
-                return None;
-            }
+                    let start = entry.offset as usize;
+                    let end = start + entry.length as usize;
+                    if end > mmap.len() || start >= end {
+                        return None;
+                    }
 
-            let blob = &mmap[start..end];
-            if blob.len() < 2 {
-                return None;
-            }
+                    let blob = &mmap[start..end];
+                    if blob.len() < 2 {
+                        return None;
+                    }
 
-            let mut cursor = 0;
-            let mut pos = parse_start_position(blob, &mut cursor)?;
+                    let mut cursor = 0;
+                    let mut pos = parse_start_position(blob, &mut cursor)?;
 
-            let mut slots = standard_piece_slots();
-            let mut counts = [16usize, 16];
-            let mut ply = 0;
+                    let mut slots = standard_piece_slots();
+                    let mut counts = [16usize, 16];
+                    let mut ply = 0;
 
-            if match_any_ply && matches_piece_placements(&pos, required) {
-                return Some(game_id);
-            }
+                    if match_any_ply && matches_piece_placements(&pos, required) {
+                        return Some(game_id);
+                    }
 
-            while cursor < blob.len() && ply <= max_search_ply {
-                let byte = blob[cursor];
-                cursor += 1;
+                    while cursor < blob.len() && ply <= max_search_ply {
+                        let byte = blob[cursor];
+                        cursor += 1;
 
-                if byte == ENCODE_END_GAME {
-                    break;
-                }
-                if byte == 11 {
-                    cursor += 1;
-                    continue;
-                }
-                if byte == 12 || byte == 13 || byte == 14 {
-                    continue;
-                }
+                        if byte == ENCODE_END_GAME {
+                            break;
+                        }
+                        if byte == 11 {
+                            cursor += 1;
+                            continue;
+                        }
+                        if byte == 12 || byte == 13 || byte == 14 {
+                            continue;
+                        }
 
-                let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
-                    byte,
-                    &mut cursor,
-                    blob,
-                    &pos,
-                    &slots,
-                    &counts,
-                ) {
-                    Some(m) => m,
-                    None => break,
-                };
+                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
+                            byte,
+                            &mut cursor,
+                            blob,
+                            &pos,
+                            &slots,
+                            &counts,
+                        ) {
+                            Some(m) => m,
+                            None => break,
+                        };
 
-                let side_idx = usize::from(pos.turn() == Color::Black);
-                update_slots_on_move(
-                    &mut slots,
-                    &mut counts,
-                    side_idx,
-                    piece_idx,
-                    to_sq,
-                    is_castle_k,
-                    is_castle_q,
-                    captured_sq,
-                );
+                        let side_idx = usize::from(pos.turn() == Color::Black);
+                        update_slots_on_move(
+                            &mut slots,
+                            &mut counts,
+                            side_idx,
+                            piece_idx,
+                            to_sq,
+                            is_castle_k,
+                            is_castle_q,
+                            captured_sq,
+                        );
 
-                if !pos.is_legal(&mv) {
-                    break;
-                }
-                pos.play_unchecked(&mv);
-                ply += 1;
+                        if !pos.is_legal(&mv) {
+                            break;
+                        }
+                        pos.play_unchecked(&mv);
+                        ply += 1;
 
-                if match_any_ply && matches_piece_placements(&pos, required) {
-                    return Some(game_id);
-                }
-            }
+                        if match_any_ply && matches_piece_placements(&pos, required) {
+                            return Some(game_id);
+                        }
+                    }
 
-            if !match_any_ply && matches_piece_placements(&pos, required) {
-                Some(game_id)
-            } else {
-                None
-            }
+                    if !match_any_ply && matches_piece_placements(&pos, required) {
+                        Some(game_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed) + chunk_matches.len();
+            let cur_s = scanned_counter.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
+            progress(cur_s.min(total), total, cur_m);
+
+            chunk_matches
         })
         .collect();
 
     Ok(matches)
+}
+
+/// Search for games matching specific piece placements (e.g. Queen on d4) across all games
+pub fn search_piece_placements_mmap(
+    entries: &[chess_scid_rw::entry::IndexEntry],
+    games_path: &Path,
+    required: &[(Square, Role, Color)],
+    match_any_ply: bool,
+    max_ply: Option<usize>,
+) -> Result<Vec<usize>> {
+    search_piece_placements_mmap_with_progress(entries, games_path, required, match_any_ply, max_ply, |_, _, _| {})
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -653,12 +720,16 @@ pub fn matches_material(pos: &Chess, filter: &MaterialFilter) -> bool {
     true
 }
 
-/// Search for games matching specific piece material counts across all games
-pub fn search_material_mmap(
+/// Search for games matching specific piece material counts across all games with streaming progress
+pub fn search_material_mmap_with_progress<F>(
     entries: &[chess_scid_rw::entry::IndexEntry],
     games_path: &Path,
     filter: &MaterialFilter,
-) -> Result<Vec<usize>> {
+    progress: F,
+) -> Result<Vec<usize>>
+where
+    F: Fn(usize, usize, usize) + Sync,
+{
     let file = File::open(games_path)
         .with_context(|| format!("Failed to open games file: {}", games_path.display()))?;
     let mmap = unsafe { Mmap::map(&file)? };
@@ -666,93 +737,121 @@ pub fn search_material_mmap(
     let max_search_ply = filter.max_ply.unwrap_or(250);
     let match_any_ply = filter.match_any_ply;
 
+    let total = entries.len();
+    let chunk_size = 50_000.max(total / 100).max(1);
+    let scanned_counter = AtomicUsize::new(0);
+    let match_counter = AtomicUsize::new(0);
+
     let matches: Vec<usize> = entries
-        .par_iter()
+        .par_chunks(chunk_size)
         .enumerate()
-        .filter_map(|(game_id, entry)| {
-            if entry.deleted {
-                return None;
-            }
+        .flat_map(|(chunk_idx, chunk)| {
+            let chunk_start_id = chunk_idx * chunk_size;
+            let chunk_matches: Vec<usize> = chunk
+                .iter()
+                .enumerate()
+                .filter_map(|(local_id, entry)| {
+                    let game_id = chunk_start_id + local_id;
+                    if entry.deleted {
+                        return None;
+                    }
 
-            let start = entry.offset as usize;
-            let end = start + entry.length as usize;
-            if end > mmap.len() || start >= end {
-                return None;
-            }
+                    let start = entry.offset as usize;
+                    let end = start + entry.length as usize;
+                    if end > mmap.len() || start >= end {
+                        return None;
+                    }
 
-            let blob = &mmap[start..end];
-            if blob.len() < 2 {
-                return None;
-            }
+                    let blob = &mmap[start..end];
+                    if blob.len() < 2 {
+                        return None;
+                    }
 
-            let mut cursor = 0;
-            let mut pos = parse_start_position(blob, &mut cursor)?;
+                    let mut cursor = 0;
+                    let mut pos = parse_start_position(blob, &mut cursor)?;
 
-            let mut slots = standard_piece_slots();
-            let mut counts = [16usize, 16];
-            let mut ply = 0;
+                    let mut slots = standard_piece_slots();
+                    let mut counts = [16usize, 16];
+                    let mut ply = 0;
 
-            if match_any_ply && matches_material(&pos, filter) {
-                return Some(game_id);
-            }
+                    if match_any_ply && matches_material(&pos, filter) {
+                        return Some(game_id);
+                    }
 
-            while cursor < blob.len() && ply <= max_search_ply {
-                let byte = blob[cursor];
-                cursor += 1;
+                    while cursor < blob.len() && ply <= max_search_ply {
+                        let byte = blob[cursor];
+                        cursor += 1;
 
-                if byte == ENCODE_END_GAME {
-                    break;
-                }
-                if byte == 11 {
-                    cursor += 1;
-                    continue;
-                }
-                if byte == 12 || byte == 13 || byte == 14 {
-                    continue;
-                }
+                        if byte == ENCODE_END_GAME {
+                            break;
+                        }
+                        if byte == 11 {
+                            cursor += 1;
+                            continue;
+                        }
+                        if byte == 12 || byte == 13 || byte == 14 {
+                            continue;
+                        }
 
-                let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
-                    byte,
-                    &mut cursor,
-                    blob,
-                    &pos,
-                    &slots,
-                    &counts,
-                ) {
-                    Some(m) => m,
-                    None => break,
-                };
+                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
+                            byte,
+                            &mut cursor,
+                            blob,
+                            &pos,
+                            &slots,
+                            &counts,
+                        ) {
+                            Some(m) => m,
+                            None => break,
+                        };
 
-                let side_idx = usize::from(pos.turn() == Color::Black);
-                update_slots_on_move(
-                    &mut slots,
-                    &mut counts,
-                    side_idx,
-                    piece_idx,
-                    to_sq,
-                    is_castle_k,
-                    is_castle_q,
-                    captured_sq,
-                );
+                        let side_idx = usize::from(pos.turn() == Color::Black);
+                        update_slots_on_move(
+                            &mut slots,
+                            &mut counts,
+                            side_idx,
+                            piece_idx,
+                            to_sq,
+                            is_castle_k,
+                            is_castle_q,
+                            captured_sq,
+                        );
 
-                if !pos.is_legal(&mv) {
-                    break;
-                }
-                pos.play_unchecked(&mv);
-                ply += 1;
+                        if !pos.is_legal(&mv) {
+                            break;
+                        }
+                        pos.play_unchecked(&mv);
+                        ply += 1;
 
-                if match_any_ply && matches_material(&pos, filter) {
-                    return Some(game_id);
-                }
-            }
+                        if match_any_ply && matches_material(&pos, filter) {
+                            return Some(game_id);
+                        }
+                    }
 
-            if !match_any_ply && matches_material(&pos, filter) {
-                Some(game_id)
-            } else {
-                None
-            }
+                    if !match_any_ply && matches_material(&pos, filter) {
+                        Some(game_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed) + chunk_matches.len();
+            let cur_s = scanned_counter.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
+            progress(cur_s.min(total), total, cur_m);
+
+            chunk_matches
         })
         .collect();
 
     Ok(matches)
+}
+
+/// Search for games matching specific piece material counts across all games
+pub fn search_material_mmap(
+    entries: &[chess_scid_rw::entry::IndexEntry],
+    games_path: &Path,
+    filter: &MaterialFilter,
+) -> Result<Vec<usize>> {
+    search_material_mmap_with_progress(entries, games_path, filter, |_, _, _| {})
 }
