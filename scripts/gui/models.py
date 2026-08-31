@@ -143,7 +143,7 @@ class VirtualScidTableModel(QAbstractTableModel):
             return
 
         start_page = max(0, top_row // self.CHUNK_SIZE)
-        end_page = min((self.total_count - 1) // self.CHUNK_SIZE, (bottom_row // self.CHUNK_SIZE) + 1)
+        end_page = min((self.total_count - 1) // self.CHUNK_SIZE, max(0, bottom_row // self.CHUNK_SIZE))
 
         for page in range(start_page, end_page + 1):
             if page not in self.cached_chunks and page not in self.in_flight_pages:

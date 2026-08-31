@@ -612,7 +612,7 @@ pub fn search_piece_placements_mmap(
     search_piece_placements_mmap_with_progress(entries, games_path, required, match_any_ply, max_ply, |_, _, _| {})
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MaterialFilter {
     pub white_queens: Option<u8>,
     pub white_rooks: Option<u8>,

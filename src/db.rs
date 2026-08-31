@@ -47,7 +47,7 @@ pub struct GameSummary {
     pub time_control: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameFilter {
     pub player: Option<String>,
     pub white: Option<String>,
@@ -95,6 +95,7 @@ pub struct ScidDatabaseWrapper {
     event_ranks: std::sync::OnceLock<Vec<u32>>,
     site_ranks: std::sync::OnceLock<Vec<u32>>,
     round_ranks: std::sync::OnceLock<Vec<u32>>,
+    query_cache: std::sync::Mutex<Option<(GameFilter, Vec<usize>)>>,
 }
 
 pub fn result_code_to_str(res: u8) -> &'static str {
@@ -186,6 +187,7 @@ impl ScidDatabaseWrapper {
             event_ranks: std::sync::OnceLock::new(),
             site_ranks: std::sync::OnceLock::new(),
             round_ranks: std::sync::OnceLock::new(),
+            query_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -219,6 +221,7 @@ impl ScidDatabaseWrapper {
             event_ranks: std::sync::OnceLock::new(),
             site_ranks: std::sync::OnceLock::new(),
             round_ranks: std::sync::OnceLock::new(),
+            query_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -368,6 +371,9 @@ impl ScidDatabaseWrapper {
 
         self.pending_games.extend_from_slice(&encoded_blob);
         self.dirty = true;
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
         Ok(new_idx)
     }
 
@@ -412,6 +418,9 @@ impl ScidDatabaseWrapper {
 
         self.pending_games.extend_from_slice(&encoded_blob);
         self.dirty = true;
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
         Ok(())
     }
 
@@ -421,6 +430,9 @@ impl ScidDatabaseWrapper {
         }
         self.entries[index].deleted = true;
         self.dirty = true;
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
         Ok(())
     }
 
@@ -430,6 +442,9 @@ impl ScidDatabaseWrapper {
         }
         self.entries[index].deleted = false;
         self.dirty = true;
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
         Ok(())
     }
 
@@ -464,6 +479,9 @@ impl ScidDatabaseWrapper {
         self.pending_games = compacted_games;
         self.games_mmap = None;
         self.dirty = true;
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
 
         self.save()?;
         Ok(reclaimed)
@@ -630,6 +648,25 @@ impl ScidDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
+        // 1. Fast Query Cache: If identical filter is queried for subsequent pages, return instantly (0.00ms)
+        if let Ok(guard) = self.query_cache.lock() {
+            if let Some((ref cached_filter, ref cached_indices)) = *guard {
+                if cached_filter == filter {
+                    let total_matches = cached_indices.len();
+                    let start = page * page_size;
+                    if start >= total_matches {
+                        return (Vec::new(), total_matches);
+                    }
+                    let end = usize::min(start + page_size, total_matches);
+                    let summaries = cached_indices[start..end]
+                        .iter()
+                        .filter_map(|&idx| self.get_game_summary(idx))
+                        .collect();
+                    return (summaries, total_matches);
+                }
+            }
+        }
+
         let eco_filter = filter.eco.as_ref().map(|s| s.to_uppercase());
         let date_filter = filter.date.as_ref().map(|s| s.trim());
         let result_filter = filter.result.as_ref().map(|s| s.as_str());
@@ -980,6 +1017,11 @@ impl ScidDatabaseWrapper {
 
         let total_matches = matched_indices.len();
         let start = page * page_size;
+
+        if let Ok(mut guard) = self.query_cache.lock() {
+            *guard = Some((filter.clone(), matched_indices.clone()));
+        }
+
         if start >= total_matches {
             return (Vec::new(), total_matches);
         }
