@@ -1,10 +1,11 @@
+from typing import Optional
 import chess
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QCheckBox, QTabWidget, QWidget, QRadioButton,
-    QButtonGroup, QFrame, QScrollArea
+    QButtonGroup, QFrame, QScrollArea, QGroupBox, QSpinBox
 )
 from ..widgets.board_widget import ChessBoardEditorWidget
 

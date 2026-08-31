@@ -25,6 +25,59 @@ pub struct PositionSearchResult {
     pub elapsed_ms: f64,
 }
 
+/// Skips extra tags in the game blob according to SCID specification
+#[inline]
+pub fn skip_extra_tags(blob: &[u8], cursor: &mut usize) -> bool {
+    while *cursor < blob.len() {
+        let name_code = blob[*cursor];
+        *cursor += 1;
+        if name_code == 0 {
+            return true;
+        }
+        if name_code == 255 {
+            *cursor += 3;
+            continue;
+        }
+        if name_code <= 240 {
+            *cursor += name_code as usize;
+        }
+        // 241..=254 has no name to skip
+        if *cursor >= blob.len() {
+            return false;
+        }
+        let value_len = blob[*cursor] as usize;
+        *cursor += 1 + value_len;
+    }
+    false
+}
+
+/// Parses the initial position and advances cursor past flags and optional FEN
+#[inline]
+pub fn parse_start_position(blob: &[u8], cursor: &mut usize) -> Option<Chess> {
+    if !skip_extra_tags(blob, cursor) || *cursor >= blob.len() {
+        return None;
+    }
+
+    let flags = blob[*cursor];
+    *cursor += 1;
+
+    if flags & 0x01 != 0 {
+        let fen_start = *cursor;
+        while *cursor < blob.len() && blob[*cursor] != 0 {
+            *cursor += 1;
+        }
+        let fen_bytes = &blob[fen_start..*cursor];
+        if *cursor < blob.len() {
+            *cursor += 1; // consume null byte
+        }
+        let fen_str = std::str::from_utf8(fen_bytes).ok()?;
+        let fen: shakmaty::fen::Fen = fen_str.parse().ok()?;
+        fen.into_position(shakmaty::CastlingMode::Standard).ok()
+    } else {
+        Some(Chess::default())
+    }
+}
+
 /// Standard starting piece table mapping (16 slots per side)
 #[inline]
 pub(crate) fn standard_piece_slots() -> [[u8; 16]; 2] {
@@ -245,38 +298,8 @@ pub fn search_position_mmap(
                 return None;
             }
 
-            // Flags check
             let mut cursor = 0;
-            // Skip extra tags
-            while cursor < blob.len() && blob[cursor] != 0 {
-                let tag_len = blob[cursor] as usize;
-                cursor += 1 + tag_len;
-            }
-            if cursor < blob.len() && blob[cursor] == 0 {
-                cursor += 1;
-            }
-
-            if cursor >= blob.len() {
-                return None;
-            }
-
-            let flags = blob[cursor];
-            cursor += 1;
-
-            let mut pos = if flags & 0x01 != 0 {
-                // Non-standard starting position
-                let fen_start = cursor;
-                while cursor < blob.len() && blob[cursor] != 0 {
-                    cursor += 1;
-                }
-                let fen_bytes = &blob[fen_start..cursor];
-                cursor += 1; // consume null
-                let fen_str = std::str::from_utf8(fen_bytes).ok()?;
-                let fen: shakmaty::fen::Fen = fen_str.parse().ok()?;
-                fen.into_position(shakmaty::CastlingMode::Standard).ok()?
-            } else {
-                Chess::default()
-            };
+            let mut pos = parse_start_position(blob, &mut cursor)?;
 
             let mut slots = standard_piece_slots();
             let mut counts = [16usize, 16];
@@ -328,6 +351,9 @@ pub fn search_position_mmap(
                     captured_sq,
                 );
 
+                if !pos.is_legal(&mv) {
+                    break;
+                }
                 pos.play_unchecked(&mv);
                 ply += 1;
 
@@ -447,35 +473,8 @@ pub fn search_piece_placements_mmap(
                 return None;
             }
 
-            // Flags check
             let mut cursor = 0;
-            while cursor < blob.len() && blob[cursor] != 0 {
-                let tag_len = blob[cursor] as usize;
-                cursor += 1 + tag_len;
-            }
-            if cursor < blob.len() && blob[cursor] == 0 {
-                cursor += 1;
-            }
-            if cursor >= blob.len() {
-                return None;
-            }
-
-            let flags = blob[cursor];
-            cursor += 1;
-
-            let mut pos = if flags & 0x01 != 0 {
-                let fen_start = cursor;
-                while cursor < blob.len() && blob[cursor] != 0 {
-                    cursor += 1;
-                }
-                let fen_bytes = &blob[fen_start..cursor];
-                cursor += 1;
-                let fen_str = std::str::from_utf8(fen_bytes).ok()?;
-                let fen: shakmaty::fen::Fen = fen_str.parse().ok()?;
-                fen.into_position(shakmaty::CastlingMode::Standard).ok()?
-            } else {
-                Chess::default()
-            };
+            let mut pos = parse_start_position(blob, &mut cursor)?;
 
             let mut slots = standard_piece_slots();
             let mut counts = [16usize, 16];
@@ -524,6 +523,9 @@ pub fn search_piece_placements_mmap(
                     captured_sq,
                 );
 
+                if !pos.is_legal(&mv) {
+                    break;
+                }
                 pos.play_unchecked(&mv);
                 ply += 1;
 
@@ -683,35 +685,8 @@ pub fn search_material_mmap(
                 return None;
             }
 
-            // Flags check
             let mut cursor = 0;
-            while cursor < blob.len() && blob[cursor] != 0 {
-                let tag_len = blob[cursor] as usize;
-                cursor += 1 + tag_len;
-            }
-            if cursor < blob.len() && blob[cursor] == 0 {
-                cursor += 1;
-            }
-            if cursor >= blob.len() {
-                return None;
-            }
-
-            let flags = blob[cursor];
-            cursor += 1;
-
-            let mut pos = if flags & 0x01 != 0 {
-                let fen_start = cursor;
-                while cursor < blob.len() && blob[cursor] != 0 {
-                    cursor += 1;
-                }
-                let fen_bytes = &blob[fen_start..cursor];
-                cursor += 1;
-                let fen_str = std::str::from_utf8(fen_bytes).ok()?;
-                let fen: shakmaty::fen::Fen = fen_str.parse().ok()?;
-                fen.into_position(shakmaty::CastlingMode::Standard).ok()?
-            } else {
-                Chess::default()
-            };
+            let mut pos = parse_start_position(blob, &mut cursor)?;
 
             let mut slots = standard_piece_slots();
             let mut counts = [16usize, 16];
@@ -760,6 +735,9 @@ pub fn search_material_mmap(
                     captured_sq,
                 );
 
+                if !pos.is_legal(&mv) {
+                    break;
+                }
                 pos.play_unchecked(&mv);
                 ply += 1;
 

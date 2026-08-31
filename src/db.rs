@@ -684,34 +684,22 @@ impl ScidDatabaseWrapper {
         });
 
         let pos_matches = filter.fen.as_deref().and_then(|f| {
-            if f.trim().is_empty() {
+            let trimmed = f.trim();
+            if trimmed.is_empty() {
                 None
+            } else if let Ok(res) = self.search_position(trimmed, None) {
+                // If legal chess position or valid FEN, fast exact match
+                Some(
+                    res.matches
+                        .into_iter()
+                        .map(|m| m.game_id)
+                        .collect::<std::collections::HashSet<usize>>(),
+                )
             } else {
-                let pieces = crate::position_search::parse_piece_placements(f);
+                let pieces = crate::position_search::parse_piece_placements(trimmed);
                 if pieces.is_empty() {
                     None
-                } else if pieces.len() == 32 && f.contains(' ') {
-                    // Full FEN - attempt fast Zobrist exact match if valid legal position
-                    if let Ok(res) = self.search_position(f, None) {
-                        Some(
-                            res.matches
-                                .into_iter()
-                                .map(|m| m.game_id)
-                                .collect::<std::collections::HashSet<usize>>(),
-                        )
-                    } else {
-                        crate::position_search::search_piece_placements_mmap(
-                            &self.entries,
-                            &self.games_path,
-                            &pieces,
-                            true,
-                            None,
-                        )
-                        .ok()
-                        .map(|v| v.into_iter().collect::<std::collections::HashSet<usize>>())
-                    }
                 } else {
-                    // Partial piece placement matching (e.g. Queen on d4, or piece subsets)
                     crate::position_search::search_piece_placements_mmap(
                         &self.entries,
                         &self.games_path,

@@ -420,42 +420,9 @@ impl PositionIndex {
                         }
 
                         let mut cursor = 0;
-                        while cursor < blob.len() && blob[cursor] != 0 {
-                            let tag_len = blob[cursor] as usize;
-                            cursor += 1 + tag_len;
-                        }
-                        if cursor < blob.len() && blob[cursor] == 0 {
-                            cursor += 1;
-                        }
-                        if cursor >= blob.len() {
-                            continue;
-                        }
-
-                        let flags = blob[cursor];
-                        cursor += 1;
-
-                        let mut pos = if flags & 0x01 != 0 {
-                            let fen_start = cursor;
-                            while cursor < blob.len() && blob[cursor] != 0 {
-                                cursor += 1;
-                            }
-                            let fen_bytes = &blob[fen_start..cursor];
-                            cursor += 1;
-                            if let Ok(fen_str) = std::str::from_utf8(fen_bytes) {
-                                if let Ok(fen) = fen_str.parse::<Fen>() {
-                                    if let Ok(p) = fen.into_position(CastlingMode::Standard) {
-                                        p
-                                    } else {
-                                        Chess::default()
-                                    }
-                                } else {
-                                    Chess::default()
-                                }
-                            } else {
-                                Chess::default()
-                            }
-                        } else {
-                            Chess::default()
+                        let mut pos = match crate::position_search::parse_start_position(blob, &mut cursor) {
+                            Some(p) => p,
+                            None => continue,
                         };
 
                         let mut slots = crate::position_search::standard_piece_slots();
@@ -519,7 +486,11 @@ impl PositionIndex {
                                 captured_sq,
                             );
 
-                            pos.play_unchecked(&mv);
+                            if let Ok(new_pos) = pos.play(&mv) {
+                                pos = new_pos;
+                            } else {
+                                break;
+                            }
                             ply += 1;
                         }
                     }

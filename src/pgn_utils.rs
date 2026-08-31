@@ -259,37 +259,17 @@ pub fn fast_game_to_pgn(
 
     // Move stream decode
     let mut cursor = 0;
-    // Skip extra tags
-    while cursor < blob.len() && blob[cursor] != 0 {
-        let tag_len = blob[cursor] as usize;
-        cursor += 1 + tag_len;
-    }
-    if cursor < blob.len() && blob[cursor] == 0 {
-        cursor += 1;
-    }
-    if cursor >= blob.len() {
-        let _ = write!(out, "\n{}\n", result);
-        return Some(out);
-    }
-
-    let flags = blob[cursor];
-    cursor += 1;
-
-    let mut pos = if flags & 0x01 != 0 {
-        let fen_start = cursor;
-        while cursor < blob.len() && blob[cursor] != 0 {
-            cursor += 1;
+    let mut pos = match crate::position_search::parse_start_position(blob, &mut cursor) {
+        Some(p) => p,
+        None => {
+            let _ = write!(out, "\n{}\n", result);
+            return Some(out);
         }
-        let fen_bytes = &blob[fen_start..cursor];
-        cursor += 1;
-        let fen_str = std::str::from_utf8(fen_bytes).ok()?;
-        let _ = writeln!(out, "[SetUp \"1\"]");
-        let _ = writeln!(out, "[FEN \"{}\"]", fen_str);
-        let fen: shakmaty::fen::Fen = fen_str.parse().ok()?;
-        fen.into_position(shakmaty::CastlingMode::Standard).ok()?
-    } else {
-        shakmaty::Chess::default()
     };
+    if entry.non_standard_start {
+        let _ = writeln!(out, "[SetUp \"1\"]");
+        let _ = writeln!(out, "[FEN \"{:?}\"]", pos);
+    }
 
     out.push('\n');
 

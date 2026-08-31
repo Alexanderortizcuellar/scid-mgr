@@ -176,3 +176,23 @@ fn test_format_roundtrip(format: ScidFormat) -> Result<()> {
     println!("  [OK] Format {} passed all test stages.", format);
     Ok(())
 }
+
+#[test]
+fn test_position_search_with_extra_tags() {
+    let p = std::path::Path::new(r"C:\Users\ASUS\Downloads\LumbrasGigabase_OTB_si5\LumbrasGigabase_OTB_si5\LumbrasGigaBase_OTB.si5");
+    if !p.exists() {
+        return;
+    }
+
+    let db = ScidDatabaseWrapper::open(p).expect("Failed to open Lumbras");
+    let fen_str = "r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 4";
+    // Check first 10,000 games
+    let res = crate::position_search::search_position_mmap(
+        &db.entries()[..10_000],
+        db.games_path(),
+        &fen_str.parse::<shakmaty::fen::Fen>().unwrap().into_position(shakmaty::CastlingMode::Standard).unwrap(),
+        Some(20),
+    ).expect("Search failed");
+    println!("Fast position search on first 10k games found: {} matches in {:.2} ms", res.matches.len(), res.elapsed_ms);
+}
+
