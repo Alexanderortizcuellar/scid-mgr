@@ -29,11 +29,13 @@ class BackendClient(QObject):
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def start(self, binary_path: str, db_path: Optional[str] = None):
+    def start(self, binary_path: str, db_path: Optional[str] = None, threads: Optional[int] = None):
         if self.is_running():
             self.stop()
 
         cmd = [binary_path, "--interactive"]
+        if threads and threads > 0:
+            cmd.extend(["--threads", str(threads)])
         if db_path and os.path.exists(db_path):
             cmd.append(db_path)
 

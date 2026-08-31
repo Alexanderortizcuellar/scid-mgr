@@ -5,6 +5,7 @@ from .benchmark_dialog import BenchmarkDialog
 from .columns_dialog import ColumnsConfigDialog
 from .build_pos_index_dialog import BuildPosIndexDialog
 from .search_progress_dialog import SearchProgressDialog
+from .settings_dialog import SettingsDialog
 
 __all__ = [
     'NewDatabaseDialog',
@@ -14,4 +15,5 @@ __all__ = [
     'ColumnsConfigDialog',
     'BuildPosIndexDialog',
     'SearchProgressDialog',
+    'SettingsDialog',
 ]

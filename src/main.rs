@@ -22,6 +22,10 @@ struct Cli {
     #[arg(short, long)]
     interactive: bool,
 
+    /// Max CPU worker threads for search and indexing
+    #[arg(short, long)]
+    threads: Option<usize>,
+
     /// Optional database path to auto-open in interactive mode
     #[arg(value_name = "DB_PATH")]
     db_path: Option<PathBuf>,
@@ -241,6 +245,10 @@ enum Commands {
         /// Optional database path to auto-open
         #[arg(value_name = "DB_PATH")]
         db_path: Option<PathBuf>,
+
+        /// Max CPU worker threads for search and indexing
+        #[arg(short, long)]
+        threads: Option<usize>,
     },
 }
 
@@ -248,10 +256,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.interactive {
-        return server::run_interactive_server(cli.db_path);
+        return server::run_interactive_server(cli.db_path, cli.threads);
     }
 
     match cli.command {
+        Some(Commands::Interactive { db_path, threads }) => {
+            server::run_interactive_server(db_path, threads.or(cli.threads))?;
+        }
         Some(Commands::Test) => {
             test_suite::run_full_test_suite()?;
         }
@@ -641,13 +652,10 @@ fn main() -> Result<()> {
                 println!("No games found reaching this position in the opening index.");
             }
         }
-        Some(Commands::Interactive { db_path }) => {
-            server::run_interactive_server(db_path)?;
-        }
         None => {
             // Default to interactive mode if a db path was provided, or print help
             if let Some(path) = cli.db_path {
-                server::run_interactive_server(Some(path))?;
+                server::run_interactive_server(Some(path), cli.threads)?;
             } else {
                 println!("Run 'scid-mgr --help' for CLI options or 'scid-mgr test' to test.");
             }

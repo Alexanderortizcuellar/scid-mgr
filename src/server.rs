@@ -32,10 +32,17 @@ pub struct ResponseMessage {
     pub error: Option<String>,
 }
 
-pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
+pub fn run_interactive_server(
+    initial_db_path: Option<PathBuf>,
+    initial_threads: Option<usize>,
+) -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut reader = stdin.lock();
+
+    let max_system_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let mut current_thread_count = initial_threads.unwrap_or(max_system_threads).max(1);
+    let mut thread_pool = rayon::ThreadPoolBuilder::new().num_threads(current_thread_count).build()?;
 
     let mut current_db: Option<DatabaseBackend> = None;
     let mut current_pos_index: Option<PositionIndex> = None;
@@ -103,7 +110,14 @@ pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
             break;
         }
 
-        let resp = handle_command(&mut current_db, &mut current_pos_index, req);
+        let resp = handle_command(
+            &mut current_db,
+            &mut current_pos_index,
+            &mut thread_pool,
+            &mut current_thread_count,
+            max_system_threads,
+            req,
+        );
         writeln!(stdout, "{}", serde_json::to_string(&resp)?)?;
         stdout.flush()?;
         line.clear();
@@ -115,12 +129,57 @@ pub fn run_interactive_server(initial_db_path: Option<PathBuf>) -> Result<()> {
 fn handle_command(
     current_db: &mut Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,
+    thread_pool: &mut rayon::ThreadPool,
+    current_thread_count: &mut usize,
+    max_system_threads: usize,
     req: RequestMessage,
 ) -> ResponseMessage {
     let id = req.id;
     let cmd = req.command.as_str();
 
     match cmd {
+        "set_threads" | "set_config" => {
+            let threads = req
+                .params
+                .get("threads")
+                .or_else(|| req.params.get("params").and_then(|p| p.get("threads")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(max_system_threads as u64) as usize;
+            let clamped = threads.clamp(1, max_system_threads * 2);
+            match rayon::ThreadPoolBuilder::new().num_threads(clamped).build() {
+                Ok(new_pool) => {
+                    *thread_pool = new_pool;
+                    *current_thread_count = clamped;
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "threads": *current_thread_count,
+                            "max_threads": max_system_threads,
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("Failed to configure thread pool: {}", e)),
+                },
+            }
+        }
+
+        "get_threads" | "get_config" => {
+            ResponseMessage {
+                id,
+                status: "ok".to_string(),
+                data: Some(serde_json::json!({
+                    "threads": *current_thread_count,
+                    "max_threads": max_system_threads,
+                })),
+                error: None,
+            }
+        }
         "open" => {
             let path_str = match req.params.get("path").or_else(|| req.params.get("params").and_then(|p| p.get("path"))).and_then(|v| v.as_str()) {
                 Some(p) => p,
@@ -368,7 +427,7 @@ fn handle_command(
 
             let filter_value = req.params.get("params").unwrap_or(&req.params);
             let filter: GameFilter = serde_json::from_value(filter_value.clone()).unwrap_or_default();
-            let (games, total) = match db {
+            let (games, total) = thread_pool.install(|| match db {
                 DatabaseBackend::Scid(s) => s.query_games_with_progress(&filter, page, page_size, |scanned, total, matches_len| {
                     let event_json = serde_json::json!({
                         "event": "search_progress",
@@ -386,7 +445,7 @@ fn handle_command(
                     }
                 }),
                 DatabaseBackend::Pgn(p) => p.query_games(&filter, page, page_size),
-            };
+            });
 
             ResponseMessage {
                 id,
@@ -472,51 +531,58 @@ fn handle_command(
                 .map(|p| p as usize);
 
             match db {
-                DatabaseBackend::Scid(s) => match s.search_position_with_progress(fen, max_ply, |scanned, total, matches_len| {
-                    let event_json = serde_json::json!({
-                        "event": "search_progress",
-                        "data": {
-                            "scanned": scanned,
-                            "total": total,
-                            "matches": matches_len,
-                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
-                        }
-                    });
-                    if let Ok(line) = serde_json::to_string(&event_json) {
-                        let mut out = io::stdout().lock();
-                        let _ = writeln!(out, "{}", line);
-                        let _ = out.flush();
-                    }
-                }) {
-                    Ok(res) => ResponseMessage {
-                        id,
-                        status: "ok".to_string(),
-                        data: Some(serde_json::to_value(&res).unwrap_or_default()),
-                        error: None,
-                    },
-                    Err(e) => ResponseMessage {
-                        id,
-                        status: "error".to_string(),
-                        data: None,
-                        error: Some(format!("Position search failed: {}", e)),
-                    },
-                },
-                DatabaseBackend::Pgn(p) => {
-                    let res = p.search_position(fen, max_ply, |scanned, total, matches_len| {
-                        let event_json = serde_json::json!({
-                            "event": "search_progress",
-                            "data": {
-                                "scanned": scanned,
-                                "total": total,
-                                "matches": matches_len,
-                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                DatabaseBackend::Scid(s) => {
+                    let res = thread_pool.install(|| {
+                        s.search_position_with_progress(fen, max_ply, |scanned, total, matches_len| {
+                            let event_json = serde_json::json!({
+                                "event": "search_progress",
+                                "data": {
+                                    "scanned": scanned,
+                                    "total": total,
+                                    "matches": matches_len,
+                                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                }
+                            });
+                            if let Ok(line) = serde_json::to_string(&event_json) {
+                                let mut out = io::stdout().lock();
+                                let _ = writeln!(out, "{}", line);
+                                let _ = out.flush();
                             }
-                        });
-                        if let Ok(line) = serde_json::to_string(&event_json) {
-                            let mut out = io::stdout().lock();
-                            let _ = writeln!(out, "{}", line);
-                            let _ = out.flush();
-                        }
+                        })
+                    });
+                    match res {
+                        Ok(res) => ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::to_value(&res).unwrap_or_default()),
+                            error: None,
+                        },
+                        Err(e) => ResponseMessage {
+                            id,
+                            status: "error".to_string(),
+                            data: None,
+                            error: Some(format!("Position search failed: {}", e)),
+                        },
+                    }
+                }
+                DatabaseBackend::Pgn(p) => {
+                    let res = thread_pool.install(|| {
+                        p.search_position(fen, max_ply, |scanned, total, matches_len| {
+                            let event_json = serde_json::json!({
+                                "event": "search_progress",
+                                "data": {
+                                    "scanned": scanned,
+                                    "total": total,
+                                    "matches": matches_len,
+                                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                }
+                            });
+                            if let Ok(line) = serde_json::to_string(&event_json) {
+                                let mut out = io::stdout().lock();
+                                let _ = writeln!(out, "{}", line);
+                                let _ = out.flush();
+                            }
+                        })
                     });
                     match res {
                         Ok(res) => ResponseMessage {
@@ -649,7 +715,7 @@ fn handle_command(
             };
 
             let max_ply = req.params.get("max_ply").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
-            let threads = req.params.get("threads").and_then(|v| v.as_u64()).map(|t| t as usize);
+            let threads = req.params.get("threads").and_then(|v| v.as_u64()).map(|t| t as usize).or(Some(*current_thread_count));
             let start = Instant::now();
 
             let res = match db {

@@ -22,6 +22,7 @@ from .dialogs.benchmark_dialog import BenchmarkDialog
 from .dialogs.columns_dialog import ColumnsConfigDialog
 from .dialogs.build_pos_index_dialog import BuildPosIndexDialog
 from .dialogs.search_progress_dialog import SearchProgressDialog
+from .dialogs.settings_dialog import SettingsDialog
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -126,6 +127,11 @@ class MainWindow(QMainWindow):
         self.btn_benchmark.setStyleSheet("font-weight: bold; padding: 6px 12px;")
         self.btn_benchmark.clicked.connect(self.open_benchmark_dialog)
         db_actions_layout.addWidget(self.btn_benchmark)
+
+        self.btn_settings = QPushButton("⚙️ Settings...")
+        self.btn_settings.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        self.btn_settings.clicked.connect(self.open_settings_dialog)
+        db_actions_layout.addWidget(self.btn_settings)
 
         conn_layout.addLayout(db_actions_layout, 3, 0, 1, 3)
         root_layout.addWidget(conn_group)
@@ -540,10 +546,17 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Binary", f"Cannot find binary at:\n{bin_path}")
                 return
 
+            settings = QSettings("chess-scid-rw", "ScidDatabaseManager")
+            threads = int(settings.value("worker_threads", 0))
+
             try:
-                self.client.start(bin_path, db_path if db_path and os.path.exists(db_path) else None)
+                self.client.start(
+                    bin_path,
+                    db_path if db_path and os.path.exists(db_path) else None,
+                    threads=threads if threads > 0 else None,
+                )
                 self.update_ui_connected()
-                self.log_viewer.append(f"[GUI] Spawned backend: {bin_path}")
+                self.log_viewer.append(f"[GUI] Spawned backend (Threads: {threads or 'auto'}): {bin_path}")
                 if db_path:
                     self.client.send_request("open", {"path": db_path})
                 else:
@@ -555,12 +568,18 @@ class MainWindow(QMainWindow):
         bin_path = self.binary_input.text().strip()
         if not bin_path or not os.path.exists(bin_path):
             return
-        self.client.start(bin_path)
+        settings = QSettings("chess-scid-rw", "ScidDatabaseManager")
+        threads = int(settings.value("worker_threads", 0))
+        self.client.start(bin_path, threads=threads if threads > 0 else None)
         self.update_ui_connected()
         if create_format:
             self.client.send_request("create", {"path": db_path, "format": create_format})
         else:
             self.client.send_request("open", {"path": db_path})
+
+    def open_settings_dialog(self):
+        dialog = SettingsDialog(self.client, self)
+        dialog.exec_()
 
     def update_ui_connected(self):
         self.lbl_status.setText("Status: Connected")
