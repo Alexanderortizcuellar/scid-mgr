@@ -1087,10 +1087,12 @@ impl PositionIndex {
         let mut index_entries = Vec::with_capacity(unique_count);
         let mut data_payload = Vec::with_capacity(unique_count * 128);
 
+        let mut encoding_stats = GameSetEncodingStats::new();
+
         for hash in hashes {
             if let Some(node) = positions_map.remove(&hash) {
                 let curr_offset = data_payload.len() as u32;
-                let payload_bytes = encode_position_payload(&node);
+                let payload_bytes = encode_position_payload(&node, Some(&mut encoding_stats));
                 let curr_len = payload_bytes.len() as u32;
                 data_payload.extend_from_slice(&payload_bytes);
 
@@ -1148,7 +1150,347 @@ impl PositionIndex {
             unique_count,
             std::fs::metadata(&idx_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0)
         );
+        eprintln!(
+            "[PositionIndex] GameSet Encoding: {} total sets | DeltaVarint: {} ({:.1}%) | Roaring: {} ({:.1}%) | Savings vs Delta: {:.2}% | Savings vs Roaring: {:.2}%",
+            encoding_stats.total_game_sets,
+            encoding_stats.delta_varint_count,
+            if encoding_stats.total_game_sets > 0 { (encoding_stats.delta_varint_count as f64 / encoding_stats.total_game_sets as f64) * 100.0 } else { 0.0 },
+            encoding_stats.roaring_count,
+            if encoding_stats.total_game_sets > 0 { (encoding_stats.roaring_count as f64 / encoding_stats.total_game_sets as f64) * 100.0 } else { 0.0 },
+            encoding_stats.savings_vs_delta_pct(),
+            encoding_stats.savings_vs_roaring_pct()
+        );
         Ok(idx_path)
+    }
+
+    /// Scans an existing memory-mapped .pos.idx file and computes complete GameSet diagnostic statistics
+    pub fn scan_diagnostics(&self) -> Result<GameSetEncodingStats> {
+        let mut stats = GameSetEncodingStats::new();
+        let entries = self.index_entries();
+        let data_start = self.header.data_offset as usize;
+
+        for entry in entries {
+            let start = data_start + entry.data_offset as usize;
+            let end = start + entry.data_len as usize;
+            if end > self.mmap.len() || start >= end {
+                continue;
+            }
+            let mut slice = &self.mmap[start..end];
+            let _total_games = read_varint(&mut slice)? as u32;
+            let _white_wins = read_varint(&mut slice)? as u32;
+            let _black_wins = read_varint(&mut slice)? as u32;
+            let move_count = read_varint(&mut slice)? as usize;
+
+            for _ in 0..move_count {
+                if slice.len() < 2 { break; }
+                slice = &slice[2..]; // packed_move
+                let _m_tot = read_varint(&mut slice)?;
+                let _m_ww = read_varint(&mut slice)?;
+                let _m_bw = read_varint(&mut slice)?;
+                if slice.len() < 20 { break; }
+                slice = &slice[20..]; // rating sums
+
+                if slice.is_empty() { break; }
+                let tag = slice[0];
+                let count = match tag {
+                    0 => {
+                        let mut sub = &slice[1..];
+                        let id_count = read_varint(&mut sub)? as usize;
+                        let delta_len = 1 + (slice.len() - sub.len());
+                        // skip the rest of delta varints
+                        for _ in 0..id_count {
+                            let _ = read_varint(&mut sub)?;
+                        }
+                        slice = sub;
+                        stats.record_sample(id_count, delta_len, 0, GameSetType::DeltaVarint);
+                        id_count
+                    }
+                    1 => {
+                        let mut sub = &slice[1..];
+                        let bm = roaring::RoaringBitmap::deserialize_from(&mut sub)?;
+                        let id_count = bm.len() as usize;
+                        slice = sub;
+                        stats.record_sample(id_count, 0, 0, GameSetType::Roaring);
+                        id_count
+                    }
+                    _ => break,
+                };
+                let _ = count;
+            }
+        }
+        Ok(stats)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum GameSetType {
+    DeltaVarint = 0,
+    Roaring = 1,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GameSetEncodingStats {
+    pub total_game_sets: usize,
+    pub delta_varint_count: usize,
+    pub roaring_count: usize,
+    pub bytes_if_all_delta: usize,
+    pub bytes_if_all_roaring: usize,
+    pub bytes_adaptive: usize,
+    pub bucket_1_10: usize,
+    pub bucket_11_100: usize,
+    pub bucket_101_1k: usize,
+    pub bucket_1k_10k: usize,
+    pub bucket_10k_100k: usize,
+    pub bucket_100k_plus: usize,
+}
+
+impl GameSetEncodingStats {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record_sample(&mut self, id_count: usize, delta_len: usize, roaring_len: usize, chosen: GameSetType) {
+        self.total_game_sets += 1;
+        self.bytes_if_all_delta += delta_len;
+        self.bytes_if_all_roaring += roaring_len;
+        match chosen {
+            GameSetType::DeltaVarint => {
+                self.delta_varint_count += 1;
+                self.bytes_adaptive += delta_len;
+            }
+            GameSetType::Roaring => {
+                self.roaring_count += 1;
+                self.bytes_adaptive += roaring_len;
+            }
+        }
+
+        match id_count {
+            1..=10 => self.bucket_1_10 += 1,
+            11..=100 => self.bucket_11_100 += 1,
+            101..=1000 => self.bucket_101_1k += 1,
+            1001..=10000 => self.bucket_1k_10k += 1,
+            10001..=100000 => self.bucket_10k_100k += 1,
+            _ => self.bucket_100k_plus += 1,
+        }
+    }
+
+    pub fn merge(&mut self, other: &GameSetEncodingStats) {
+        self.total_game_sets += other.total_game_sets;
+        self.delta_varint_count += other.delta_varint_count;
+        self.roaring_count += other.roaring_count;
+        self.bytes_if_all_delta += other.bytes_if_all_delta;
+        self.bytes_if_all_roaring += other.bytes_if_all_roaring;
+        self.bytes_adaptive += other.bytes_adaptive;
+        self.bucket_1_10 += other.bucket_1_10;
+        self.bucket_11_100 += other.bucket_11_100;
+        self.bucket_101_1k += other.bucket_101_1k;
+        self.bucket_1k_10k += other.bucket_1k_10k;
+        self.bucket_10k_100k += other.bucket_10k_100k;
+        self.bucket_100k_plus += other.bucket_100k_plus;
+    }
+
+    pub fn savings_vs_delta_pct(&self) -> f64 {
+        if self.bytes_if_all_delta == 0 { return 0.0; }
+        ((self.bytes_if_all_delta as f64 - self.bytes_adaptive as f64) / self.bytes_if_all_delta as f64) * 100.0
+    }
+
+    pub fn savings_vs_roaring_pct(&self) -> f64 {
+        if self.bytes_if_all_roaring == 0 { return 0.0; }
+        ((self.bytes_if_all_roaring as f64 - self.bytes_adaptive as f64) / self.bytes_if_all_roaring as f64) * 100.0
+    }
+}
+
+/// Unified GameSet abstraction supporting Delta-Varint and Roaring Bitmap backends
+#[derive(Debug, Clone, PartialEq)]
+pub enum GameSet {
+    DeltaVarint(Vec<u32>),
+    Roaring(roaring::RoaringBitmap),
+}
+
+impl GameSet {
+    #[inline]
+    pub fn set_type(&self) -> GameSetType {
+        match self {
+            GameSet::DeltaVarint(_) => GameSetType::DeltaVarint,
+            GameSet::Roaring(_) => GameSetType::Roaring,
+        }
+    }
+
+    #[inline]
+    pub fn count(&self) -> usize {
+        match self {
+            GameSet::DeltaVarint(v) => v.len(),
+            GameSet::Roaring(bm) => bm.len() as usize,
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            GameSet::DeltaVarint(v) => v.is_empty(),
+            GameSet::Roaring(bm) => bm.is_empty(),
+        }
+    }
+
+    #[inline]
+    pub fn contains(&self, id: u32) -> bool {
+        match self {
+            GameSet::DeltaVarint(v) => v.binary_search(&id).is_ok(),
+            GameSet::Roaring(bm) => bm.contains(id),
+        }
+    }
+
+    pub fn to_vec(&self) -> Vec<u32> {
+        match self {
+            GameSet::DeltaVarint(v) => v.clone(),
+            GameSet::Roaring(bm) => bm.iter().collect(),
+        }
+    }
+
+    pub fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = u32> + 'a> {
+        match self {
+            GameSet::DeltaVarint(v) => Box::new(v.iter().copied()),
+            GameSet::Roaring(bm) => Box::new(bm.iter()),
+        }
+    }
+
+    pub fn intersect(&self, other: &GameSet) -> GameSet {
+        match (self, other) {
+            (GameSet::Roaring(a), GameSet::Roaring(b)) => {
+                GameSet::Roaring(a & b)
+            }
+            (GameSet::DeltaVarint(a), GameSet::DeltaVarint(b)) => {
+                let mut res = Vec::new();
+                let mut i = 0;
+                let mut j = 0;
+                while i < a.len() && j < b.len() {
+                    if a[i] == b[j] {
+                        res.push(a[i]);
+                        i += 1;
+                        j += 1;
+                    } else if a[i] < b[j] {
+                        i += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                GameSet::DeltaVarint(res)
+            }
+            (GameSet::Roaring(bm), GameSet::DeltaVarint(v)) | (GameSet::DeltaVarint(v), GameSet::Roaring(bm)) => {
+                let res: Vec<u32> = v.iter().filter(|&&id| bm.contains(id)).copied().collect();
+                GameSet::DeltaVarint(res)
+            }
+        }
+    }
+
+    pub fn intersection_count(&self, other: &GameSet) -> usize {
+        match (self, other) {
+            (GameSet::Roaring(a), GameSet::Roaring(b)) => {
+                (a & b).len() as usize
+            }
+            (GameSet::DeltaVarint(a), GameSet::DeltaVarint(b)) => {
+                let mut count = 0;
+                let mut i = 0;
+                let mut j = 0;
+                while i < a.len() && j < b.len() {
+                    if a[i] == b[j] {
+                        count += 1;
+                        i += 1;
+                        j += 1;
+                    } else if a[i] < b[j] {
+                        i += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                count
+            }
+            (GameSet::Roaring(bm), GameSet::DeltaVarint(v)) | (GameSet::DeltaVarint(v), GameSet::Roaring(bm)) => {
+                v.iter().filter(|&&id| bm.contains(id)).count()
+            }
+        }
+    }
+
+    pub fn intersect_with_hashset(&self, set: &std::collections::HashSet<u32>) -> usize {
+        match self {
+            GameSet::DeltaVarint(v) => v.iter().filter(|id| set.contains(id)).count(),
+            GameSet::Roaring(bm) => {
+                if set.len() < bm.len() as usize {
+                    set.iter().filter(|&id| bm.contains(*id)).count()
+                } else {
+                    bm.iter().filter(|id| set.contains(id)).count()
+                }
+            }
+        }
+    }
+
+    pub fn intersect_ids_with_hashset(&self, set: &std::collections::HashSet<u32>) -> Vec<u32> {
+        match self {
+            GameSet::DeltaVarint(v) => v.iter().filter(|id| set.contains(id)).copied().collect(),
+            GameSet::Roaring(bm) => {
+                if set.len() < bm.len() as usize {
+                    let mut res: Vec<u32> = set.iter().filter(|&id| bm.contains(*id)).copied().collect();
+                    res.sort_unstable();
+                    res
+                } else {
+                    bm.iter().filter(|id| set.contains(id)).collect()
+                }
+            }
+        }
+    }
+
+    /// Adaptive size-based encoding: evaluates DeltaVarint vs RoaringBitmap byte size and selects smaller one
+    pub fn encode_adaptive(ids: &[u32], mut stats: Option<&mut GameSetEncodingStats>) -> Vec<u8> {
+        // 1. Delta-varint encoding (1 byte tag 0 + varints)
+        let mut delta_buf = Vec::with_capacity(1 + ids.len() * 2);
+        delta_buf.push(GameSetType::DeltaVarint as u8);
+        let _ = write_delta_game_ids(&mut delta_buf, ids);
+
+        // 2. Roaring bitmap encoding (1 byte tag 1 + roaring serialized)
+        let mut roaring_buf = Vec::with_capacity(1 + ids.len() * 2);
+        roaring_buf.push(GameSetType::Roaring as u8);
+        let mut bm = roaring::RoaringBitmap::new();
+        for &id in ids {
+            bm.insert(id);
+        }
+        let _ = bm.serialize_into(&mut roaring_buf);
+
+        let chosen = if roaring_buf.len() < delta_buf.len() {
+            GameSetType::Roaring
+        } else {
+            GameSetType::DeltaVarint
+        };
+
+        if let Some(ref mut st) = stats {
+            st.record_sample(ids.len(), delta_buf.len(), roaring_buf.len(), chosen);
+        }
+
+        match chosen {
+            GameSetType::Roaring => roaring_buf,
+            GameSetType::DeltaVarint => delta_buf,
+        }
+    }
+
+    /// Transparent decoding from byte slice
+    pub fn decode(bytes: &mut &[u8]) -> Result<Self> {
+        if bytes.is_empty() {
+            anyhow::bail!("Unexpected EOF reading GameSet header");
+        }
+        let type_tag = bytes[0];
+        *bytes = &bytes[1..];
+
+        match type_tag {
+            0 => {
+                let ids = read_delta_game_ids(bytes)?;
+                Ok(GameSet::DeltaVarint(ids))
+            }
+            1 => {
+                let bm = roaring::RoaringBitmap::deserialize_from(bytes)?;
+                Ok(GameSet::Roaring(bm))
+            }
+            tag => anyhow::bail!("Unsupported GameSet encoding tag: {}", tag),
+        }
     }
 }
 
@@ -1216,7 +1558,7 @@ pub fn read_delta_game_ids(bytes: &mut &[u8]) -> Result<Vec<u32>> {
     Ok(ids)
 }
 
-fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
+fn encode_position_payload(node: &PositionNode, mut stats: Option<&mut GameSetEncodingStats>) -> Vec<u8> {
     let mut buf = Vec::with_capacity(16 + node.moves.len() * 32);
     let _ = write_varint(&mut buf, node.total_games as u64);
     let _ = write_varint(&mut buf, node.white_wins as u64);
@@ -1231,7 +1573,8 @@ fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
         buf.extend_from_slice(&m.white_elo_sum.to_le_bytes());
         buf.extend_from_slice(&m.black_elo_sum.to_le_bytes());
         buf.extend_from_slice(&m.elo_count.to_le_bytes());
-        let _ = write_delta_game_ids(&mut buf, &m.game_ids);
+        let encoded_set = GameSet::encode_adaptive(&m.game_ids, stats.as_deref_mut());
+        buf.extend_from_slice(&encoded_set);
     }
 
     buf
@@ -1264,7 +1607,8 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
         let m_elo_cnt = u32::from_le_bytes(bytes[16..20].try_into()?);
         bytes = &bytes[20..];
 
-        let game_ids = read_delta_game_ids(&mut bytes)?;
+        let game_set = GameSet::decode(&mut bytes)?;
+        let game_ids = game_set.to_vec();
 
         moves.push(MoveStats {
             packed_move,
@@ -1800,7 +2144,7 @@ mod tests {
             ],
         };
 
-        let encoded = encode_position_payload(&node);
+        let encoded = encode_position_payload(&node, None);
         let decoded = decode_position_payload(&encoded, node.zobrist_hash).expect("decode failed");
 
         assert_eq!(decoded.zobrist_hash, node.zobrist_hash);
@@ -1835,5 +2179,109 @@ mod tests {
         let missing = entries.binary_search_by_key(&250, |e| e.hash);
         assert!(missing.is_err());
     }
+
+    #[test]
+    fn test_gameset_delta_varint_samples() {
+        let samples: Vec<Vec<u32>> = vec![
+            vec![],
+            vec![1],
+            vec![1, 2],
+            vec![100, 105, 110],
+            vec![0, 1, 2, 1000000],
+        ];
+
+        for ids in samples {
+            let encoded = GameSet::encode_adaptive(&ids, None);
+            let mut slice = encoded.as_slice();
+            let decoded = GameSet::decode(&mut slice).expect("Failed to decode GameSet");
+            assert_eq!(decoded.count(), ids.len());
+            assert_eq!(decoded.to_vec(), ids);
+        }
+    }
+
+    #[test]
+    fn test_gameset_roaring_samples() {
+        let sparse = vec![1, 500000, 999999];
+        let dense: Vec<u32> = (0..50000).collect();
+
+        for ids in [sparse, dense] {
+            let encoded = GameSet::encode_adaptive(&ids, None);
+            let mut slice = encoded.as_slice();
+            let decoded = GameSet::decode(&mut slice).expect("Failed to decode GameSet");
+            assert_eq!(decoded.count(), ids.len());
+            assert_eq!(decoded.to_vec(), ids);
+        }
+    }
+
+    #[test]
+    fn test_gameset_adaptive_selection_chooses_smaller() {
+        // Small list where delta-varint is tiny (3 IDs = 1 byte tag + 1 byte count + 3 byte deltas = 5 bytes vs roaring header 8+ bytes)
+        let small_ids = vec![100, 105, 110];
+        let encoded_small = GameSet::encode_adaptive(&small_ids, None);
+        assert_eq!(encoded_small[0], GameSetType::DeltaVarint as u8);
+
+        // Huge dense consecutive block where Roaring bitmap run-length encoding is vastly superior (e.g. 100k IDs)
+        let dense_ids: Vec<u32> = (0..100000).collect();
+        let encoded_dense = GameSet::encode_adaptive(&dense_ids, None);
+        assert_eq!(encoded_dense[0], GameSetType::Roaring as u8);
+    }
+
+    #[test]
+    fn test_gameset_membership_and_iteration() {
+        let ids = vec![5, 10, 15, 20, 100, 500, 1000];
+        let encoded = GameSet::encode_adaptive(&ids, None);
+        let mut slice = encoded.as_slice();
+        let decoded = GameSet::decode(&mut slice).expect("decode failed");
+
+        for &id in &ids {
+            assert!(decoded.contains(id));
+        }
+        assert!(!decoded.contains(0));
+        assert!(!decoded.contains(6));
+        assert!(!decoded.contains(99));
+        assert!(!decoded.contains(1001));
+
+        let iterated: Vec<u32> = decoded.iter().collect();
+        assert_eq!(iterated, ids);
+    }
+
+    #[test]
+    fn test_gameset_intersections_all_combinations() {
+        let set_a = vec![10, 20, 30, 40, 50];
+        let set_b = vec![20, 40, 60, 80];
+        let expected_intersection = vec![20, 40];
+
+        let delta_a = GameSet::DeltaVarint(set_a.clone());
+        let delta_b = GameSet::DeltaVarint(set_b.clone());
+
+        let mut bm_a = roaring::RoaringBitmap::new();
+        for &id in &set_a { bm_a.insert(id); }
+        let roaring_a = GameSet::Roaring(bm_a);
+
+        let mut bm_b = roaring::RoaringBitmap::new();
+        for &id in &set_b { bm_b.insert(id); }
+        let roaring_b = GameSet::Roaring(bm_b);
+
+        // Delta ∩ Delta
+        let res_dd = delta_a.intersect(&delta_b);
+        assert_eq!(res_dd.to_vec(), expected_intersection);
+        assert_eq!(delta_a.intersection_count(&delta_b), 2);
+
+        // Delta ∩ Roaring
+        let res_dr = delta_a.intersect(&roaring_b);
+        assert_eq!(res_dr.to_vec(), expected_intersection);
+        assert_eq!(delta_a.intersection_count(&roaring_b), 2);
+
+        // Roaring ∩ Delta
+        let res_rd = roaring_a.intersect(&delta_b);
+        assert_eq!(res_rd.to_vec(), expected_intersection);
+        assert_eq!(roaring_a.intersection_count(&delta_b), 2);
+
+        // Roaring ∩ Roaring
+        let res_rr = roaring_a.intersect(&roaring_b);
+        assert_eq!(res_rr.to_vec(), expected_intersection);
+        assert_eq!(roaring_a.intersection_count(&roaring_b), 2);
+    }
 }
+
 

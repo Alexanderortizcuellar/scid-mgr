@@ -233,6 +233,13 @@ enum Commands {
         threads: Option<usize>,
     },
 
+    /// Analyze companion .pos.idx GameSet encoding diagnostics (Delta-Varint vs Roaring Bitmap)
+    DiagPosIdx {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+    },
+
     /// Query the instant opening tree for any board position (FEN or starting board)
     Tree {
         /// Path to .si5, .si4, or .pgn database
@@ -632,6 +639,39 @@ fn main() -> Result<()> {
             };
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             println!("\n[OK] Built {} in {:.2} ms ({} unique positions).", idx.path.display(), elapsed_ms, idx.header.unique_positions);
+        }
+        Some(Commands::DiagPosIdx { db_path }) => {
+            let idx = position_index::PositionIndex::load(&db_path)?;
+            let start = std::time::Instant::now();
+            let stats = idx.scan_diagnostics()?;
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            println!("==========================================================================================");
+            println!("                GAMESET ENCODING DIAGNOSTICS & ADAPTIVE METRICS REPORT                    ");
+            println!("==========================================================================================");
+            println!("Index Path:          {}", idx.path.display());
+            println!("Unique Positions:    {}", idx.header.unique_positions);
+            println!("Database Games:      {}", idx.header.db_game_count);
+            println!("Index File Size:     {:.2} MB", std::fs::metadata(&idx.path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0));
+            println!("------------------------------------------------------------------------------------------");
+            println!("Total Move GameSets: {}", stats.total_game_sets);
+            println!("DeltaVarint Chosen:  {} ({:.2}%)", stats.delta_varint_count, if stats.total_game_sets > 0 { (stats.delta_varint_count as f64 / stats.total_game_sets as f64) * 100.0 } else { 0.0 });
+            println!("Roaring Chosen:      {} ({:.2}%)", stats.roaring_count, if stats.total_game_sets > 0 { (stats.roaring_count as f64 / stats.total_game_sets as f64) * 100.0 } else { 0.0 });
+            println!("------------------------------------------------------------------------------------------");
+            println!("Bytes if all Delta:  {} bytes ({:.2} MB)", stats.bytes_if_all_delta, stats.bytes_if_all_delta as f64 / 1_048_576.0);
+            println!("Bytes if all Roar:   {} bytes ({:.2} MB)", stats.bytes_if_all_roaring, stats.bytes_if_all_roaring as f64 / 1_048_576.0);
+            println!("Actual Adaptive:     {} bytes ({:.2} MB)", stats.bytes_adaptive, stats.bytes_adaptive as f64 / 1_048_576.0);
+            println!("Savings vs Delta:    {:.2}%", stats.savings_vs_delta_pct());
+            println!("Savings vs Roaring:  {:.2}%", stats.savings_vs_roaring_pct());
+            println!("------------------------------------------------------------------------------------------");
+            println!("Size Distribution:");
+            println!("  1 - 10 games:       {:>10}", stats.bucket_1_10);
+            println!("  11 - 100 games:     {:>10}", stats.bucket_11_100);
+            println!("  101 - 1,000 games:  {:>10}", stats.bucket_101_1k);
+            println!("  1,001 - 10k games:  {:>10}", stats.bucket_1k_10k);
+            println!("  10k - 100k games:   {:>10}", stats.bucket_10k_100k);
+            println!("  100k+ games:        {:>10}", stats.bucket_100k_plus);
+            println!("==========================================================================================");
+            println!("Diagnostics scan completed in {:.2} ms\n", elapsed);
         }
         Some(Commands::Tree { db_path, fen }) => {
             let fen_str = fen.as_deref().unwrap_or("");

@@ -793,6 +793,52 @@ fn handle_command(
             }
         }
 
+        "pos_index_diagnostics" | "get_pos_index_diagnostics" => {
+            let db = match current_db {
+                Some(db) => db,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    }
+                }
+            };
+
+            let db_path = match db {
+                DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+            };
+
+            if current_pos_index.is_none() {
+                *current_pos_index = PositionIndex::load(&db_path).ok();
+            }
+
+            match current_pos_index.as_ref() {
+                Some(idx) => match idx.scan_diagnostics() {
+                    Ok(stats) => ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::to_value(&stats).unwrap_or_default()),
+                        error: None,
+                    },
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Failed to scan position index diagnostics: {}", e)),
+                    },
+                },
+                None => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some("Position index (.pos.idx) not found or not built".to_string()),
+                },
+            }
+        }
+
         "build_pos_index" | "rebuild_pos_index" => {
             let db = match current_db {
                 Some(db) => db,

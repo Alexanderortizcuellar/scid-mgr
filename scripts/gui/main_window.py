@@ -21,6 +21,7 @@ from .dialogs.advanced_search_dialog import AdvancedSearchDialog
 from .dialogs.benchmark_dialog import BenchmarkDialog
 from .dialogs.columns_dialog import ColumnsConfigDialog
 from .dialogs.build_pos_index_dialog import BuildPosIndexDialog
+from .dialogs.pos_idx_diagnostics_dialog import PosIdxDiagnosticsDialog
 from .dialogs.search_progress_dialog import SearchProgressDialog
 from .dialogs.settings_dialog import SettingsDialog
 
@@ -128,6 +129,11 @@ class MainWindow(QMainWindow):
         self.btn_benchmark.setStyleSheet("font-weight: bold; padding: 6px 12px;")
         self.btn_benchmark.clicked.connect(self.open_benchmark_dialog)
         db_actions_layout.addWidget(self.btn_benchmark)
+
+        self.btn_pos_idx_diag = QPushButton("🔬 Pos.idx Dev Metrics...")
+        self.btn_pos_idx_diag.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        self.btn_pos_idx_diag.clicked.connect(self.open_pos_idx_diagnostics_dialog)
+        db_actions_layout.addWidget(self.btn_pos_idx_diag)
 
         self.btn_settings = QPushButton("⚙️ Settings...")
         self.btn_settings.setStyleSheet("font-weight: bold; padding: 6px 12px;")
@@ -581,6 +587,13 @@ class MainWindow(QMainWindow):
     def open_settings_dialog(self):
         dialog = SettingsDialog(self.client, self)
         dialog.exec_()
+
+    def open_pos_idx_diagnostics_dialog(self):
+        if not self.client.is_running():
+            QMessageBox.warning(self, "Offline", "Backend is not running. Please open a database first.")
+            return
+        dlg = PosIdxDiagnosticsDialog(self.client, self)
+        dlg.exec_()
 
     def update_ui_connected(self):
         self.lbl_status.setText("Status: Connected")
