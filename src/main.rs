@@ -348,7 +348,7 @@ fn main() -> Result<()> {
             let path_str = db_path.to_string_lossy().to_lowercase();
             let (result, summaries) = if path_str.ends_with(".pgn") {
                 let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
-                let res = pgn_db.search_position(&fen, Some(max_ply), |_, _, _| {})?;
+                let res = pgn_db.search_position(&fen, None, None, Some(max_ply), |_, _, _| {})?;
                 let mut summs = std::collections::HashMap::new();
                 for m in res.matches.iter().take(50) {
                     if let Some(e) = pgn_db.entries.get(m.game_id) {
@@ -358,7 +358,7 @@ fn main() -> Result<()> {
                 (res, summs)
             } else {
                 let db = ScidDatabaseWrapper::open(&db_path)?;
-                let res = db.search_position(&fen, Some(max_ply))?;
+                let res = db.search_position(&fen, None, None, Some(max_ply))?;
                 let mut summs = std::collections::HashMap::new();
                 for m in res.matches.iter().take(50) {
                     if let Some(g) = db.get_game_summary(m.game_id) {

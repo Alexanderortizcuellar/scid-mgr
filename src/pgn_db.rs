@@ -3,12 +3,10 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-
 use anyhow::{anyhow, Context, Result};
 use memmap2::Mmap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use shakmaty::zobrist::ZobristHash;
 use shakmaty::Position;
 
 use crate::db::{GameFilter, GameSummary};
@@ -417,9 +415,15 @@ impl PgnDatabaseWrapper {
             if f.trim().is_empty() {
                 None
             } else {
-                self.search_position(f, None, |scanned, total, matches| {
-                    progress(scanned, total, matches);
-                }).ok().map(|res| {
+                self.search_position(
+                    f,
+                    filter.turn.as_deref(),
+                    filter.match_mode.as_deref(),
+                    filter.max_ply,
+                    |scanned, total, matches| {
+                        progress(scanned, total, matches);
+                    },
+                ).ok().map(|res| {
                     res.matches.into_iter().map(|m| m.game_id).collect::<std::collections::HashSet<usize>>()
                 })
             }
@@ -534,6 +538,8 @@ impl PgnDatabaseWrapper {
     pub fn search_position<F>(
         &self,
         fen_str: &str,
+        turn_param: Option<&str>,
+        mode_param: Option<&str>,
         max_ply: Option<usize>,
         mut progress: F,
     ) -> Result<crate::position_search::PositionSearchResult>
@@ -544,18 +550,7 @@ impl PgnDatabaseWrapper {
         let target_fen = fen_str.trim();
         let max_ply_val = max_ply.unwrap_or(500);
 
-        let (target_hash, target_pieces) = if let Ok(fen) = target_fen.parse::<shakmaty::fen::Fen>() {
-            if let Ok(pos) = fen.into_position::<shakmaty::Chess>(shakmaty::CastlingMode::Standard) {
-                let h: shakmaty::zobrist::Zobrist64 = pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-                (Some(h.0), Vec::new())
-            } else {
-                let pieces = crate::position_search::parse_piece_placements(target_fen);
-                (None, pieces)
-            }
-        } else {
-            let pieces = crate::position_search::parse_piece_placements(target_fen);
-            (None, pieces)
-        };
+        let matcher = crate::position_search::parse_position_matcher(target_fen, turn_param, mode_param)?;
 
         let total = self.entries.len();
         let chunk_size = 1000;
@@ -572,7 +567,7 @@ impl PgnDatabaseWrapper {
                     let game_id = chunk_idx + sub_idx;
                     let slice = &self.mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
                     let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
-                    let mut finder = PositionFinder::new(target_hash, target_pieces.clone(), max_ply_val);
+                    let mut finder = PositionFinder::new(matcher.clone(), max_ply_val);
                     if let Ok(Some(Some(ply))) = reader.read_game(&mut finder) {
                         Some(crate::position_search::PositionMatch { game_id, ply })
                     } else {
@@ -588,7 +583,7 @@ impl PgnDatabaseWrapper {
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         Ok(crate::position_search::PositionSearchResult {
             target_fen: target_fen.to_string(),
-            target_hash: target_hash.unwrap_or(0),
+            target_hash: 0,
             matches,
             total_games_searched: total,
             elapsed_ms,
@@ -637,8 +632,7 @@ impl PgnDatabaseWrapper {
 }
 
 struct PositionFinder {
-    target_hash: Option<u64>,
-    target_pieces: Vec<(shakmaty::Square, shakmaty::Role, shakmaty::Color)>,
+    matcher: crate::position_search::PositionTargetMatcher,
     found_ply: Option<usize>,
     ply: usize,
     max_ply: usize,
@@ -647,37 +641,26 @@ struct PositionFinder {
 
 impl PositionFinder {
     fn new(
-        target_hash: Option<u64>,
-        target_pieces: Vec<(shakmaty::Square, shakmaty::Role, shakmaty::Color)>,
+        matcher: crate::position_search::PositionTargetMatcher,
         max_ply: usize,
     ) -> Self {
-        Self {
-            target_hash,
-            target_pieces,
+        let mut s = Self {
+            matcher,
             found_ply: None,
             ply: 0,
             max_ply,
             pos: shakmaty::Chess::default(),
-        }
+        };
+        s.check_current_pos();
+        s
     }
 
     fn check_current_pos(&mut self) {
         if self.found_ply.is_some() {
             return;
         }
-        if let Some(target_hash) = self.target_hash {
-            let current_hash: shakmaty::zobrist::Zobrist64 = self.pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-            if current_hash.0 == target_hash {
-                self.found_ply = Some(self.ply);
-            }
-        } else if !self.target_pieces.is_empty() {
-            let board = self.pos.board();
-            let matches_all = self.target_pieces.iter().all(|&(sq, role, color)| {
-                board.piece_at(sq) == Some(shakmaty::Piece { color, role })
-            });
-            if matches_all {
-                self.found_ply = Some(self.ply);
-            }
+        if self.matcher.matches(&self.pos) {
+            self.found_ply = Some(self.ply);
         }
     }
 }

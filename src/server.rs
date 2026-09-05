@@ -539,6 +539,19 @@ fn handle_command(
                 }
             }
 
+            let turn_param = req
+                .params
+                .get("turn")
+                .or_else(|| req.params.get("params").and_then(|p| p.get("turn")))
+                .and_then(|v| v.as_str());
+
+            let mode_param = req
+                .params
+                .get("match_mode")
+                .or_else(|| req.params.get("mode"))
+                .or_else(|| req.params.get("params").and_then(|p| p.get("match_mode").or_else(|| p.get("mode"))))
+                .and_then(|v| v.as_str());
+
             let max_ply = req
                 .params
                 .get("max_ply")
@@ -549,7 +562,7 @@ fn handle_command(
             match db {
                 DatabaseBackend::Scid(s) => {
                     let res = thread_pool.install(|| {
-                        s.search_position_with_progress(fen, max_ply, |scanned, total, matches_len| {
+                        s.search_position_with_progress(fen, turn_param, mode_param, max_ply, |scanned, total, matches_len| {
                             let event_json = serde_json::json!({
                                 "event": "search_progress",
                                 "data": {
@@ -583,7 +596,7 @@ fn handle_command(
                 }
                 DatabaseBackend::Pgn(p) => {
                     let res = thread_pool.install(|| {
-                        p.search_position(fen, max_ply, |scanned, total, matches_len| {
+                        p.search_position(fen, turn_param, mode_param, max_ply, |scanned, total, matches_len| {
                             let event_json = serde_json::json!({
                                 "event": "search_progress",
                                 "data": {

@@ -62,6 +62,9 @@ pub struct GameFilter {
     pub sort_by: Option<String>,
     pub sort_asc: Option<bool>,
     pub fen: Option<String>,
+    pub turn: Option<String>,
+    pub match_mode: Option<String>,
+    pub max_ply: Option<usize>,
     pub material: Option<crate::position_search::MaterialFilter>,
 }
 
@@ -78,6 +81,8 @@ impl GameFilter {
             && self.include_deleted == other.include_deleted
             && self.only_deleted == other.only_deleted
             && self.fen == other.fen
+            && self.turn == other.turn
+            && self.match_mode == other.match_mode
             && self.material == other.material
     }
 }
@@ -577,38 +582,20 @@ impl ScidDatabaseWrapper {
     pub fn search_position_with_progress<F>(
         &self,
         fen_str: &str,
+        turn_param: Option<&str>,
+        mode_param: Option<&str>,
         max_ply: Option<usize>,
         progress: F,
     ) -> Result<crate::position_search::PositionSearchResult>
     where
         F: Fn(usize, usize, usize) + Sync,
     {
-        let trimmed = fen_str.trim();
-        // If full legal chess position, run fast Zobrist exact matching
-        if let Ok(fen) = trimmed.parse::<shakmaty::fen::Fen>() {
-            if let Ok(pos) = fen.into_position(shakmaty::CastlingMode::Standard) {
-                return crate::position_search::search_position_mmap_with_progress(
-                    &self.entries,
-                    &self.games_path,
-                    &pos,
-                    max_ply,
-                    progress,
-                );
-            }
-        }
-
-        // Otherwise, treat as partial piece placement search (e.g. single Queen on d4)
-        let pieces = crate::position_search::parse_piece_placements(trimmed);
-        if pieces.is_empty() {
-            return Err(anyhow!("Invalid board position or FEN string: {}", fen_str));
-        }
-
         let start_time = std::time::Instant::now();
-        let matches_vec = crate::position_search::search_piece_placements_mmap_with_progress(
+        let matcher = crate::position_search::parse_position_matcher(fen_str, turn_param, mode_param)?;
+        let matches = crate::position_search::search_position_matcher_mmap_with_progress(
             &self.entries,
             &self.games_path,
-            &pieces,
-            true,
+            &matcher,
             max_ply,
             progress,
         )?;
@@ -617,13 +604,7 @@ impl ScidDatabaseWrapper {
         Ok(crate::position_search::PositionSearchResult {
             target_fen: fen_str.to_string(),
             target_hash: 0,
-            matches: matches_vec
-                .into_iter()
-                .map(|game_id| crate::position_search::PositionMatch {
-                    game_id,
-                    ply: 0,
-                })
-                .collect(),
+            matches,
             total_games_searched: self.entries.len(),
             elapsed_ms,
         })
@@ -632,9 +613,11 @@ impl ScidDatabaseWrapper {
     pub fn search_position(
         &self,
         fen_str: &str,
+        turn_param: Option<&str>,
+        mode_param: Option<&str>,
         max_ply: Option<usize>,
     ) -> Result<crate::position_search::PositionSearchResult> {
-        self.search_position_with_progress(fen_str, max_ply, |_, _, _| {})
+        self.search_position_with_progress(fen_str, turn_param, mode_param, max_ply, |_, _, _| {})
     }
 
     pub fn search_material_with_progress<F>(
@@ -787,8 +770,13 @@ impl ScidDatabaseWrapper {
             let trimmed = f.trim();
             if trimmed.is_empty() {
                 None
-            } else if let Ok(res) = self.search_position_with_progress(trimmed, None, &progress) {
-                // If legal chess position or valid FEN, fast exact match
+            } else if let Ok(res) = self.search_position_with_progress(
+                trimmed,
+                filter.turn.as_deref(),
+                filter.match_mode.as_deref(),
+                filter.max_ply,
+                &progress,
+            ) {
                 Some(
                     res.matches
                         .into_iter()
@@ -796,21 +784,7 @@ impl ScidDatabaseWrapper {
                         .collect::<std::collections::HashSet<usize>>(),
                 )
             } else {
-                let pieces = crate::position_search::parse_piece_placements(trimmed);
-                if pieces.is_empty() {
-                    None
-                } else {
-                    crate::position_search::search_piece_placements_mmap_with_progress(
-                        &self.entries,
-                        &self.games_path,
-                        &pieces,
-                        true,
-                        None,
-                        &progress,
-                    )
-                    .ok()
-                    .map(|v| v.into_iter().collect::<std::collections::HashSet<usize>>())
-                }
+                None
             }
         });
 

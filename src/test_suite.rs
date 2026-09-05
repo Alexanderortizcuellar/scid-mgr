@@ -178,21 +178,39 @@ fn test_format_roundtrip(format: ScidFormat) -> Result<()> {
 }
 
 #[test]
-fn test_position_search_with_extra_tags() {
-    let p = std::path::Path::new(r"C:\Users\ASUS\Downloads\LumbrasGigabase_OTB_si5\LumbrasGigabase_OTB_si5\LumbrasGigaBase_OTB.si5");
-    if !p.exists() {
-        return;
-    }
+fn test_alapin_sicilian_piece_placement_search() {
+    let alapin_game = r#"[Event "Sicilian Alapin Test"]
+[Site "Online"]
+[Date "2024.01.01"]
+[Round "1"]
+[White "Player A"]
+[Black "Player B"]
+[Result "1-0"]
 
-    let db = ScidDatabaseWrapper::open(p).expect("Failed to open Lumbras");
-    let fen_str = "r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 4";
-    // Check first 10,000 games
-    let res = crate::position_search::search_position_mmap(
-        &db.entries()[..10_000],
-        db.games_path(),
-        &fen_str.parse::<shakmaty::fen::Fen>().unwrap().into_position(shakmaty::CastlingMode::Standard).unwrap(),
-        Some(20),
-    ).expect("Search failed");
-    println!("Fast position search on first 10k games found: {} matches in {:.2} ms", res.matches.len(), res.elapsed_ms);
+1. e4 c5 2. c3 d5 3. exd5 Qxd5 4. d4 1-0
+"#;
+
+    let dir = tempdir().unwrap();
+    let pgn_path = dir.path().join("alapin.pgn");
+    std::fs::write(&pgn_path, alapin_game).unwrap();
+
+    let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path).unwrap();
+
+    // 1. Piece placement string only (no turn / no castling / no move numbers)
+    let alapin_piece_placement = "rnbqkbnr/pp1ppppp/8/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR";
+    let res = pgn_db.search_position(alapin_piece_placement, None, None, Some(50), |_, _, _| {}).unwrap();
+    assert_eq!(res.matches.len(), 1, "Board-only search should match Alapin Sicilian at move 2!");
+    assert_eq!(res.matches[0].ply, 3); // after 1.e4 c5 2.c3 (ply 3)
+
+    // 2. Partial piece placement (only pawn on c3 and pawn on c5)
+    let partial_fen = "8/8/8/2p5/8/2P5/8/8";
+    let res_partial = pgn_db.search_position(partial_fen, None, Some("partial"), Some(50), |_, _, _| {}).unwrap();
+    assert_eq!(res_partial.matches.len(), 1, "Partial piece placement search should match!");
+
+    // 3. FEN with explicit black turn
+    let fen_black_turn = "rnbqkbnr/pp1ppppp/8/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR b KQkq - 0 2";
+    let res_turn = pgn_db.search_position(fen_black_turn, Some("b"), None, Some(50), |_, _, _| {}).unwrap();
+    assert_eq!(res_turn.matches.len(), 1, "Explicit black turn should match!");
 }
+
 

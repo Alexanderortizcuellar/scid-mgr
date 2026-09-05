@@ -237,7 +237,7 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
         // 4. Heavy searches if requested or small db
         if include_heavy_search || total_games <= 100_000 {
             let start = Instant::now();
-            let pos_res = db.search_position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", Some(5));
+            let pos_res = db.search_position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", None, None, Some(5));
             let ms = start.elapsed().as_secs_f64() * 1000.0;
             if let Ok(res) = pos_res {
                 results.push(BenchmarkItem {

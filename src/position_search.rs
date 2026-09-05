@@ -257,29 +257,132 @@ pub(crate) fn decode_raw_move(
     Some((mv, piece_idx, u8::from(to_sq), is_castle_k, is_castle_q, captured_sq))
 }
 
+#[derive(Debug, Clone)]
+pub enum PositionTargetMatcher {
+    /// Exact Zobrist hash (matching board, turn, castling)
+    ExactHash(u64),
+    /// Complete board match with optional turn filter (None = any turn)
+    BoardWithTurn {
+        board: shakmaty::Board,
+        turn: Option<Color>,
+    },
+    /// Partial piece placement on specific squares
+    PartialPieces(Vec<(Square, Role, Color)>),
+}
+
+impl PositionTargetMatcher {
+    #[inline]
+    pub fn matches(&self, pos: &Chess) -> bool {
+        match self {
+            Self::ExactHash(target_hash) => {
+                let h: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+                h.0 == *target_hash
+            }
+            Self::BoardWithTurn { board, turn } => {
+                if let Some(t) = turn {
+                    if pos.turn() != *t {
+                        return false;
+                    }
+                }
+                pos.board() == board
+            }
+            Self::PartialPieces(pieces) => {
+                let board = pos.board();
+                pieces.iter().all(|&(sq, role, color)| {
+                    board.piece_at(sq) == Some(shakmaty::Piece { color, role })
+                })
+            }
+        }
+    }
+}
+
+pub fn parse_position_matcher(
+    fen_str: &str,
+    turn_param: Option<&str>,
+    mode_param: Option<&str>,
+) -> Result<PositionTargetMatcher> {
+    let trimmed = fen_str.trim();
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(anyhow::anyhow!("Empty position string"));
+    }
+
+    let board_part = tokens[0];
+    let mode = mode_param.unwrap_or("auto").to_lowercase();
+
+    // Determine turn from parameter or 2nd FEN token if explicitly provided
+    let turn_token = turn_param.or_else(|| {
+        if tokens.len() >= 2 && (tokens[1] == "w" || tokens[1] == "b" || tokens[1] == "any") {
+            Some(tokens[1])
+        } else {
+            None
+        }
+    });
+
+    let turn = match turn_token.map(|s| s.to_lowercase()).as_deref() {
+        Some("w") | Some("white") => Some(Color::White),
+        Some("b") | Some("black") => Some(Color::Black),
+        _ => None, // "any", "either", or omitted
+    };
+
+    if mode == "partial" {
+        let pieces = parse_piece_placements(board_part);
+        if pieces.is_empty() {
+            return Err(anyhow::anyhow!("No valid pieces found in: {}", fen_str));
+        }
+        return Ok(PositionTargetMatcher::PartialPieces(pieces));
+    }
+
+    if mode == "exact" && tokens.len() >= 4 {
+        if let Ok(fen) = trimmed.parse::<shakmaty::fen::Fen>() {
+            if let Ok(pos) = fen.into_position::<Chess>(shakmaty::CastlingMode::Standard) {
+                let h: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+                return Ok(PositionTargetMatcher::ExactHash(h.0));
+            }
+        }
+    }
+
+    // Try parsing as full 64-square board
+    let full_fen_candidate = if tokens.len() == 1 {
+        format!("{} w - - 0 1", board_part)
+    } else {
+        trimmed.to_string()
+    };
+
+    if let Ok(fen) = full_fen_candidate.parse::<shakmaty::fen::Fen>() {
+        if let Ok(pos) = fen.into_position::<Chess>(shakmaty::CastlingMode::Standard) {
+            return Ok(PositionTargetMatcher::BoardWithTurn {
+                board: pos.board().clone(),
+                turn,
+            });
+        }
+    }
+
+    // If it could not be parsed as a full legal board (e.g. missing kings, partial board)
+    let pieces = parse_piece_placements(board_part);
+    if !pieces.is_empty() {
+        return Ok(PositionTargetMatcher::PartialPieces(pieces));
+    }
+
+    Err(anyhow::anyhow!("Could not parse board position: {}", fen_str))
+}
+
 /// Search for a target position across all games directly in .sg5 / .sg4 via memory mapping with streaming progress
-pub fn search_position_mmap_with_progress<F>(
+pub fn search_position_matcher_mmap_with_progress<F>(
     entries: &[chess_scid_rw::entry::IndexEntry],
     games_path: &Path,
-    target_pos: &Chess,
+    matcher: &PositionTargetMatcher,
     max_ply: Option<usize>,
     progress: F,
-) -> Result<PositionSearchResult>
+) -> Result<Vec<PositionMatch>>
 where
     F: Fn(usize, usize, usize) + Sync,
 {
-    let start_time = Instant::now();
     let file = File::open(games_path)
         .with_context(|| format!("Failed to open games file: {}", games_path.display()))?;
     let mmap = unsafe { Mmap::map(&file)? };
 
-    let target_hash: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
-    let target_hash_u64 = target_hash.0;
     let max_search_ply = max_ply.unwrap_or(250);
-
-    let initial_hash: Zobrist64 = Chess::default().zobrist_hash(EnPassantMode::Legal);
-    let is_initial_pos = target_hash == initial_hash;
-
     let total = entries.len();
     let chunk_size = 50_000.max(total / 100).max(1);
     let scanned_counter = AtomicUsize::new(0);
@@ -299,10 +402,6 @@ where
                         return None;
                     }
 
-                    if is_initial_pos {
-                        return Some(PositionMatch { game_id, ply: 0 });
-                    }
-
                     let start = entry.offset as usize;
                     let end = start + entry.length as usize;
                     if end > mmap.len() || start >= end {
@@ -317,12 +416,17 @@ where
                     let mut cursor = 0;
                     let mut pos = parse_start_position(blob, &mut cursor)?;
 
+                    // Check initial position (ply 0)
+                    if matcher.matches(&pos) {
+                        return Some(PositionMatch { game_id, ply: 0 });
+                    }
+
                     let mut slots = standard_piece_slots();
                     let mut counts = [16usize, 16];
                     let mut ply = 0;
 
                     // Step through move stream
-                    while cursor < blob.len() && ply <= max_search_ply {
+                    while cursor < blob.len() && ply < max_search_ply {
                         let byte = blob[cursor];
                         cursor += 1;
 
@@ -373,8 +477,7 @@ where
                         pos.play_unchecked(&mv);
                         ply += 1;
 
-                        let h: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
-                        if h.0 == target_hash_u64 {
+                        if matcher.matches(&pos) {
                             return Some(PositionMatch { game_id, ply });
                         }
                     }
@@ -391,9 +494,30 @@ where
         })
         .collect();
 
-    let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
-    let target_fen = format!("{:?}", target_pos);
+    Ok(matches)
+}
 
+/// Search for a target position across all games directly in .sg5 / .sg4 via memory mapping with streaming progress
+pub fn search_position_mmap_with_progress<F>(
+    entries: &[chess_scid_rw::entry::IndexEntry],
+    games_path: &Path,
+    target_pos: &Chess,
+    max_ply: Option<usize>,
+    progress: F,
+) -> Result<PositionSearchResult>
+where
+    F: Fn(usize, usize, usize) + Sync,
+{
+    let start_time = Instant::now();
+    let matcher = PositionTargetMatcher::BoardWithTurn {
+        board: target_pos.board().clone(),
+        turn: Some(target_pos.turn()),
+    };
+    let matches = search_position_matcher_mmap_with_progress(entries, games_path, &matcher, max_ply, progress)?;
+    let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+    let h: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
+    let target_hash_u64 = h.0;
+    let target_fen = format!("{:?}", target_pos);
     Ok(PositionSearchResult {
         target_fen,
         target_hash: target_hash_u64,
