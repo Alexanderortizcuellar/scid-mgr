@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self.selected_game_id: Optional[int] = None
         self.current_db_stats: Optional[dict] = None
         self.current_material_filter: Optional[dict] = None
+        self.current_cql_filter: Optional[str] = None
 
         # 150ms scroll debounce timer
         self.scroll_timer = QTimer(self)
@@ -637,6 +638,8 @@ class MainWindow(QMainWindow):
         }
         if self.current_material_filter:
             current["material"] = self.current_material_filter
+        if self.current_cql_filter:
+            current["cql"] = self.current_cql_filter
 
         dlg = AdvancedSearchDialog(current_filter=current, parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -657,6 +660,7 @@ class MainWindow(QMainWindow):
             self.filter_fen.setText(f.get("fen", ""))
 
             self.current_material_filter = f.get("material")
+            self.current_cql_filter = f.get("cql")
 
             if self.table_model.sort_col is not None and self.table_model.sort_col in self.table_model.COLUMN_SORT_FIELDS:
                 f["sort_by"] = self.table_model.COLUMN_SORT_FIELDS[self.table_model.sort_col]
@@ -679,6 +683,8 @@ class MainWindow(QMainWindow):
         }
         if self.current_material_filter:
             filters["material"] = self.current_material_filter
+        if self.current_cql_filter:
+            filters["cql"] = self.current_cql_filter
 
         if self.table_model.sort_col is not None and self.table_model.sort_col in self.table_model.COLUMN_SORT_FIELDS:
             filters["sort_by"] = self.table_model.COLUMN_SORT_FIELDS[self.table_model.sort_col]
@@ -698,6 +704,7 @@ class MainWindow(QMainWindow):
         self.chk_include_deleted.setChecked(True)
         self.chk_only_deleted.setChecked(False)
         self.current_material_filter = None
+        self.current_cql_filter = None
         self.table_model.set_filters({})
 
     def on_table_selection_changed(self, selected, _deselected):

@@ -6,21 +6,25 @@ A high-performance Rust backend and PyQt5 GUI for Shane's Chess Information Data
 
 ## 📚 Documentation & Technical Guides
 
-Comprehensive documentation is available in the [`docs/`](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs) directory:
-- 📖 [**Architecture & End-to-End Workflow**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/ARCHITECTURE_AND_WORKFLOW.md)
-- ⚡ [**Performance & Engineering Optimizations**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/PERFORMANCE_AND_OPTIMIZATIONS.md)
-- 📊 [**Benchmarks & Performance Metrics (10.35M Games)**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/BENCHMARKS_AND_METRICS.md)
-- 📜 [**CQLi (Chess Query Language) Integration Guide**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/CQL_INTEGRATION_GUIDE.md)
-- 🔌 [**JSON-RPC Server API Reference**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/API_REFERENCE.md)
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
+- 📖 [**Architecture & End-to-End Workflow**](docs/ARCHITECTURE_AND_WORKFLOW.md)
+- ⚡ [**Performance & Engineering Optimizations**](docs/PERFORMANCE_AND_OPTIMIZATIONS.md)
+- 📊 [**Benchmarks & Performance Metrics (10.35M Games)**](docs/BENCHMARKS_AND_METRICS.md)
+- 📜 [**CQLi (Chess Query Language) Integration Guide**](docs/CQL_INTEGRATION_GUIDE.md)
+- 🔌 [**JSON-RPC Server API Reference**](docs/API_REFERENCE.md)
 
 ---
 
 ## Architecture & Features
 
 ### 1. Rust Core Engine (`scid-mgr`)
-- **Dual Format Engine**: Native decoding and encoding of SCID **si4** (`.si4`/`.sn4`/`.sg4`) and **si5** (`.si5`/`.sn5`/`.sg5`).
-- **High-Performance In-Memory Index**: Fast search, multi-field filtering, pagination, and instant stats.
+- **Multi-Format Database Engine**: Native decoding and encoding of SCID **si4** (`.si4`/`.sn4`/`.sg4`), **si5** (`.si5`/`.sn5`/`.sg5`), and direct indexing of **PGN** (`.pgn`) archives.
+- **High-Performance In-Memory & Memory-Mapped Indexing**: Sub-millisecond queries, multi-criteria filtering, parallel sorting, and instant statistical aggregation.
 - **Full PGN Reconstruction**: Accurate Seven Tag Roster, move lists, variations, annotations/comments, NAGs, and custom FEN starting positions.
+- **Advanced Search Engine**:
+  - Exact & Partial FEN / Position Board Search across move streams.
+  - Piece & Material Combination Search with any-ply / final-position scoping.
+  - Fast Header Filtering (Players, Result, ECO, Date range, Event, Site, Status).
 - **Database Mutations**:
   - `add_game`: Encodes full PGN into SCID move binary format and updates name tables and index.
   - `update_game`: Replaces existing game tags/moves.

@@ -1,3 +1,4 @@
+import sys
 from typing import Optional
 import chess
 from PyQt5.QtCore import Qt
@@ -5,7 +6,7 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QCheckBox, QTabWidget, QWidget, QRadioButton,
-    QButtonGroup, QFrame, QScrollArea, QGroupBox, QSpinBox
+    QButtonGroup, QFrame, QScrollArea, QGroupBox, QSpinBox, QTextEdit
 )
 from ..widgets.board_widget import ChessBoardEditorWidget
 
@@ -20,7 +21,8 @@ class AdvancedSearchDialog(QDialog):
     def __init__(self, current_filter: Optional[dict] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Advanced Search (ChessBase style)")
-        self.resize(800, 680)
+        self.resize(840, 720)
+        self._loading = False
 
         main_layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -28,54 +30,114 @@ class AdvancedSearchDialog(QDialog):
 
         # TAB 1: Game Info
         self.tab_info = QWidget()
-        info_layout = QGridLayout(self.tab_info)
-        info_layout.setContentsMargins(15, 15, 15, 15)
+        info_main_layout = QVBoxLayout(self.tab_info)
+        info_main_layout.setContentsMargins(15, 15, 15, 15)
+        info_main_layout.setSpacing(12)
+
+        # Active Search Categories Box (ChessBase style)
+        self.cat_box = QGroupBox("Active Search Categories (ChessBase style)")
+        self.cat_box.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid #1976d2; border-radius: 6px; margin-top: 6px; padding: 10px; background-color: #f8fafd; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #1565c0; }"
+        )
+        cat_layout = QHBoxLayout(self.cat_box)
+        cat_layout.setSpacing(15)
+
+        self.chk_enable_info = QCheckBox("🏷️ Game Info")
+        self.chk_enable_info.setToolTip("Include Game Info criteria (Players, Result, ECO, Date, Event, Site, Status) in search")
+        self.chk_enable_info.toggled.connect(self.update_tab_titles)
+        cat_layout.addWidget(self.chk_enable_info)
+
+        self.chk_enable_pos = QCheckBox("♟️ Position / Board")
+        self.chk_enable_pos.setToolTip("Include Board Position / FEN pattern criteria in search")
+        self.chk_enable_pos.toggled.connect(self.update_tab_titles)
+        cat_layout.addWidget(self.chk_enable_pos)
+
+        self.chk_enable_mat = QCheckBox("⚖️ Material")
+        self.chk_enable_mat.setToolTip("Include Piece counts and Material combinations in search")
+        self.chk_enable_mat.toggled.connect(self.update_tab_titles)
+        cat_layout.addWidget(self.chk_enable_mat)
+
+        cat_layout.addStretch()
+
+        btn_select_all = QPushButton("Select All")
+        btn_select_all.setFixedWidth(80)
+        btn_select_all.clicked.connect(self.select_all_categories)
+        cat_layout.addWidget(btn_select_all)
+
+        btn_clear_all = QPushButton("Clear All")
+        btn_clear_all.setFixedWidth(80)
+        btn_clear_all.clicked.connect(self.clear_all_categories)
+        cat_layout.addWidget(btn_clear_all)
+
+        info_main_layout.addWidget(self.cat_box)
+
+        # Game Header Details Group
+        fields_box = QGroupBox("Game Header Details")
+        info_layout = QGridLayout(fields_box)
+        info_layout.setContentsMargins(12, 12, 12, 12)
         info_layout.setSpacing(10)
 
         info_layout.addWidget(QLabel("Player (Any):"), 0, 0)
         self.in_player = QLineEdit()
         self.in_player.setPlaceholderText("e.g. Carlsen or Kasparov")
+        self.in_player.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_player, 0, 1)
 
         info_layout.addWidget(QLabel("Result:"), 0, 2)
         self.in_result = QComboBox()
         self.in_result.addItems(["All", "1-0", "0-1", "1/2-1/2", "*"])
+        self.in_result.currentIndexChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_result, 0, 3)
 
         info_layout.addWidget(QLabel("White:"), 1, 0)
         self.in_white = QLineEdit()
+        self.in_white.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_white, 1, 1)
 
         info_layout.addWidget(QLabel("Black:"), 1, 2)
         self.in_black = QLineEdit()
+        self.in_black.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_black, 1, 3)
 
         info_layout.addWidget(QLabel("ECO Code:"), 2, 0)
         self.in_eco = QLineEdit()
         self.in_eco.setPlaceholderText("e.g. B90 or E97")
+        self.in_eco.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_eco, 2, 1)
 
         info_layout.addWidget(QLabel("Date / Year:"), 2, 2)
         self.in_date = QLineEdit()
         self.in_date.setPlaceholderText("e.g. 2024 or 1999.01")
+        self.in_date.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_date, 2, 3)
 
         info_layout.addWidget(QLabel("Event:"), 3, 0)
         self.in_event = QLineEdit()
+        self.in_event.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_event, 3, 1)
 
         info_layout.addWidget(QLabel("Site:"), 3, 2)
         self.in_site = QLineEdit()
+        self.in_site.textChanged.connect(self.mark_info_modified)
         info_layout.addWidget(self.in_site, 3, 3)
 
+        info_main_layout.addWidget(fields_box)
+
+        # Status Filter Group
         del_box = QGroupBox("Status Filter")
         del_box_layout = QHBoxLayout(del_box)
         self.chk_include_del = QCheckBox("Include Deleted Games")
         self.chk_include_del.setChecked(True)
+        self.chk_include_del.toggled.connect(self.mark_info_modified)
         del_box_layout.addWidget(self.chk_include_del)
+
         self.chk_only_del = QCheckBox("Only Deleted Games")
+        self.chk_only_del.toggled.connect(self.mark_info_modified)
         del_box_layout.addWidget(self.chk_only_del)
-        info_layout.addWidget(del_box, 4, 0, 1, 4)
+
+        info_main_layout.addWidget(del_box)
+        info_main_layout.addStretch()
 
         self.tabs.addTab(self.tab_info, "🏷️ Game Info")
 
@@ -122,6 +184,7 @@ class AdvancedSearchDialog(QDialog):
         self.spin_max_ply = QSpinBox()
         self.spin_max_ply.setRange(1, 1000)
         self.spin_max_ply.setValue(250)
+        self.spin_max_ply.valueChanged.connect(self.mark_pos_modified)
         depth_row.addWidget(self.spin_max_ply)
         depth_row.addStretch()
         controls_col.addLayout(depth_row)
@@ -214,6 +277,7 @@ class AdvancedSearchDialog(QDialog):
         for col_idx, (_, pkey) in enumerate(pieces, start=1):
             cb = QComboBox()
             cb.addItems(["Any"] + [str(i) for i in (range(9) if pkey == 'p' else range(3))])
+            cb.currentIndexChanged.connect(self.mark_mat_modified)
             self.mat_white[pkey] = cb
             grid.addWidget(cb, 1, col_idx)
 
@@ -222,6 +286,7 @@ class AdvancedSearchDialog(QDialog):
         for col_idx, (_, pkey) in enumerate(pieces, start=1):
             cb = QComboBox()
             cb.addItems(["Any"] + [str(i) for i in (range(9) if pkey == 'p' else range(3))])
+            cb.currentIndexChanged.connect(self.mark_mat_modified)
             self.mat_black[pkey] = cb
             grid.addWidget(cb, 2, col_idx)
 
@@ -234,6 +299,8 @@ class AdvancedSearchDialog(QDialog):
         self.chk_same_bishops = QCheckBox("Same-Colored Bishops (White & Black on same color squares)")
         self.chk_opposite_bishops.toggled.connect(lambda on: on and self.chk_same_bishops.setChecked(False))
         self.chk_same_bishops.toggled.connect(lambda on: on and self.chk_opposite_bishops.setChecked(False))
+        self.chk_opposite_bishops.toggled.connect(self.mark_mat_modified)
+        self.chk_same_bishops.toggled.connect(self.mark_mat_modified)
         bish_layout.addWidget(self.chk_opposite_bishops)
         bish_layout.addWidget(self.chk_same_bishops)
         mat_layout.addWidget(bish_box)
@@ -243,8 +310,10 @@ class AdvancedSearchDialog(QDialog):
         mode_layout = QVBoxLayout(mode_box)
         self.rb_final_pos = QRadioButton("Final Position only (Endgames - Ultra fast ~20ms)")
         self.rb_final_pos.setChecked(True)
+        self.rb_final_pos.toggled.connect(self.mark_mat_modified)
         mode_layout.addWidget(self.rb_final_pos)
         self.rb_any_move = QRadioButton("Any Move during game (Middlegame / Sacrifices / Combinations ~150ms)")
+        self.rb_any_move.toggled.connect(self.mark_mat_modified)
         mode_layout.addWidget(self.rb_any_move)
         mat_layout.addWidget(mode_box)
 
@@ -271,11 +340,47 @@ class AdvancedSearchDialog(QDialog):
 
         if current_filter:
             self.load_filter(current_filter)
+        else:
+            self.update_tab_titles()
+
+    def update_tab_titles(self):
+        """Updates tab header text to show [✓] status when active."""
+        title_info = "🏷️ Game Info" + ("  ✓" if self.chk_enable_info.isChecked() else "")
+        title_pos = "♟️ Position / Board" + ("  ✓" if self.chk_enable_pos.isChecked() else "")
+        title_mat = "⚖️ Material" + ("  ✓" if self.chk_enable_mat.isChecked() else "")
+        
+        self.tabs.setTabText(0, title_info)
+        self.tabs.setTabText(1, title_pos)
+        self.tabs.setTabText(2, title_mat)
+
+    def select_all_categories(self):
+        self.chk_enable_info.setChecked(True)
+        self.chk_enable_pos.setChecked(True)
+        self.chk_enable_mat.setChecked(True)
+
+    def clear_all_categories(self):
+        self.chk_enable_info.setChecked(False)
+        self.chk_enable_pos.setChecked(False)
+        self.chk_enable_mat.setChecked(False)
+
+    def mark_info_modified(self):
+        if not self._loading:
+            self.chk_enable_info.setChecked(True)
+
+    def mark_pos_modified(self):
+        if not self._loading:
+            self.chk_enable_pos.setChecked(True)
+
+    def mark_mat_modified(self):
+        if not self._loading:
+            self.chk_enable_mat.setChecked(True)
 
     def on_material_preset_changed(self, idx: int):
         if idx == 0:
             return
         
+        self.mark_mat_modified()
+
         # Reset all to Any first
         for cb in self.mat_white.values(): cb.setCurrentIndex(0)
         for cb in self.mat_black.values(): cb.setCurrentIndex(0)
@@ -313,12 +418,14 @@ class AdvancedSearchDialog(QDialog):
             set_val("b", "q", 0); set_val("b", "r", 0); set_val("b", "b", 0); set_val("b", "n", 0)
 
     def on_board_fen_changed(self, fen: str):
+        self.mark_pos_modified()
         if self.in_fen.text().strip() != fen.strip():
             self.in_fen.blockSignals(True)
             self.in_fen.setText(fen)
             self.in_fen.blockSignals(False)
 
     def on_fen_text_edited(self, text: str):
+        self.mark_pos_modified()
         t = text.strip()
         if t:
             self.board_editor.blockSignals(True)
@@ -326,115 +433,177 @@ class AdvancedSearchDialog(QDialog):
             self.board_editor.blockSignals(False)
 
     def set_single_piece_demo(self, role, color, square):
+        self.mark_pos_modified()
         self.board_editor.clear_board()
         self.board_editor.board.set_piece_at(square, chess.Piece(role, color))
         self.board_editor.update_board_ui()
 
     def reset_all(self):
-        self.in_player.clear()
-        self.in_white.clear()
-        self.in_black.clear()
-        self.in_result.setCurrentIndex(0)
-        self.in_eco.clear()
-        self.in_date.clear()
-        self.in_event.clear()
-        self.in_site.clear()
-        self.chk_include_del.setChecked(True)
-        self.chk_only_del.setChecked(False)
-        self.board_editor.reset_to_initial()
-        self.spin_max_ply.setValue(250)
-        self.combo_mat_preset.setCurrentIndex(0)
-        for cb in self.mat_white.values(): cb.setCurrentIndex(0)
-        for cb in self.mat_black.values(): cb.setCurrentIndex(0)
-        self.chk_opposite_bishops.setChecked(False)
-        self.chk_same_bishops.setChecked(False)
-        self.rb_final_pos.setChecked(True)
+        self._loading = True
+        try:
+            self.in_player.clear()
+            self.in_white.clear()
+            self.in_black.clear()
+            self.in_result.setCurrentIndex(0)
+            self.in_eco.clear()
+            self.in_date.clear()
+            self.in_event.clear()
+            self.in_site.clear()
+            self.chk_include_del.setChecked(True)
+            self.chk_only_del.setChecked(False)
+            self.board_editor.reset_to_initial()
+            self.spin_max_ply.setValue(250)
+            self.combo_mat_preset.setCurrentIndex(0)
+            for cb in self.mat_white.values(): cb.setCurrentIndex(0)
+            for cb in self.mat_black.values(): cb.setCurrentIndex(0)
+            self.chk_opposite_bishops.setChecked(False)
+            self.chk_same_bishops.setChecked(False)
+            self.rb_final_pos.setChecked(True)
+
+            self.chk_enable_info.setChecked(False)
+            self.chk_enable_pos.setChecked(False)
+            self.chk_enable_mat.setChecked(False)
+            self.update_tab_titles()
+        finally:
+            self._loading = False
 
     def load_filter(self, f: dict):
-        if "player" in f: self.in_player.setText(f["player"])
-        if "white" in f: self.in_white.setText(f["white"])
-        if "black" in f: self.in_black.setText(f["black"])
-        if "result" in f:
-            idx = self.in_result.findText(f["result"])
-            if idx >= 0: self.in_result.setCurrentIndex(idx)
-        if "eco" in f: self.in_eco.setText(f["eco"])
-        if "date" in f: self.in_date.setText(f["date"])
-        if "event" in f: self.in_event.setText(f["event"])
-        if "site" in f: self.in_site.setText(f["site"])
-        if "include_deleted" in f: self.chk_include_del.setChecked(f["include_deleted"])
-        if "only_deleted" in f: self.chk_only_del.setChecked(f["only_deleted"])
-        if "fen" in f: self.in_fen.setText(f["fen"])
-        
-        mat = f.get("material")
-        if mat:
-            mapping_w = {'white_queens': 'q', 'white_rooks': 'r', 'white_bishops': 'b', 'white_knights': 'n', 'white_pawns': 'p'}
-            for f_key, pkey in mapping_w.items():
-                if f_key in mat and mat[f_key] is not None:
-                    idx = self.mat_white[pkey].findText(str(mat[f_key]))
-                    if idx >= 0: self.mat_white[pkey].setCurrentIndex(idx)
-            mapping_b = {'black_queens': 'q', 'black_rooks': 'r', 'black_bishops': 'b', 'black_knights': 'n', 'black_pawns': 'p'}
-            for f_key, pkey in mapping_b.items():
-                if f_key in mat and mat[f_key] is not None:
-                    idx = self.mat_black[pkey].findText(str(mat[f_key]))
-                    if idx >= 0: self.mat_black[pkey].setCurrentIndex(idx)
-            if mat.get("opposite_bishops"):
-                self.chk_opposite_bishops.setChecked(True)
-            elif mat.get("same_bishops"):
-                self.chk_same_bishops.setChecked(True)
+        self._loading = True
+        try:
+            has_info = False
+            if "player" in f and f["player"]: 
+                self.in_player.setText(f["player"])
+                has_info = True
+            if "white" in f and f["white"]: 
+                self.in_white.setText(f["white"])
+                has_info = True
+            if "black" in f and f["black"]: 
+                self.in_black.setText(f["black"])
+                has_info = True
+            if "result" in f and f["result"] and f["result"] != "All":
+                idx = self.in_result.findText(f["result"])
+                if idx >= 0: 
+                    self.in_result.setCurrentIndex(idx)
+                    has_info = True
+            if "eco" in f and f["eco"]: 
+                self.in_eco.setText(f["eco"])
+                has_info = True
+            if "date" in f and f["date"]: 
+                self.in_date.setText(f["date"])
+                has_info = True
+            if "event" in f and f["event"]: 
+                self.in_event.setText(f["event"])
+                has_info = True
+            if "site" in f and f["site"]: 
+                self.in_site.setText(f["site"])
+                has_info = True
+            if "include_deleted" in f: 
+                self.chk_include_del.setChecked(f["include_deleted"])
+                if not f["include_deleted"]:
+                    has_info = True
+            if "only_deleted" in f and f["only_deleted"]: 
+                self.chk_only_del.setChecked(f["only_deleted"])
+                has_info = True
+            
+            has_pos = False
+            if "fen" in f and f["fen"]: 
+                self.in_fen.setText(f["fen"])
+                has_pos = True
+            
+            has_mat = False
+            mat = f.get("material")
+            if mat:
+                mapping_w = {'white_queens': 'q', 'white_rooks': 'r', 'white_bishops': 'b', 'white_knights': 'n', 'white_pawns': 'p'}
+                for f_key, pkey in mapping_w.items():
+                    if f_key in mat and mat[f_key] is not None:
+                        idx = self.mat_white[pkey].findText(str(mat[f_key]))
+                        if idx >= 0: 
+                            self.mat_white[pkey].setCurrentIndex(idx)
+                            has_mat = True
+                mapping_b = {'black_queens': 'q', 'black_rooks': 'r', 'black_bishops': 'b', 'black_knights': 'n', 'black_pawns': 'p'}
+                for f_key, pkey in mapping_b.items():
+                    if f_key in mat and mat[f_key] is not None:
+                        idx = self.mat_black[pkey].findText(str(mat[f_key]))
+                        if idx >= 0: 
+                            self.mat_black[pkey].setCurrentIndex(idx)
+                            has_mat = True
+                if mat.get("opposite_bishops"):
+                    self.chk_opposite_bishops.setChecked(True)
+                    has_mat = True
+                elif mat.get("same_bishops"):
+                    self.chk_same_bishops.setChecked(True)
+                    has_mat = True
 
-            if mat.get("match_any_ply"):
-                self.rb_any_move.setChecked(True)
-            else:
-                self.rb_final_pos.setChecked(True)
+                if mat.get("match_any_ply"):
+                    self.rb_any_move.setChecked(True)
+                else:
+                    self.rb_final_pos.setChecked(True)
+
+            self.chk_enable_info.setChecked(has_info)
+            self.chk_enable_pos.setChecked(has_pos)
+            self.chk_enable_mat.setChecked(has_mat)
+            self.update_tab_titles()
+        finally:
+            self._loading = False
 
     def get_filter_dict(self) -> dict:
         f = {}
-        p = self.in_player.text().strip()
-        if p: f["player"] = p
-        w = self.in_white.text().strip()
-        if w: f["white"] = w
-        b = self.in_black.text().strip()
-        if b: f["black"] = b
-        res = self.in_result.currentText()
-        if res != "All": f["result"] = res
-        eco = self.in_eco.text().strip()
-        if eco: f["eco"] = eco
-        dt = self.in_date.text().strip()
-        if dt: f["date"] = dt
-        ev = self.in_event.text().strip()
-        if ev: f["event"] = ev
-        st = self.in_site.text().strip()
-        if st: f["site"] = st
-        f["include_deleted"] = self.chk_include_del.isChecked()
-        f["only_deleted"] = self.chk_only_del.isChecked()
 
-        fen = self.in_fen.text().strip()
-        if fen: f["fen"] = fen
+        # 1. Game Info Tab
+        if self.chk_enable_info.isChecked():
+            p = self.in_player.text().strip()
+            if p: f["player"] = p
+            w = self.in_white.text().strip()
+            if w: f["white"] = w
+            b = self.in_black.text().strip()
+            if b: f["black"] = b
+            res = self.in_result.currentText()
+            if res != "All": f["result"] = res
+            eco = self.in_eco.text().strip()
+            if eco: f["eco"] = eco
+            dt = self.in_date.text().strip()
+            if dt: f["date"] = dt
+            ev = self.in_event.text().strip()
+            if ev: f["event"] = ev
+            st = self.in_site.text().strip()
+            if st: f["site"] = st
+            f["include_deleted"] = self.chk_include_del.isChecked()
+            f["only_deleted"] = self.chk_only_del.isChecked()
+        else:
+            f["include_deleted"] = True
+            f["only_deleted"] = False
 
-        mat = {}
-        def parse_val(cb):
-            t = cb.currentText()
-            return None if t == "Any" else int(t)
+        # 2. Position Tab
+        if self.chk_enable_pos.isChecked():
+            fen = self.in_fen.text().strip()
+            if fen: f["fen"] = fen
 
-        mapping_w = {'q': 'white_queens', 'r': 'white_rooks', 'b': 'white_bishops', 'n': 'white_knights', 'p': 'white_pawns'}
-        for pkey, f_key in mapping_w.items():
-            v = parse_val(self.mat_white[pkey])
-            if v is not None: mat[f_key] = v
+        # 3. Material Tab
+        if self.chk_enable_mat.isChecked():
+            mat = {}
+            def parse_val(cb):
+                t = cb.currentText()
+                return None if t == "Any" else int(t)
 
-        mapping_b = {'q': 'black_queens', 'r': 'black_rooks', 'b': 'black_bishops', 'n': 'black_knights', 'p': 'black_pawns'}
-        for pkey, f_key in mapping_b.items():
-            v = parse_val(self.mat_black[pkey])
-            if v is not None: mat[f_key] = v
+            mapping_w = {'q': 'white_queens', 'r': 'white_rooks', 'b': 'white_bishops', 'n': 'white_knights', 'p': 'white_pawns'}
+            for pkey, f_key in mapping_w.items():
+                v = parse_val(self.mat_white[pkey])
+                if v is not None: mat[f_key] = v
 
-        if self.chk_opposite_bishops.isChecked():
-            mat["opposite_bishops"] = True
-        elif self.chk_same_bishops.isChecked():
-            mat["same_bishops"] = True
+            mapping_b = {'q': 'black_queens', 'r': 'black_rooks', 'b': 'black_bishops', 'n': 'black_knights', 'p': 'black_pawns'}
+            for pkey, f_key in mapping_b.items():
+                v = parse_val(self.mat_black[pkey])
+                if v is not None: mat[f_key] = v
 
-        if mat:
-            mat["match_any_ply"] = self.rb_any_move.isChecked()
-            mat["max_ply"] = self.spin_max_ply.value()
-            f["material"] = mat
+            if self.chk_opposite_bishops.isChecked():
+                mat["opposite_bishops"] = True
+            elif self.chk_same_bishops.isChecked():
+                mat["same_bishops"] = True
+
+            if mat:
+                mat["match_any_ply"] = self.rb_any_move.isChecked()
+                mat["max_ply"] = self.spin_max_ply.value()
+                f["material"] = mat
 
         return f
 

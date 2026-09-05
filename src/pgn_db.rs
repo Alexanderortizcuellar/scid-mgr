@@ -34,6 +34,7 @@ pub struct PgnDatabaseWrapper {
     pub pgn_path: PathBuf,
     pub entries: Vec<PgnIndexEntry>,
     mmap: Arc<Mmap>,
+    query_cache: std::sync::Mutex<Option<(GameFilter, Vec<usize>)>>,
 }
 
 impl PgnDatabaseWrapper {
@@ -85,6 +86,7 @@ impl PgnDatabaseWrapper {
             pgn_path,
             entries: final_entries,
             mmap: mmap_arc,
+            query_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -304,13 +306,103 @@ impl PgnDatabaseWrapper {
         Ok(pgn_text.trim().to_string())
     }
 
-    /// Query and filter games with sorting and pagination
-    pub fn query_games(
+    pub fn sort_indices(&self, matched_indices: &mut [usize], sort_by: Option<&str>, sort_asc: Option<bool>) {
+        if let Some(sort_field) = sort_by {
+            let asc = sort_asc.unwrap_or(true);
+            let entries = &self.entries;
+            matched_indices.par_sort_unstable_by(|&a, &b| {
+                let ea = &entries[a];
+                let eb = &entries[b];
+                let ord = match sort_field.to_lowercase().as_str() {
+                    "id" => a.cmp(&b),
+                    "white" => ea.white.cmp(&eb.white),
+                    "black" => ea.black.cmp(&eb.black),
+                    "white_elo" => ea.white_elo.unwrap_or(0).cmp(&eb.white_elo.unwrap_or(0)),
+                    "black_elo" => ea.black_elo.unwrap_or(0).cmp(&eb.black_elo.unwrap_or(0)),
+                    "result" => ea.result.cmp(&eb.result),
+                    "eco" => ea.eco.cmp(&eb.eco),
+                    "date" => ea.date.cmp(&eb.date),
+                    "event" => ea.event.cmp(&eb.event),
+                    "site" => ea.site.cmp(&eb.site),
+                    _ => a.cmp(&b),
+                };
+                if asc {
+                    ord
+                } else {
+                    ord.reverse()
+                }
+            });
+        }
+    }
+
+    pub fn get_summary(&self, idx: usize) -> GameSummary {
+        let e = &self.entries[idx];
+        GameSummary {
+            id: idx,
+            white: e.white.clone(),
+            black: e.black.clone(),
+            white_elo: e.white_elo.unwrap_or(0),
+            black_elo: e.black_elo.unwrap_or(0),
+            date: e.date.clone(),
+            result: e.result.clone(),
+            eco: e.eco.clone(),
+            event: e.event.clone(),
+            site: e.site.clone(),
+            round: String::new(),
+            deleted: false,
+            non_standard_start: false,
+            num_moves: 0,
+            time_control: None,
+        }
+    }
+
+    /// Query and filter games with progress callback, in-memory sort caching, and pagination
+    pub fn query_games_with_progress<F>(
         &self,
         filter: &GameFilter,
         page: usize,
         page_size: usize,
-    ) -> (Vec<GameSummary>, usize) {
+        progress: F,
+    ) -> (Vec<GameSummary>, usize)
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
+        // 1. Fast Query Cache: If identical filter is queried for subsequent pages, return instantly (0.00ms)
+        // If search criteria match but sort changed, sort in-memory instantly without rescanning disk!
+        if let Ok(mut guard) = self.query_cache.lock() {
+            if let Some((ref cached_filter, ref cached_indices)) = *guard {
+                if cached_filter == filter {
+                    let total_matches = cached_indices.len();
+                    let start = page * page_size;
+                    if start >= total_matches {
+                        return (Vec::new(), total_matches);
+                    }
+                    let end = usize::min(start + page_size, total_matches);
+                    let summaries = cached_indices[start..end]
+                        .iter()
+                        .map(|&idx| self.get_summary(idx))
+                        .collect();
+                    return (summaries, total_matches);
+                } else if cached_filter.same_search_criteria(filter) {
+                    let mut sorted_indices = cached_indices.clone();
+                    self.sort_indices(&mut sorted_indices, filter.sort_by.as_deref(), filter.sort_asc);
+                    let total_matches = sorted_indices.len();
+                    let start = page * page_size;
+                    let summaries = if start >= total_matches {
+                        Vec::new()
+                    } else {
+                        let end = usize::min(start + page_size, total_matches);
+                        sorted_indices[start..end]
+                            .iter()
+                            .map(|&idx| self.get_summary(idx))
+                            .collect()
+                    };
+                    *guard = Some((filter.clone(), sorted_indices));
+                    return (summaries, total_matches);
+                }
+            }
+        }
+
         let eco_filter = filter.eco.as_ref().map(|s| s.to_uppercase());
         let date_filter = filter.date.as_ref().map(|s| s.trim());
         let result_filter = filter.result.as_ref().map(|s| s.as_str());
@@ -325,14 +417,18 @@ impl PgnDatabaseWrapper {
             if f.trim().is_empty() {
                 None
             } else {
-                self.search_position(f, None, |_, _, _| {}).ok().map(|res| {
+                self.search_position(f, None, |scanned, total, matches| {
+                    progress(scanned, total, matches);
+                }).ok().map(|res| {
                     res.matches.into_iter().map(|m| m.game_id).collect::<std::collections::HashSet<usize>>()
                 })
             }
         });
 
         let mat_matches = filter.material.as_ref().and_then(|m| {
-            self.search_material(m, |_, _, _| {}).ok().map(|vec| {
+            self.search_material(m, |scanned, total, matches| {
+                progress(scanned, total, matches);
+            }).ok().map(|vec| {
                 vec.into_iter().collect::<std::collections::HashSet<usize>>()
             })
         });
@@ -404,32 +500,10 @@ impl PgnDatabaseWrapper {
 
         let total_count = matching_indices.len();
 
-        // Parallel Sorting
-        if let Some(ref sort_by) = filter.sort_by {
-            let asc = filter.sort_asc.unwrap_or(true);
-            let entries = &self.entries;
-            matching_indices.par_sort_unstable_by(|&a, &b| {
-                let ea = &entries[a];
-                let eb = &entries[b];
-                let ord = match sort_by.to_lowercase().as_str() {
-                    "id" => a.cmp(&b),
-                    "white" => ea.white.cmp(&eb.white),
-                    "black" => ea.black.cmp(&eb.black),
-                    "white_elo" => ea.white_elo.unwrap_or(0).cmp(&eb.white_elo.unwrap_or(0)),
-                    "black_elo" => ea.black_elo.unwrap_or(0).cmp(&eb.black_elo.unwrap_or(0)),
-                    "result" => ea.result.cmp(&eb.result),
-                    "eco" => ea.eco.cmp(&eb.eco),
-                    "date" => ea.date.cmp(&eb.date),
-                    "event" => ea.event.cmp(&eb.event),
-                    "site" => ea.site.cmp(&eb.site),
-                    _ => a.cmp(&b),
-                };
-                if asc {
-                    ord
-                } else {
-                    ord.reverse()
-                }
-            });
+        self.sort_indices(&mut matching_indices, filter.sort_by.as_deref(), filter.sort_asc);
+
+        if let Ok(mut guard) = self.query_cache.lock() {
+            *guard = Some((filter.clone(), matching_indices.clone()));
         }
 
         let start_idx = page * page_size;
@@ -440,29 +514,20 @@ impl PgnDatabaseWrapper {
 
         let games = matching_indices[start_idx..end_idx]
             .iter()
-            .map(|&idx| {
-                let e = &self.entries[idx];
-                GameSummary {
-                    id: idx,
-                    white: e.white.clone(),
-                    black: e.black.clone(),
-                    white_elo: e.white_elo.unwrap_or(0),
-                    black_elo: e.black_elo.unwrap_or(0),
-                    date: e.date.clone(),
-                    result: e.result.clone(),
-                    eco: e.eco.clone(),
-                    event: e.event.clone(),
-                    site: e.site.clone(),
-                    round: String::new(),
-                    deleted: false,
-                    non_standard_start: false,
-                    num_moves: 0,
-                    time_control: None,
-                }
-            })
+            .map(|&idx| self.get_summary(idx))
             .collect();
 
         (games, total_count)
+    }
+
+    /// Query and filter games with sorting and pagination
+    pub fn query_games(
+        &self,
+        filter: &GameFilter,
+        page: usize,
+        page_size: usize,
+    ) -> (Vec<GameSummary>, usize) {
+        self.query_games_with_progress(filter, page, page_size, |_, _, _| {})
     }
 
     /// Search games by board position or partial piece placement across raw PGN move streams
@@ -495,7 +560,6 @@ impl PgnDatabaseWrapper {
         let total = self.entries.len();
         let chunk_size = 1000;
         let mut matches = Vec::new();
-        let mut scanned = 0;
 
         for chunk_idx in (0..total).step_by(chunk_size) {
             let end_idx = (chunk_idx + chunk_size).min(total);
@@ -518,8 +582,7 @@ impl PgnDatabaseWrapper {
                 .collect();
 
             matches.extend(chunk_matches);
-            scanned = end_idx;
-            progress(scanned, total, matches.len());
+            progress(end_idx, total, matches.len());
         }
 
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -544,7 +607,6 @@ impl PgnDatabaseWrapper {
         let total = self.entries.len();
         let chunk_size = 1000;
         let mut matches = Vec::new();
-        let mut scanned = 0;
 
         for chunk_idx in (0..total).step_by(chunk_size) {
             let end_idx = (chunk_idx + chunk_size).min(total);
@@ -567,8 +629,7 @@ impl PgnDatabaseWrapper {
                 .collect();
 
             matches.extend(chunk_matches);
-            scanned = end_idx;
-            progress(scanned, total, matches.len());
+            progress(end_idx, total, matches.len());
         }
 
         Ok(matches)

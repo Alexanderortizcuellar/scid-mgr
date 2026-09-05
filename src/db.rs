@@ -65,6 +65,23 @@ pub struct GameFilter {
     pub material: Option<crate::position_search::MaterialFilter>,
 }
 
+impl GameFilter {
+    pub fn same_search_criteria(&self, other: &Self) -> bool {
+        self.player == other.player
+            && self.white == other.white
+            && self.black == other.black
+            && self.result == other.result
+            && self.eco == other.eco
+            && self.date == other.date
+            && self.event == other.event
+            && self.site == other.site
+            && self.include_deleted == other.include_deleted
+            && self.only_deleted == other.only_deleted
+            && self.fen == other.fen
+            && self.material == other.material
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbStats {
     pub format: ScidFormat,
@@ -649,7 +666,8 @@ impl ScidDatabaseWrapper {
         F: Fn(usize, usize, usize) + Sync,
     {
         // 1. Fast Query Cache: If identical filter is queried for subsequent pages, return instantly (0.00ms)
-        if let Ok(guard) = self.query_cache.lock() {
+        // If search criteria match but sort changed, sort in-memory instantly without rescanning disk!
+        if let Ok(mut guard) = self.query_cache.lock() {
             if let Some((ref cached_filter, ref cached_indices)) = *guard {
                 if cached_filter == filter {
                     let total_matches = cached_indices.len();
@@ -662,6 +680,22 @@ impl ScidDatabaseWrapper {
                         .iter()
                         .filter_map(|&idx| self.get_game_summary(idx))
                         .collect();
+                    return (summaries, total_matches);
+                } else if cached_filter.same_search_criteria(filter) {
+                    let mut sorted_indices = cached_indices.clone();
+                    self.sort_indices(&mut sorted_indices, filter.sort_by.as_deref(), filter.sort_asc);
+                    let total_matches = sorted_indices.len();
+                    let start = page * page_size;
+                    let summaries = if start >= total_matches {
+                        Vec::new()
+                    } else {
+                        let end = usize::min(start + page_size, total_matches);
+                        sorted_indices[start..end]
+                            .iter()
+                            .filter_map(|&idx| self.get_game_summary(idx))
+                            .collect()
+                    };
+                    *guard = Some((filter.clone(), sorted_indices));
                     return (summaries, total_matches);
                 }
             }
@@ -884,8 +918,40 @@ impl ScidDatabaseWrapper {
         };
 
         // Ultra-Fast Parallel Multi-Field Sorting
-        if let Some(ref sort_field) = filter.sort_by {
-            let is_asc = filter.sort_asc.unwrap_or(true);
+        self.sort_indices(&mut matched_indices, filter.sort_by.as_deref(), filter.sort_asc);
+
+        let total_matches = matched_indices.len();
+        let start = page * page_size;
+
+        if let Ok(mut guard) = self.query_cache.lock() {
+            *guard = Some((filter.clone(), matched_indices.clone()));
+        }
+
+        if start >= total_matches {
+            return (Vec::new(), total_matches);
+        }
+
+        let end = usize::min(start + page_size, total_matches);
+        let summaries = matched_indices[start..end]
+            .iter()
+            .filter_map(|&idx| self.get_game_summary(idx))
+            .collect();
+
+        (summaries, total_matches)
+    }
+
+    pub fn query_games(
+        &self,
+        filter: &GameFilter,
+        page: usize,
+        page_size: usize,
+    ) -> (Vec<GameSummary>, usize) {
+        self.query_games_with_progress(filter, page, page_size, |_, _, _| {})
+    }
+
+    pub fn sort_indices(&self, matched_indices: &mut [usize], sort_by: Option<&str>, sort_asc: Option<bool>) {
+        if let Some(sort_field) = sort_by {
+            let is_asc = sort_asc.unwrap_or(true);
             let entries = &self.entries;
 
             match sort_field.to_lowercase().as_str() {
@@ -1014,34 +1080,6 @@ impl ScidDatabaseWrapper {
                 _ => {}
             }
         }
-
-        let total_matches = matched_indices.len();
-        let start = page * page_size;
-
-        if let Ok(mut guard) = self.query_cache.lock() {
-            *guard = Some((filter.clone(), matched_indices.clone()));
-        }
-
-        if start >= total_matches {
-            return (Vec::new(), total_matches);
-        }
-
-        let end = usize::min(start + page_size, total_matches);
-        let summaries = matched_indices[start..end]
-            .iter()
-            .filter_map(|&idx| self.get_game_summary(idx))
-            .collect();
-
-        (summaries, total_matches)
-    }
-
-    pub fn query_games(
-        &self,
-        filter: &GameFilter,
-        page: usize,
-        page_size: usize,
-    ) -> (Vec<GameSummary>, usize) {
-        self.query_games_with_progress(filter, page, page_size, |_, _, _| {})
     }
 
     pub fn stats(&self) -> DbStats {

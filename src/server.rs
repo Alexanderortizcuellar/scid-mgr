@@ -180,7 +180,7 @@ fn handle_command(
                 error: None,
             }
         }
-        "open" => {
+        "open" | "open_db" => {
             let path_str = match req.params.get("path").or_else(|| req.params.get("params").and_then(|p| p.get("path"))).and_then(|v| v.as_str()) {
                 Some(p) => p,
                 None => {
@@ -444,7 +444,22 @@ fn handle_command(
                         let _ = out.flush();
                     }
                 }),
-                DatabaseBackend::Pgn(p) => p.query_games(&filter, page, page_size),
+                DatabaseBackend::Pgn(p) => p.query_games_with_progress(&filter, page, page_size, |scanned, total, matches_len| {
+                    let event_json = serde_json::json!({
+                        "event": "search_progress",
+                        "data": {
+                            "scanned": scanned,
+                            "total": total,
+                            "matches": matches_len,
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                        }
+                    });
+                    if let Ok(line) = serde_json::to_string(&event_json) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", line);
+                        let _ = out.flush();
+                    }
+                }),
             });
 
             ResponseMessage {
@@ -459,6 +474,7 @@ fn handle_command(
                 error: None,
             }
         }
+
 
         "search_position" | "position_search" => {
             let db = match current_db {
@@ -870,7 +886,7 @@ fn handle_command(
             }
         }
 
-        "get_pgn" | "get_game_pgn" => {
+        "get_pgn" | "get_game" | "get_game_pgn" => {
             let db = match current_db {
                 Some(db) => db,
                 None => {
