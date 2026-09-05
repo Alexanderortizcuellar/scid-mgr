@@ -906,6 +906,8 @@ fn handle_command(
                 Ok(idx) => {
                     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
                     let unique_positions = idx.header.unique_positions as usize;
+                    let diagnostics = idx.scan_diagnostics().ok();
+                    let file_size = std::fs::metadata(&idx.path).map(|m| m.len()).unwrap_or(0);
                     *current_pos_index = Some(idx);
                     ResponseMessage {
                         id,
@@ -914,6 +916,8 @@ fn handle_command(
                             "status": "valid",
                             "unique_positions": unique_positions,
                             "elapsed_ms": elapsed_ms,
+                            "file_size": file_size,
+                            "diagnostics": diagnostics,
                         })),
                         error: None,
                     }

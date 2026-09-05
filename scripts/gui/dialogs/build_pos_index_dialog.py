@@ -61,16 +61,46 @@ class BuildPosIndexDialog(QDialog):
         self.btn_build.clicked.connect(self.start_build)
         btn_box.addWidget(self.btn_build)
 
+        self.btn_view_diagnostics = QPushButton("📊 View Diagnostics & Benchmark...")
+        self.btn_view_diagnostics.setStyleSheet("font-weight: bold; background-color: #1565c0; color: white; padding: 6px 14px;")
+        self.btn_view_diagnostics.setVisible(False)
+        self.btn_view_diagnostics.clicked.connect(self.open_diagnostics)
+        btn_box.addWidget(self.btn_view_diagnostics)
+
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.accept)
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
+
+        self.last_diagnostics = None
+        self.client.response_received.connect(self._on_backend_message)
+
+    def _on_backend_message(self, data: dict):
+        if not self.isVisible():
+            return
+        if data.get("event") == "build_pos_index_progress":
+            prog = data.get("data", {})
+            self.update_progress(
+                prog.get("scanned", 0),
+                prog.get("total", 0),
+                prog.get("positions", 0),
+                prog.get("percent", 0.0),
+            )
+        elif data.get("status") == "ok":
+            res_data = data.get("data", {})
+            if "unique_positions" in res_data and "elapsed_ms" in res_data and "moves" not in res_data:
+                self.on_complete(
+                    res_data.get("unique_positions", 0),
+                    res_data.get("elapsed_ms", 0.0),
+                    res_data.get("diagnostics"),
+                )
 
     def start_build(self):
         if not self.client.is_running():
             QMessageBox.warning(self, "Offline", "Backend is not running.")
             return
         self.btn_build.setEnabled(False)
+        self.btn_view_diagnostics.setVisible(False)
         self.spin_depth.setEnabled(False)
         self.spin_max_games.setEnabled(False)
         self.spin_threads.setEnabled(False)
@@ -87,13 +117,27 @@ class BuildPosIndexDialog(QDialog):
         self.progress_bar.setValue(int(percent))
         self.lbl_progress.setText(f"Indexed: {scanned:,} / {total:,} games ({percent:.1f}%) | Unique positions: {positions:,}")
 
-    def on_complete(self, unique_positions: int, elapsed_ms: float):
+    def on_complete(self, unique_positions: int, elapsed_ms: float, diagnostics: dict = None):
         self.progress_bar.setValue(100)
         self.lbl_progress.setText(f"✅ Finished in {elapsed_ms:,.1f} ms! Indexed {unique_positions:,} unique positions.")
         self.btn_build.setEnabled(True)
         self.spin_depth.setEnabled(True)
         self.spin_max_games.setEnabled(True)
         self.spin_threads.setEnabled(True)
+        self.last_diagnostics = diagnostics
+        self.btn_view_diagnostics.setVisible(True)
+
+    def open_diagnostics(self):
+        from .pos_idx_diagnostics_dialog import PosIdxDiagnosticsDialog
+        diag = PosIdxDiagnosticsDialog(self.client, initial_data=self.last_diagnostics, parent=self)
+        diag.exec_()
+
+    def closeEvent(self, event):
+        try:
+            self.client.response_received.disconnect(self._on_backend_message)
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 
 

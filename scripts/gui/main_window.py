@@ -973,9 +973,10 @@ class MainWindow(QMainWindow):
         if "unique_positions" in resp_data and "elapsed_ms" in resp_data and "moves" not in resp_data:
             unique_pos = resp_data.get("unique_positions", 0)
             elapsed = resp_data.get("elapsed_ms", 0.0)
+            diag_info = resp_data.get("diagnostics")
             self.update_pos_index_badge("valid", unique_pos)
             if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
-                self.build_pos_dialog.on_complete(unique_pos, elapsed)
+                self.build_pos_dialog.on_complete(unique_pos, elapsed, diag_info)
             if "Opening Tree" in self.tabs.tabText(self.tabs.currentIndex()):
                 self.opening_tree_widget.refresh_current_position()
 

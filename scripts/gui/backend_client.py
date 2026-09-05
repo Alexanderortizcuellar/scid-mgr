@@ -25,6 +25,17 @@ class BackendClient(QObject):
         self.write_queue: queue.Queue = queue.Queue()
         self.running = False
         self.request_id = 0
+        self._callbacks: Dict[int, Any] = {}
+        self.response_received.connect(self._dispatch_callback)
+
+    def _dispatch_callback(self, data: dict):
+        req_id = data.get("id")
+        if req_id is not None and req_id in self._callbacks:
+            cb = self._callbacks.pop(req_id)
+            try:
+                cb(data)
+            except Exception as e:
+                self.process_error.emit(f"Callback error for request {req_id}: {e}")
 
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -111,12 +122,15 @@ class BackendClient(QObject):
             if err_str:
                 self.process_error.emit(f"[stderr] {err_str}")
 
-    def send_request(self, command: str, params: Optional[dict] = None) -> int:
+    def send_request(self, command: str, params: Optional[dict] = None, callback: Optional[Any] = None) -> int:
         if not self.is_running():
-            raise RuntimeError("Backend process is not running.")
+            return -1
 
         self.request_id += 1
         req_id = self.request_id
+        if callback is not None:
+            self._callbacks[req_id] = callback
+
         req_payload = {"id": req_id, "command": command}
         if params:
             req_payload.update(params)

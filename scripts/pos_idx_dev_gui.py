@@ -245,6 +245,8 @@ class PosIdxDevWorkbench(QMainWindow):
         self.query_opening_tree("")
 
     def query_opening_tree(self, fen: str, game_ids=None):
+        if not self.client.is_running():
+            return
         t0 = time.perf_counter()
         req_params = {"fen": fen}
         if game_ids:
@@ -287,6 +289,8 @@ class PosIdxDevWorkbench(QMainWindow):
         self.status_bar.setText(f"Exploring move: {san} ({uci})")
 
     def scan_diagnostics(self):
+        if not self.client.is_running():
+            return
         self.lbl_diag_status.setText("Scanning all GameSets in .pos.idx...")
         t0 = time.perf_counter()
 
@@ -334,6 +338,8 @@ class PosIdxDevWorkbench(QMainWindow):
         self.client.send_request("pos_index_diagnostics", {}, callback=on_diag_resp)
 
     def run_filter_benchmark(self):
+        if not self.client.is_running():
+            return
         count = self.spin_filter_count.value()
         self.txt_filter_log.append(f"--- Running Filter Simulation with {count:,} Game IDs ---")
         mock_gids = list(range(count))
@@ -362,6 +368,8 @@ class PosIdxDevWorkbench(QMainWindow):
         self.client.send_request("opening_tree", {"fen": "", "game_ids": mock_gids}, callback=on_bench_resp)
 
     def on_backend_response(self, resp):
+        if not self.client.is_running():
+            return
         if resp.get("status") == "ok":
             d = resp.get("data")
             if isinstance(d, dict) and ("format" in d or "db_type" in d or "total_games" in d):
@@ -373,6 +381,11 @@ class PosIdxDevWorkbench(QMainWindow):
         self.status_bar.setText(f"Backend error: {err_msg}")
 
     def closeEvent(self, event):
+        try:
+            self.client.response_received.disconnect(self.on_backend_response)
+            self.client.process_error.disconnect(self.on_backend_error)
+        except Exception:
+            pass
         self.client.stop()
         super().closeEvent(event)
 

@@ -172,11 +172,10 @@ impl PositionIndexHeader {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct SortedIndexEntry {
     pub hash: u64,
     pub data_offset: u32,
-    pub data_len: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -186,9 +185,6 @@ pub struct MoveStats {
     pub white_wins: u32,
     pub draws: u32,
     pub black_wins: u32,
-    pub white_elo_sum: u64,
-    pub black_elo_sum: u64,
-    pub elo_count: u32,
     pub game_ids: Vec<u32>,
 }
 
@@ -220,8 +216,6 @@ impl PositionNode {
         w_win: u32,
         draw: u32,
         b_win: u32,
-        white_elo: u16,
-        black_elo: u16,
         game_id: u32,
         max_game_ids: usize,
     ) {
@@ -240,9 +234,6 @@ impl PositionNode {
                     white_wins: 0,
                     draws: 0,
                     black_wins: 0,
-                    white_elo_sum: 0,
-                    black_elo_sum: 0,
-                    elo_count: 0,
                     game_ids: Vec::new(),
                 });
                 self.moves.last_mut().unwrap()
@@ -252,11 +243,6 @@ impl PositionNode {
             move_stat.white_wins += w_win;
             move_stat.draws += draw;
             move_stat.black_wins += b_win;
-            if white_elo > 0 && black_elo > 0 {
-                move_stat.white_elo_sum += white_elo as u64;
-                move_stat.black_elo_sum += black_elo as u64;
-                move_stat.elo_count += 1;
-            }
             if (max_game_ids == 0 || move_stat.game_ids.len() < max_game_ids) && move_stat.game_ids.last().copied() != Some(game_id) {
                 move_stat.game_ids.push(game_id);
             }
@@ -275,9 +261,6 @@ impl PositionNode {
                 m.white_wins += other_m.white_wins;
                 m.draws += other_m.draws;
                 m.black_wins += other_m.black_wins;
-                m.white_elo_sum += other_m.white_elo_sum;
-                m.black_elo_sum += other_m.black_elo_sum;
-                m.elo_count += other_m.elo_count;
                 m.game_ids.extend(other_m.game_ids);
                 m.game_ids.sort_unstable();
                 m.game_ids.dedup();
@@ -445,11 +428,15 @@ impl PositionIndex {
     /// Look up a position by its 64-bit Zobrist hash in O(log N) using binary search directly on mmap (< 0.001 ms)
     pub fn get_position(&self, target_hash: u64) -> Option<PositionNode> {
         let entries = self.index_entries();
-        let idx = entries.binary_search_by_key(&target_hash, |e| e.hash).ok()?;
+        let idx = entries.binary_search_by_key(&target_hash, |e| { e.hash }).ok()?;
         let entry = &entries[idx];
 
         let start = (self.header.data_offset + entry.data_offset as u64) as usize;
-        let end = start + entry.data_len as usize;
+        let end = if idx + 1 < entries.len() {
+            (self.header.data_offset + entries[idx + 1].data_offset as u64) as usize
+        } else {
+            self.mmap.len()
+        };
         if end > self.mmap.len() || start >= end {
             return None;
         }
@@ -557,8 +544,6 @@ impl PositionIndex {
                     w_win,
                     draw,
                     b_win,
-                    entry.white_elo,
-                    entry.black_elo,
                     game_id,
                     0,
                 );
@@ -634,8 +619,6 @@ impl PositionIndex {
                         w_win,
                         draw,
                         b_win,
-                        entry.white_elo,
-                        entry.black_elo,
                         game_id,
                         0,
                     );
@@ -727,8 +710,6 @@ impl PositionIndex {
                     w_win,
                     draw,
                     b_win,
-                    entry.white_elo,
-                    entry.black_elo,
                     game_id,
                     0,
                 );
@@ -907,8 +888,6 @@ impl PositionIndex {
                                 w_win,
                                 draw,
                                 b_win,
-                                entry.white_elo,
-                                entry.black_elo,
                                 game_id as u32,
                                 max_games_limit,
                             );
@@ -1014,8 +993,6 @@ impl PositionIndex {
                             w_win,
                             draw,
                             b_win,
-                            entry.white_elo,
-                            entry.black_elo,
                             game_id as u32,
                             max_games_limit,
                             &accumulator,
@@ -1093,13 +1070,11 @@ impl PositionIndex {
             if let Some(node) = positions_map.remove(&hash) {
                 let curr_offset = data_payload.len() as u32;
                 let payload_bytes = encode_position_payload(&node, Some(&mut encoding_stats));
-                let curr_len = payload_bytes.len() as u32;
                 data_payload.extend_from_slice(&payload_bytes);
 
                 index_entries.push(SortedIndexEntry {
                     hash,
                     data_offset: curr_offset,
-                    data_len: curr_len,
                 });
             }
         }
@@ -1131,7 +1106,6 @@ impl PositionIndex {
             for entry in &index_entries {
                 writer.write_all(&entry.hash.to_le_bytes())?;
                 writer.write_all(&entry.data_offset.to_le_bytes())?;
-                writer.write_all(&entry.data_len.to_le_bytes())?;
             }
 
             writer.write_all(&data_payload)?;
@@ -1169,9 +1143,13 @@ impl PositionIndex {
         let entries = self.index_entries();
         let data_start = self.header.data_offset as usize;
 
-        for entry in entries {
+        for (idx, entry) in entries.iter().enumerate() {
             let start = data_start + entry.data_offset as usize;
-            let end = start + entry.data_len as usize;
+            let end = if idx + 1 < entries.len() {
+                data_start + entries[idx + 1].data_offset as usize
+            } else {
+                self.mmap.len()
+            };
             if end > self.mmap.len() || start >= end {
                 continue;
             }
@@ -1187,46 +1165,18 @@ impl PositionIndex {
                 let _m_tot = read_varint(&mut slice)?;
                 let _m_ww = read_varint(&mut slice)?;
                 let _m_bw = read_varint(&mut slice)?;
-                if slice.len() < 20 { break; }
-                slice = &slice[20..]; // rating sums
 
-                if slice.is_empty() { break; }
-                let tag = slice[0];
-                let count = match tag {
-                    0 => {
-                        let mut sub = &slice[1..];
-                        let id_count = read_varint(&mut sub)? as usize;
-                        let delta_len = 1 + (slice.len() - sub.len());
-                        // skip the rest of delta varints
-                        for _ in 0..id_count {
-                            let _ = read_varint(&mut sub)?;
-                        }
-                        slice = sub;
-                        stats.record_sample(id_count, delta_len, 0, GameSetType::DeltaVarint);
-                        id_count
-                    }
-                    1 => {
-                        let mut sub = &slice[1..];
-                        let bm = roaring::RoaringBitmap::deserialize_from(&mut sub)?;
-                        let id_count = bm.len() as usize;
-                        slice = sub;
-                        stats.record_sample(id_count, 0, 0, GameSetType::Roaring);
-                        id_count
-                    }
-                    _ => break,
-                };
-                let _ = count;
+                let prev_len = slice.len();
+                let id_count = read_varint(&mut slice)? as usize;
+                for _ in 0..id_count {
+                    let _ = read_varint(&mut slice)?;
+                }
+                let delta_len = prev_len - slice.len();
+                stats.record_sample(id_count, delta_len);
             }
         }
         Ok(stats)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum GameSetType {
-    DeltaVarint = 0,
-    Roaring = 1,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1250,20 +1200,11 @@ impl GameSetEncodingStats {
         Self::default()
     }
 
-    pub fn record_sample(&mut self, id_count: usize, delta_len: usize, roaring_len: usize, chosen: GameSetType) {
+    pub fn record_sample(&mut self, id_count: usize, delta_len: usize) {
         self.total_game_sets += 1;
+        self.delta_varint_count += 1;
         self.bytes_if_all_delta += delta_len;
-        self.bytes_if_all_roaring += roaring_len;
-        match chosen {
-            GameSetType::DeltaVarint => {
-                self.delta_varint_count += 1;
-                self.bytes_adaptive += delta_len;
-            }
-            GameSetType::Roaring => {
-                self.roaring_count += 1;
-                self.bytes_adaptive += roaring_len;
-            }
-        }
+        self.bytes_adaptive += delta_len;
 
         match id_count {
             1..=10 => self.bucket_1_10 += 1,
@@ -1275,222 +1216,12 @@ impl GameSetEncodingStats {
         }
     }
 
-    pub fn merge(&mut self, other: &GameSetEncodingStats) {
-        self.total_game_sets += other.total_game_sets;
-        self.delta_varint_count += other.delta_varint_count;
-        self.roaring_count += other.roaring_count;
-        self.bytes_if_all_delta += other.bytes_if_all_delta;
-        self.bytes_if_all_roaring += other.bytes_if_all_roaring;
-        self.bytes_adaptive += other.bytes_adaptive;
-        self.bucket_1_10 += other.bucket_1_10;
-        self.bucket_11_100 += other.bucket_11_100;
-        self.bucket_101_1k += other.bucket_101_1k;
-        self.bucket_1k_10k += other.bucket_1k_10k;
-        self.bucket_10k_100k += other.bucket_10k_100k;
-        self.bucket_100k_plus += other.bucket_100k_plus;
-    }
-
     pub fn savings_vs_delta_pct(&self) -> f64 {
-        if self.bytes_if_all_delta == 0 { return 0.0; }
-        ((self.bytes_if_all_delta as f64 - self.bytes_adaptive as f64) / self.bytes_if_all_delta as f64) * 100.0
+        0.0
     }
 
     pub fn savings_vs_roaring_pct(&self) -> f64 {
-        if self.bytes_if_all_roaring == 0 { return 0.0; }
-        ((self.bytes_if_all_roaring as f64 - self.bytes_adaptive as f64) / self.bytes_if_all_roaring as f64) * 100.0
-    }
-}
-
-/// Unified GameSet abstraction supporting Delta-Varint and Roaring Bitmap backends
-#[derive(Debug, Clone, PartialEq)]
-pub enum GameSet {
-    DeltaVarint(Vec<u32>),
-    Roaring(roaring::RoaringBitmap),
-}
-
-impl GameSet {
-    #[inline]
-    pub fn set_type(&self) -> GameSetType {
-        match self {
-            GameSet::DeltaVarint(_) => GameSetType::DeltaVarint,
-            GameSet::Roaring(_) => GameSetType::Roaring,
-        }
-    }
-
-    #[inline]
-    pub fn count(&self) -> usize {
-        match self {
-            GameSet::DeltaVarint(v) => v.len(),
-            GameSet::Roaring(bm) => bm.len() as usize,
-        }
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        match self {
-            GameSet::DeltaVarint(v) => v.is_empty(),
-            GameSet::Roaring(bm) => bm.is_empty(),
-        }
-    }
-
-    #[inline]
-    pub fn contains(&self, id: u32) -> bool {
-        match self {
-            GameSet::DeltaVarint(v) => v.binary_search(&id).is_ok(),
-            GameSet::Roaring(bm) => bm.contains(id),
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<u32> {
-        match self {
-            GameSet::DeltaVarint(v) => v.clone(),
-            GameSet::Roaring(bm) => bm.iter().collect(),
-        }
-    }
-
-    pub fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = u32> + 'a> {
-        match self {
-            GameSet::DeltaVarint(v) => Box::new(v.iter().copied()),
-            GameSet::Roaring(bm) => Box::new(bm.iter()),
-        }
-    }
-
-    pub fn intersect(&self, other: &GameSet) -> GameSet {
-        match (self, other) {
-            (GameSet::Roaring(a), GameSet::Roaring(b)) => {
-                GameSet::Roaring(a & b)
-            }
-            (GameSet::DeltaVarint(a), GameSet::DeltaVarint(b)) => {
-                let mut res = Vec::new();
-                let mut i = 0;
-                let mut j = 0;
-                while i < a.len() && j < b.len() {
-                    if a[i] == b[j] {
-                        res.push(a[i]);
-                        i += 1;
-                        j += 1;
-                    } else if a[i] < b[j] {
-                        i += 1;
-                    } else {
-                        j += 1;
-                    }
-                }
-                GameSet::DeltaVarint(res)
-            }
-            (GameSet::Roaring(bm), GameSet::DeltaVarint(v)) | (GameSet::DeltaVarint(v), GameSet::Roaring(bm)) => {
-                let res: Vec<u32> = v.iter().filter(|&&id| bm.contains(id)).copied().collect();
-                GameSet::DeltaVarint(res)
-            }
-        }
-    }
-
-    pub fn intersection_count(&self, other: &GameSet) -> usize {
-        match (self, other) {
-            (GameSet::Roaring(a), GameSet::Roaring(b)) => {
-                (a & b).len() as usize
-            }
-            (GameSet::DeltaVarint(a), GameSet::DeltaVarint(b)) => {
-                let mut count = 0;
-                let mut i = 0;
-                let mut j = 0;
-                while i < a.len() && j < b.len() {
-                    if a[i] == b[j] {
-                        count += 1;
-                        i += 1;
-                        j += 1;
-                    } else if a[i] < b[j] {
-                        i += 1;
-                    } else {
-                        j += 1;
-                    }
-                }
-                count
-            }
-            (GameSet::Roaring(bm), GameSet::DeltaVarint(v)) | (GameSet::DeltaVarint(v), GameSet::Roaring(bm)) => {
-                v.iter().filter(|&&id| bm.contains(id)).count()
-            }
-        }
-    }
-
-    pub fn intersect_with_hashset(&self, set: &std::collections::HashSet<u32>) -> usize {
-        match self {
-            GameSet::DeltaVarint(v) => v.iter().filter(|id| set.contains(id)).count(),
-            GameSet::Roaring(bm) => {
-                if set.len() < bm.len() as usize {
-                    set.iter().filter(|&id| bm.contains(*id)).count()
-                } else {
-                    bm.iter().filter(|id| set.contains(id)).count()
-                }
-            }
-        }
-    }
-
-    pub fn intersect_ids_with_hashset(&self, set: &std::collections::HashSet<u32>) -> Vec<u32> {
-        match self {
-            GameSet::DeltaVarint(v) => v.iter().filter(|id| set.contains(id)).copied().collect(),
-            GameSet::Roaring(bm) => {
-                if set.len() < bm.len() as usize {
-                    let mut res: Vec<u32> = set.iter().filter(|&id| bm.contains(*id)).copied().collect();
-                    res.sort_unstable();
-                    res
-                } else {
-                    bm.iter().filter(|id| set.contains(id)).collect()
-                }
-            }
-        }
-    }
-
-    /// Adaptive size-based encoding: evaluates DeltaVarint vs RoaringBitmap byte size and selects smaller one
-    pub fn encode_adaptive(ids: &[u32], mut stats: Option<&mut GameSetEncodingStats>) -> Vec<u8> {
-        // 1. Delta-varint encoding (1 byte tag 0 + varints)
-        let mut delta_buf = Vec::with_capacity(1 + ids.len() * 2);
-        delta_buf.push(GameSetType::DeltaVarint as u8);
-        let _ = write_delta_game_ids(&mut delta_buf, ids);
-
-        // 2. Roaring bitmap encoding (1 byte tag 1 + roaring serialized)
-        let mut roaring_buf = Vec::with_capacity(1 + ids.len() * 2);
-        roaring_buf.push(GameSetType::Roaring as u8);
-        let mut bm = roaring::RoaringBitmap::new();
-        for &id in ids {
-            bm.insert(id);
-        }
-        let _ = bm.serialize_into(&mut roaring_buf);
-
-        let chosen = if roaring_buf.len() < delta_buf.len() {
-            GameSetType::Roaring
-        } else {
-            GameSetType::DeltaVarint
-        };
-
-        if let Some(ref mut st) = stats {
-            st.record_sample(ids.len(), delta_buf.len(), roaring_buf.len(), chosen);
-        }
-
-        match chosen {
-            GameSetType::Roaring => roaring_buf,
-            GameSetType::DeltaVarint => delta_buf,
-        }
-    }
-
-    /// Transparent decoding from byte slice
-    pub fn decode(bytes: &mut &[u8]) -> Result<Self> {
-        if bytes.is_empty() {
-            anyhow::bail!("Unexpected EOF reading GameSet header");
-        }
-        let type_tag = bytes[0];
-        *bytes = &bytes[1..];
-
-        match type_tag {
-            0 => {
-                let ids = read_delta_game_ids(bytes)?;
-                Ok(GameSet::DeltaVarint(ids))
-            }
-            1 => {
-                let bm = roaring::RoaringBitmap::deserialize_from(bytes)?;
-                Ok(GameSet::Roaring(bm))
-            }
-            tag => anyhow::bail!("Unsupported GameSet encoding tag: {}", tag),
-        }
+        0.0
     }
 }
 
@@ -1570,11 +1301,11 @@ fn encode_position_payload(node: &PositionNode, mut stats: Option<&mut GameSetEn
         let _ = write_varint(&mut buf, m.total_games as u64);
         let _ = write_varint(&mut buf, m.white_wins as u64);
         let _ = write_varint(&mut buf, m.black_wins as u64);
-        buf.extend_from_slice(&m.white_elo_sum.to_le_bytes());
-        buf.extend_from_slice(&m.black_elo_sum.to_le_bytes());
-        buf.extend_from_slice(&m.elo_count.to_le_bytes());
-        let encoded_set = GameSet::encode_adaptive(&m.game_ids, stats.as_deref_mut());
-        buf.extend_from_slice(&encoded_set);
+        let prev_len = buf.len();
+        let _ = write_delta_game_ids(&mut buf, &m.game_ids);
+        if let Some(ref mut st) = stats {
+            st.record_sample(m.game_ids.len(), buf.len() - prev_len);
+        }
     }
 
     buf
@@ -1599,16 +1330,7 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
         let m_bw = read_varint(&mut bytes)? as u32;
         let m_dr = m_total.saturating_sub(m_ww + m_bw);
 
-        if bytes.len() < 20 {
-            break;
-        }
-        let m_welo = u64::from_le_bytes(bytes[0..8].try_into()?);
-        let m_belo = u64::from_le_bytes(bytes[8..16].try_into()?);
-        let m_elo_cnt = u32::from_le_bytes(bytes[16..20].try_into()?);
-        bytes = &bytes[20..];
-
-        let game_set = GameSet::decode(&mut bytes)?;
-        let game_ids = game_set.to_vec();
+        let game_ids = read_delta_game_ids(&mut bytes)?;
 
         moves.push(MoveStats {
             packed_move,
@@ -1616,9 +1338,6 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
             white_wins: m_ww,
             draws: m_dr,
             black_wins: m_bw,
-            white_elo_sum: m_welo,
-            black_elo_sum: m_belo,
-            elo_count: m_elo_cnt,
             game_ids,
         });
     }
@@ -1662,8 +1381,6 @@ impl StripedPositionMap {
         w_win: u32,
         draw: u32,
         b_win: u32,
-        white_elo: u16,
-        black_elo: u16,
         game_id: u32,
         max_game_ids: usize,
     ) {
@@ -1693,9 +1410,6 @@ impl StripedPositionMap {
                 white_wins: 0,
                 draws: 0,
                 black_wins: 0,
-                white_elo_sum: 0,
-                black_elo_sum: 0,
-                elo_count: 0,
                 game_ids: Vec::new(),
             });
             node.moves.last_mut().unwrap()
@@ -1705,11 +1419,6 @@ impl StripedPositionMap {
         move_stat.white_wins += w_win;
         move_stat.draws += draw;
         move_stat.black_wins += b_win;
-        if white_elo > 0 && black_elo > 0 {
-            move_stat.white_elo_sum += white_elo as u64;
-            move_stat.black_elo_sum += black_elo as u64;
-            move_stat.elo_count += 1;
-        }
         if (max_game_ids == 0 || move_stat.game_ids.len() < max_game_ids) && move_stat.game_ids.last().copied() != Some(game_id) {
             move_stat.game_ids.push(game_id);
         }
@@ -1770,16 +1479,8 @@ pub fn generate_opening_tree_report(
                 white_wins: m.white_wins,
                 draws: m.draws,
                 black_wins: m.black_wins,
-                avg_white_elo: if m.elo_count > 0 {
-                    Some((m.white_elo_sum / m.elo_count as u64) as u32)
-                } else {
-                    None
-                },
-                avg_black_elo: if m.elo_count > 0 {
-                    Some((m.black_elo_sum / m.elo_count as u64) as u32)
-                } else {
-                    None
-                },
+                avg_white_elo: None,
+                avg_black_elo: None,
                 sample_game_ids,
             }
         })
@@ -1860,17 +1561,6 @@ pub fn generate_filtered_opening_tree_report(
         filtered_draws += md;
         filtered_black_wins += mb;
 
-        let avg_w_elo = if m.elo_count > 0 {
-            Some((m.white_elo_sum / m.elo_count as u64) as u32)
-        } else {
-            None
-        };
-        let avg_b_elo = if m.elo_count > 0 {
-            Some((m.black_elo_sum / m.elo_count as u64) as u32)
-        } else {
-            None
-        };
-
         let sample_game_ids: Vec<u32> = matched_ids.iter().take(20).copied().collect();
         for &id in &matched_ids {
             if all_sample_game_ids.len() < 50 && !all_sample_game_ids.contains(&id) {
@@ -1897,8 +1587,8 @@ pub fn generate_filtered_opening_tree_report(
             white_wins: mw,
             draws: md,
             black_wins: mb,
-            avg_white_elo: avg_w_elo,
-            avg_black_elo: avg_b_elo,
+            avg_white_elo: None,
+            avg_black_elo: None,
             sample_game_ids,
         });
     }
@@ -1959,8 +1649,6 @@ struct PgnTreeVisitor<'a> {
     w_win: u32,
     draw: u32,
     b_win: u32,
-    white_elo: u16,
-    black_elo: u16,
     game_id: u32,
     max_game_ids: usize,
     pos: Chess,
@@ -1973,8 +1661,6 @@ impl<'a> PgnTreeVisitor<'a> {
         w_win: u32,
         draw: u32,
         b_win: u32,
-        white_elo: u16,
-        black_elo: u16,
         game_id: u32,
         max_game_ids: usize,
         accumulator: &'a StripedPositionMap,
@@ -1985,8 +1671,6 @@ impl<'a> PgnTreeVisitor<'a> {
             w_win,
             draw,
             b_win,
-            white_elo,
-            black_elo,
             game_id,
             max_game_ids,
             pos: Chess::default(),
@@ -2017,8 +1701,6 @@ impl<'a> pgn_reader::Visitor for PgnTreeVisitor<'a> {
                 self.w_win,
                 self.draw,
                 self.b_win,
-                self.white_elo,
-                self.black_elo,
                 self.game_id,
                 self.max_game_ids,
             );
@@ -2125,9 +1807,6 @@ mod tests {
                     white_wins: 25,
                     draws: 20,
                     black_wins: 15,
-                    white_elo_sum: 120000,
-                    black_elo_sum: 119000,
-                    elo_count: 50,
                     game_ids: vec![1, 5, 12],
                 },
                 MoveStats {
@@ -2136,9 +1815,6 @@ mod tests {
                     white_wins: 15,
                     draws: 10,
                     black_wins: 15,
-                    white_elo_sum: 80000,
-                    black_elo_sum: 79500,
-                    elo_count: 35,
                     game_ids: vec![2, 7],
                 },
             ],
@@ -2166,121 +1842,39 @@ mod tests {
     #[test]
     fn test_sorted_index_binary_search() {
         let entries = vec![
-            SortedIndexEntry { hash: 100, data_offset: 0, data_len: 32 },
-            SortedIndexEntry { hash: 200, data_offset: 32, data_len: 48 },
-            SortedIndexEntry { hash: 300, data_offset: 80, data_len: 40 },
-            SortedIndexEntry { hash: 400, data_offset: 120, data_len: 56 },
+            SortedIndexEntry { hash: 100, data_offset: 0 },
+            SortedIndexEntry { hash: 200, data_offset: 32 },
+            SortedIndexEntry { hash: 300, data_offset: 80 },
+            SortedIndexEntry { hash: 400, data_offset: 120 },
         ];
 
-        let idx = entries.binary_search_by_key(&200, |e| e.hash);
+        let idx = entries.binary_search_by_key(&200, |e| { e.hash });
         assert_eq!(idx, Ok(1));
-        assert_eq!(entries[1].data_offset, 32);
+        let offset = entries[1].data_offset;
+        assert_eq!(offset, 32);
 
-        let missing = entries.binary_search_by_key(&250, |e| e.hash);
+        let missing = entries.binary_search_by_key(&250, |e| { e.hash });
         assert!(missing.is_err());
     }
 
     #[test]
-    fn test_gameset_delta_varint_samples() {
+    fn test_delta_varint_samples() {
         let samples: Vec<Vec<u32>> = vec![
             vec![],
             vec![1],
             vec![1, 2],
             vec![100, 105, 110],
             vec![0, 1, 2, 1000000],
+            (0..50000).collect(),
         ];
 
         for ids in samples {
-            let encoded = GameSet::encode_adaptive(&ids, None);
-            let mut slice = encoded.as_slice();
-            let decoded = GameSet::decode(&mut slice).expect("Failed to decode GameSet");
-            assert_eq!(decoded.count(), ids.len());
-            assert_eq!(decoded.to_vec(), ids);
+            let mut buf = Vec::new();
+            write_delta_game_ids(&mut buf, &ids).expect("write failed");
+            let mut slice = buf.as_slice();
+            let decoded = read_delta_game_ids(&mut slice).expect("read failed");
+            assert_eq!(decoded, ids);
         }
-    }
-
-    #[test]
-    fn test_gameset_roaring_samples() {
-        let sparse = vec![1, 500000, 999999];
-        let dense: Vec<u32> = (0..50000).collect();
-
-        for ids in [sparse, dense] {
-            let encoded = GameSet::encode_adaptive(&ids, None);
-            let mut slice = encoded.as_slice();
-            let decoded = GameSet::decode(&mut slice).expect("Failed to decode GameSet");
-            assert_eq!(decoded.count(), ids.len());
-            assert_eq!(decoded.to_vec(), ids);
-        }
-    }
-
-    #[test]
-    fn test_gameset_adaptive_selection_chooses_smaller() {
-        // Small list where delta-varint is tiny (3 IDs = 1 byte tag + 1 byte count + 3 byte deltas = 5 bytes vs roaring header 8+ bytes)
-        let small_ids = vec![100, 105, 110];
-        let encoded_small = GameSet::encode_adaptive(&small_ids, None);
-        assert_eq!(encoded_small[0], GameSetType::DeltaVarint as u8);
-
-        // Huge dense consecutive block where Roaring bitmap run-length encoding is vastly superior (e.g. 100k IDs)
-        let dense_ids: Vec<u32> = (0..100000).collect();
-        let encoded_dense = GameSet::encode_adaptive(&dense_ids, None);
-        assert_eq!(encoded_dense[0], GameSetType::Roaring as u8);
-    }
-
-    #[test]
-    fn test_gameset_membership_and_iteration() {
-        let ids = vec![5, 10, 15, 20, 100, 500, 1000];
-        let encoded = GameSet::encode_adaptive(&ids, None);
-        let mut slice = encoded.as_slice();
-        let decoded = GameSet::decode(&mut slice).expect("decode failed");
-
-        for &id in &ids {
-            assert!(decoded.contains(id));
-        }
-        assert!(!decoded.contains(0));
-        assert!(!decoded.contains(6));
-        assert!(!decoded.contains(99));
-        assert!(!decoded.contains(1001));
-
-        let iterated: Vec<u32> = decoded.iter().collect();
-        assert_eq!(iterated, ids);
-    }
-
-    #[test]
-    fn test_gameset_intersections_all_combinations() {
-        let set_a = vec![10, 20, 30, 40, 50];
-        let set_b = vec![20, 40, 60, 80];
-        let expected_intersection = vec![20, 40];
-
-        let delta_a = GameSet::DeltaVarint(set_a.clone());
-        let delta_b = GameSet::DeltaVarint(set_b.clone());
-
-        let mut bm_a = roaring::RoaringBitmap::new();
-        for &id in &set_a { bm_a.insert(id); }
-        let roaring_a = GameSet::Roaring(bm_a);
-
-        let mut bm_b = roaring::RoaringBitmap::new();
-        for &id in &set_b { bm_b.insert(id); }
-        let roaring_b = GameSet::Roaring(bm_b);
-
-        // Delta ∩ Delta
-        let res_dd = delta_a.intersect(&delta_b);
-        assert_eq!(res_dd.to_vec(), expected_intersection);
-        assert_eq!(delta_a.intersection_count(&delta_b), 2);
-
-        // Delta ∩ Roaring
-        let res_dr = delta_a.intersect(&roaring_b);
-        assert_eq!(res_dr.to_vec(), expected_intersection);
-        assert_eq!(delta_a.intersection_count(&roaring_b), 2);
-
-        // Roaring ∩ Delta
-        let res_rd = roaring_a.intersect(&delta_b);
-        assert_eq!(res_rd.to_vec(), expected_intersection);
-        assert_eq!(roaring_a.intersection_count(&delta_b), 2);
-
-        // Roaring ∩ Roaring
-        let res_rr = roaring_a.intersect(&roaring_b);
-        assert_eq!(res_rr.to_vec(), expected_intersection);
-        assert_eq!(roaring_a.intersection_count(&roaring_b), 2);
     }
 }
 
