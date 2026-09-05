@@ -3,7 +3,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox
+    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QComboBox
 )
 from ..backend_client import BackendClient
 from .board_widget import ChessBoardEditorWidget
@@ -44,6 +44,13 @@ class OpeningTreeWidget(QWidget):
         tb_layout.addWidget(self.lbl_moves_seq)
 
         tb_layout.addStretch()
+
+        self.combo_scope = QComboBox()
+        self.combo_scope.addItems(["🌐 Entire Database", "🔍 Search Results"])
+        self.combo_scope.setToolTip("Choose whether to calculate tree statistics across the entire database or only for current search results")
+        self.combo_scope.setStyleSheet("padding: 2px 6px; font-size: 11px; font-weight: bold;")
+        self.combo_scope.currentIndexChanged.connect(self.on_scope_changed)
+        tb_layout.addWidget(self.combo_scope)
 
         self.btn_unload = QPushButton("🧹 Free Memory")
         self.btn_unload.setToolTip("Unloads the position index from RAM")
@@ -118,6 +125,15 @@ class OpeningTreeWidget(QWidget):
 
         main_layout.addWidget(splitter)
 
+    def on_scope_changed(self, index: int):
+        if index == 1:
+            self.lbl_index_badge.setText("🔍 Filtered Search Results (Live)")
+            self.lbl_index_badge.setStyleSheet("color: #1565c0; font-weight: bold; font-size: 11px;")
+        else:
+            self.lbl_index_badge.setText("⚡ Entire Database")
+            self.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        self.refresh_current_position()
+
     def refresh_current_position(self):
         if not self.client.is_running():
             return
@@ -125,7 +141,12 @@ class OpeningTreeWidget(QWidget):
         self.board_editor.board = self.board.copy()
         self.board_editor.update_board_ui()
         self._update_history_label()
-        self.client.send_request("opening_tree", {"fen": fen})
+
+        use_search_results = (self.combo_scope.currentIndex() == 1) if hasattr(self, 'combo_scope') else False
+        params = {"fen": fen}
+        if use_search_results:
+            params["use_search_results"] = True
+        self.client.send_request("opening_tree", params)
 
     def go_to_start(self):
         self.board = chess.Board()

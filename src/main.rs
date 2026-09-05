@@ -224,6 +224,10 @@ enum Commands {
         #[arg(long, default_value = "24")]
         max_ply: usize,
 
+        /// Max game IDs to store per move (default: 0 for all games / unlimited)
+        #[arg(long, default_value = "0")]
+        max_games: usize,
+
         /// Number of worker threads (default: all available CPU cores)
         #[arg(long)]
         threads: Option<usize>,
@@ -351,9 +355,8 @@ fn main() -> Result<()> {
                 let res = pgn_db.search_position(&fen, None, None, Some(max_ply), |_, _, _| {})?;
                 let mut summs = std::collections::HashMap::new();
                 for m in res.matches.iter().take(50) {
-                    if let Some(e) = pgn_db.entries.get(m.game_id) {
-                        summs.insert(m.game_id, (e.white.clone(), e.black.clone(), e.result.clone(), e.date.clone()));
-                    }
+                    let g = pgn_db.get_summary(m.game_id);
+                    summs.insert(m.game_id, (g.white, g.black, g.result, g.date));
                 }
                 (res, summs)
             } else {
@@ -436,9 +439,8 @@ fn main() -> Result<()> {
                 let matches = pgn_db.search_material(&mat_filter, |_, _, _| {})?;
                 let mut summs = std::collections::HashMap::new();
                 for &gid in matches.iter().take(50) {
-                    if let Some(e) = pgn_db.entries.get(gid) {
-                        summs.insert(gid, (e.white.clone(), e.black.clone(), e.result.clone(), e.date.clone()));
-                    }
+                    let g = pgn_db.get_summary(gid);
+                    summs.insert(gid, (g.white, g.black, g.result, g.date));
                 }
                 (matches, pgn_db.game_count(), summs)
             } else {
@@ -608,12 +610,13 @@ fn main() -> Result<()> {
             println!("==========================================================================================");
             println!("Overall Benchmark Duration: {:.2} ms ({:.2} s)\n", report.total_time_ms, report.total_time_ms / 1000.0);
         }
-        Some(Commands::BuildPosIdx { db_path, max_ply, threads }) => {
+        Some(Commands::BuildPosIdx { db_path, max_ply, max_games, threads }) => {
             let start = std::time::Instant::now();
             let path_str = db_path.to_string_lossy();
+            let max_games_opt = if max_games > 0 { Some(max_games) } else { None };
             let idx = if path_str.ends_with(".pgn") {
                 let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
-                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, threads, |scanned, total, positions| {
+                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, max_games_opt, threads, |scanned, total, positions| {
                     print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 })?
@@ -622,7 +625,7 @@ fn main() -> Result<()> {
                 let games_path = db.games_path().to_path_buf();
                 let entries = db.entries();
                 let db_path_buf = db.index_path().to_path_buf();
-                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, threads, |scanned, total, positions| {
+                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, max_games_opt, threads, |scanned, total, positions| {
                     print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 })?
@@ -631,9 +634,37 @@ fn main() -> Result<()> {
             println!("\n[OK] Built {} in {:.2} ms ({} unique positions).", idx.path.display(), elapsed_ms, idx.header.unique_positions);
         }
         Some(Commands::Tree { db_path, fen }) => {
-            let idx = position_index::PositionIndex::load(&db_path)?;
             let fen_str = fen.as_deref().unwrap_or("");
-            if let Some(tree) = idx.query_tree(fen_str) {
+            let mut tree_report = position_index::PositionIndex::load(&db_path)
+                .ok()
+                .and_then(|idx| idx.query_tree(fen_str));
+
+            if tree_report.is_none() {
+                let lower = db_path.to_string_lossy().to_lowercase();
+                if lower.ends_with(".pgn") {
+                    if let Ok(pgn_db) = pgn_db::PgnDatabaseWrapper::open(&db_path) {
+                        tree_report = position_index::PositionIndex::calculate_tree_for_pgn(
+                            &pgn_db.entries,
+                            pgn_db.mmap_ref(),
+                            fen_str,
+                            None,
+                            Some(500),
+                        );
+                    }
+                } else if lower.ends_with(".si5") || lower.ends_with(".si4") || lower.ends_with(".sg5") || lower.ends_with(".sg4") || lower.ends_with(".sn5") || lower.ends_with(".sn4") {
+                    if let Ok(scid_db) = db::ScidDatabaseWrapper::open(&db_path) {
+                        tree_report = position_index::PositionIndex::calculate_tree_for_scid(
+                            scid_db.entries(),
+                            scid_db.games_path(),
+                            fen_str,
+                            None,
+                            Some(500),
+                        );
+                    }
+                }
+            }
+
+            if let Some(tree) = tree_report {
                 println!("Opening Tree for position (Total Games: {} | +{:.1}% / ={:.1}% / -{:.1}%):", tree.total_games, tree.white_pct, tree.draw_pct, tree.black_pct);
                 println!("{:<6} | {:<8} | {:<10} | {:<7} | {:<7} | {:<7} | {:<8}",
                     "Move", "UCI", "Games", "1-0 %", "1/2 %", "0-1 %", "Avg Elo");
@@ -649,7 +680,7 @@ fn main() -> Result<()> {
                         m.san, m.uci, m.total_games, m.white_pct, m.draw_pct, m.black_pct, avg_elo_str);
                 }
             } else {
-                println!("No games found reaching this position in the opening index.");
+                println!("No games found reaching this position.");
             }
         }
         None => {

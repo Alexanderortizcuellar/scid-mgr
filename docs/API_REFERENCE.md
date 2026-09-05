@@ -82,7 +82,10 @@ Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loade
 Queries the instant Opening Tree / Explorer for any board position (FEN or starting board).
 - **Params**:
   - `fen`: `string` (optional FEN position; defaults to starting board)
-- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo }] }`
+  - `use_search_results`: `boolean` (optional; if `true`, calculates stats strictly for the current filtered search results)
+  - `game_ids`: `number[]` (optional; calculates stats strictly for an explicit list of game IDs)
+  - `filter`: `GameFilter` (optional; dynamically filters games by player, date, ECO, rating, etc. before computing position tree)
+- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo, sample_game_ids }], sample_game_ids }`
 
 ### `pos_index_status`
 Checks the companion `.pos.idx` index status (`valid`, `outdated`, `missing`) and game counts.

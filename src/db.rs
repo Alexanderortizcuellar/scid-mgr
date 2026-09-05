@@ -85,6 +85,19 @@ impl GameFilter {
             && self.match_mode == other.match_mode
             && self.material == other.material
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.player.as_deref().unwrap_or("").trim().is_empty()
+            && self.white.as_deref().unwrap_or("").trim().is_empty()
+            && self.black.as_deref().unwrap_or("").trim().is_empty()
+            && self.result.as_deref().unwrap_or("").trim().is_empty()
+            && self.eco.as_deref().unwrap_or("").trim().is_empty()
+            && self.date.as_deref().unwrap_or("").trim().is_empty()
+            && self.event.as_deref().unwrap_or("").trim().is_empty()
+            && self.site.as_deref().unwrap_or("").trim().is_empty()
+            && !self.only_deleted.unwrap_or(false)
+            && self.material.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -921,6 +934,14 @@ impl ScidDatabaseWrapper {
         page_size: usize,
     ) -> (Vec<GameSummary>, usize) {
         self.query_games_with_progress(filter, page, page_size, |_, _, _| {})
+    }
+
+    pub fn get_cached_query_indices(&self) -> Option<Vec<usize>> {
+        if let Ok(guard) = self.query_cache.lock() {
+            guard.as_ref().map(|(_, indices)| indices.clone())
+        } else {
+            None
+        }
     }
 
     pub fn sort_indices(&self, matched_indices: &mut [usize], sort_by: Option<&str>, sort_asc: Option<bool>) {

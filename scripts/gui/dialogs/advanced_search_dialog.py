@@ -179,22 +179,72 @@ class AdvancedSearchDialog(QDialog):
         self.in_fen.textChanged.connect(self.on_fen_text_edited)
         controls_col.addWidget(self.in_fen)
 
+        # Side to Move & Matching Mode Settings
+        options_box = QGroupBox("Position Search Options")
+        options_layout = QVBoxLayout(options_box)
+        options_layout.setSpacing(8)
+
+        # Side to Move
+        turn_row = QHBoxLayout()
+        turn_row.addWidget(QLabel("<b>Side to Move:</b>"))
+        self.rb_turn_any = QRadioButton("Any (Either)")
+        self.rb_turn_any.setChecked(True)
+        self.rb_turn_any.toggled.connect(self.mark_pos_modified)
+        self.rb_turn_w = QRadioButton("White (w)")
+        self.rb_turn_w.toggled.connect(self.mark_pos_modified)
+        self.rb_turn_b = QRadioButton("Black (b)")
+        self.rb_turn_b.toggled.connect(self.mark_pos_modified)
+        self.turn_group = QButtonGroup(self)
+        self.turn_group.addButton(self.rb_turn_any)
+        self.turn_group.addButton(self.rb_turn_w)
+        self.turn_group.addButton(self.rb_turn_b)
+        turn_row.addWidget(self.rb_turn_any)
+        turn_row.addWidget(self.rb_turn_w)
+        turn_row.addWidget(self.rb_turn_b)
+        turn_row.addStretch()
+        options_layout.addLayout(turn_row)
+
+        # Match Mode
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("<b>Match Mode:</b>"))
+        self.rb_mode_board = QRadioButton("Board Layout")
+        self.rb_mode_board.setChecked(True)
+        self.rb_mode_board.setToolTip("Matches all 64 squares piece placement (ignores turn/castling discrepancies)")
+        self.rb_mode_board.toggled.connect(self.mark_pos_modified)
+        self.rb_mode_exact = QRadioButton("Exact (Board+Turn+Castles)")
+        self.rb_mode_exact.toggled.connect(self.mark_pos_modified)
+        self.rb_mode_partial = QRadioButton("Partial (Placed Pieces)")
+        self.rb_mode_partial.setToolTip("Matches games where the placed pieces appear on their squares")
+        self.rb_mode_partial.toggled.connect(self.mark_pos_modified)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.rb_mode_board)
+        self.mode_group.addButton(self.rb_mode_exact)
+        self.mode_group.addButton(self.rb_mode_partial)
+        mode_row.addWidget(self.rb_mode_board)
+        mode_row.addWidget(self.rb_mode_exact)
+        mode_row.addWidget(self.rb_mode_partial)
+        mode_row.addStretch()
+        options_layout.addLayout(mode_row)
+
+        # Depth
         depth_row = QHBoxLayout()
-        depth_row.addWidget(QLabel("Max Search Ply (Depth):"))
+        depth_row.addWidget(QLabel("<b>Max Search Ply (Depth):</b>"))
         self.spin_max_ply = QSpinBox()
         self.spin_max_ply.setRange(1, 1000)
         self.spin_max_ply.setValue(250)
         self.spin_max_ply.valueChanged.connect(self.mark_pos_modified)
         depth_row.addWidget(self.spin_max_ply)
         depth_row.addStretch()
-        controls_col.addLayout(depth_row)
+        options_layout.addLayout(depth_row)
+
+        controls_col.addWidget(options_box)
 
         desc_lbl = QLabel(
-            "💡 <i>Tip: Setup any piece pattern above (e.g. a single Queen on d4). "
+            "💡 <i>Tip: Setup any piece pattern above (e.g. a single Queen on d4, or Sicilian pawn structures). "
             "The search engine will find all games where those pieces appear on those squares!</i>"
         )
         desc_lbl.setWordWrap(True)
-        desc_lbl.setStyleSheet("color: #555; font-size: 11px; padding: 4px;")
+        desc_lbl.setStyleSheet("color: #555; font-size: 11px; padding: 2px;")
         controls_col.addWidget(desc_lbl)
 
         preset_box = QGroupBox("Common Position Presets")
@@ -204,21 +254,21 @@ class AdvancedSearchDialog(QDialog):
         btn_start_pos.clicked.connect(lambda: self.board_editor.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"))
         preset_grid.addWidget(btn_start_pos, 0, 0)
 
+        btn_alapin = QPushButton("Sicilian Alapin (2.c3)")
+        btn_alapin.clicked.connect(lambda: self.board_editor.set_fen("rnbqkbnr/pp1ppppp/8/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR b KQkq - 0 2"))
+        preset_grid.addWidget(btn_alapin, 0, 1)
+
         btn_najdorf = QPushButton("Sicilian Najdorf (6.Be2)")
         btn_najdorf.clicked.connect(lambda: self.board_editor.set_fen("rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6"))
-        preset_grid.addWidget(btn_najdorf, 0, 1)
+        preset_grid.addWidget(btn_najdorf, 1, 0)
+
+        btn_alekhine = QPushButton("Alekhine's Defense (1...Nf6)")
+        btn_alekhine.clicked.connect(lambda: self.board_editor.set_fen("rnbqkb1r/pppppppp/5n2/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"))
+        preset_grid.addWidget(btn_alekhine, 1, 1)
 
         btn_french = QPushButton("French Defense (3.Nc3)")
         btn_french.clicked.connect(lambda: self.board_editor.set_fen("rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/2N5/PPP2PPP/R1BQKBNR b KQkq - 1 3"))
-        preset_grid.addWidget(btn_french, 1, 0)
-
-        btn_italian = QPushButton("Italian Game (Giocco Piano)")
-        btn_italian.clicked.connect(lambda: self.board_editor.set_fen("r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"))
-        preset_grid.addWidget(btn_italian, 1, 1)
-
-        btn_qgd = QPushButton("Queen's Gambit Declined")
-        btn_qgd.clicked.connect(lambda: self.board_editor.set_fen("rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 0 4"))
-        preset_grid.addWidget(btn_qgd, 2, 0)
+        preset_grid.addWidget(btn_french, 2, 0)
 
         btn_clear_fen = QPushButton("Clear FEN")
         btn_clear_fen.clicked.connect(lambda: self.board_editor.clear_board())
@@ -509,6 +559,18 @@ class AdvancedSearchDialog(QDialog):
             if "fen" in f and f["fen"]: 
                 self.in_fen.setText(f["fen"])
                 has_pos = True
+            if "turn" in f and f["turn"]:
+                t = f["turn"].lower()
+                if t in ("w", "white"): self.rb_turn_w.setChecked(True)
+                elif t in ("b", "black"): self.rb_turn_b.setChecked(True)
+                else: self.rb_turn_any.setChecked(True)
+            if "match_mode" in f and f["match_mode"]:
+                m = f["match_mode"].lower()
+                if m == "exact": self.rb_mode_exact.setChecked(True)
+                elif m == "partial": self.rb_mode_partial.setChecked(True)
+                else: self.rb_mode_board.setChecked(True)
+            if "max_ply" in f and f["max_ply"]:
+                self.spin_max_ply.setValue(int(f["max_ply"]))
             
             has_mat = False
             mat = f.get("material")
@@ -576,7 +638,11 @@ class AdvancedSearchDialog(QDialog):
         # 2. Position Tab
         if self.chk_enable_pos.isChecked():
             fen = self.in_fen.text().strip()
-            if fen: f["fen"] = fen
+            if fen:
+                f["fen"] = fen
+                f["turn"] = "w" if self.rb_turn_w.isChecked() else ("b" if self.rb_turn_b.isChecked() else "any")
+                f["match_mode"] = "exact" if self.rb_mode_exact.isChecked() else ("partial" if self.rb_mode_partial.isChecked() else "board_only")
+                f["max_ply"] = self.spin_max_ply.value()
 
         # 3. Material Tab
         if self.chk_enable_mat.isChecked():

@@ -633,51 +633,114 @@ fn handle_command(
 
         "opening_tree" | "query_tree" => {
             let fen = req.params.get("fen").and_then(|v| v.as_str()).unwrap_or("");
-            
-            // Lazy-load on demand if not already loaded in memory
-            if current_pos_index.is_none() {
-                if let Some(db) = current_db {
-                    let db_path = match db {
-                        DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
-                        DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+
+            let explicit_game_ids: Option<Vec<usize>> = req.params.get("game_ids")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+            let use_search_results = req.params.get("use_search_results")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let filter_opt: Option<GameFilter> = req.params.get("filter")
+                .or_else(|| req.params.get("params"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+            let db = match current_db {
+                Some(d) => d,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
                     };
-                    *current_pos_index = PositionIndex::load(&db_path).ok();
+                }
+            };
+
+            let mut target_game_ids: Option<Vec<usize>> = explicit_game_ids;
+            if target_game_ids.is_none() && use_search_results {
+                target_game_ids = match db {
+                    DatabaseBackend::Scid(s) => s.get_cached_query_indices(),
+                    DatabaseBackend::Pgn(p) => p.get_cached_query_indices(),
+                };
+            } else if target_game_ids.is_none() {
+                if let Some(ref f) = filter_opt {
+                    if !f.is_empty() {
+                        match db {
+                            DatabaseBackend::Scid(s) => { let _ = s.query_games(f, 0, 0); },
+                            DatabaseBackend::Pgn(p) => { let _ = p.query_games(f, 0, 0); },
+                        };
+                        target_game_ids = match db {
+                            DatabaseBackend::Scid(s) => s.get_cached_query_indices(),
+                            DatabaseBackend::Pgn(p) => p.get_cached_query_indices(),
+                        };
+                    }
                 }
             }
 
+            let mut report = None;
+
+            // 1. Try fast lookup from indexed .pos.idx file (both unfiltered and filtered using inverted index!)
+            if current_pos_index.is_none() {
+                let db_path = match db {
+                    DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                    DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+                };
+                *current_pos_index = PositionIndex::load(&db_path).ok();
+            }
+
             if let Some(pos_idx) = current_pos_index.as_ref() {
-                if let Some(report) = pos_idx.query_tree(fen) {
-                    ResponseMessage {
-                        id,
-                        status: "ok".to_string(),
-                        data: Some(serde_json::to_value(&report).unwrap_or_default()),
-                        error: None,
+                report = pos_idx.query_tree_with_filter(fen, target_game_ids.as_deref());
+            }
+
+            // 2. Dynamic Fallback: If .pos.idx is missing or position is beyond max depth
+            if report.is_none() {
+                report = match db {
+                    DatabaseBackend::Scid(s) => {
+                        PositionIndex::calculate_tree_for_scid(
+                            s.entries(),
+                            s.games_path(),
+                            fen,
+                            target_game_ids.as_deref(),
+                            Some(500),
+                        )
                     }
-                } else {
-                    ResponseMessage {
-                        id,
-                        status: "ok".to_string(),
-                        data: Some(serde_json::json!({
-                            "fen": fen,
-                            "total_games": 0,
-                            "moves": [],
-                            "white_wins": 0,
-                            "draws": 0,
-                            "black_wins": 0,
-                            "white_pct": 0.0,
-                            "draw_pct": 0.0,
-                            "black_pct": 0.0,
-                            "sample_game_ids": [],
-                        })),
-                        error: None,
+                    DatabaseBackend::Pgn(p) => {
+                        PositionIndex::calculate_tree_for_pgn(
+                            &p.entries,
+                            p.mmap_ref(),
+                            fen,
+                            target_game_ids.as_deref(),
+                            Some(500),
+                        )
                     }
+                };
+            }
+
+            if let Some(rep) = report {
+                ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::to_value(&rep).unwrap_or_default()),
+                    error: None,
                 }
             } else {
                 ResponseMessage {
                     id,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some("Position Index (.pos.idx) is not present. Click '⚡ Build Fast Index' to create it.".to_string()),
+                    status: "ok".to_string(),
+                    data: Some(serde_json::json!({
+                        "fen": fen,
+                        "total_games": 0,
+                        "moves": [],
+                        "white_wins": 0,
+                        "draws": 0,
+                        "black_wins": 0,
+                        "white_pct": 0.0,
+                        "draw_pct": 0.0,
+                        "black_pct": 0.0,
+                        "sample_game_ids": [],
+                    })),
+                    error: None,
                 }
             }
         }
@@ -744,6 +807,7 @@ fn handle_command(
             };
 
             let max_ply = req.params.get("max_ply").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
+            let max_games = req.params.get("max_games").or_else(|| req.params.get("max_game_ids")).and_then(|v| v.as_u64()).map(|g| g as usize);
             let threads = req.params.get("threads").and_then(|v| v.as_u64()).map(|t| t as usize).or(Some(*current_thread_count));
             let start = Instant::now();
 
@@ -752,7 +816,7 @@ fn handle_command(
                     let games_path = s.games_path().to_path_buf();
                     let entries = s.entries();
                     let db_path = s.index_path().to_path_buf();
-                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, threads, |scanned, total, positions| {
+                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, max_games, threads, |scanned, total, positions| {
                         let event_json = serde_json::json!({
                             "event": "build_pos_index_progress",
                             "data": {
@@ -773,7 +837,7 @@ fn handle_command(
                     let db_path = p.pgn_path.clone();
                     let entries = &p.entries;
                     let mmap = p.mmap_ref();
-                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, threads, |scanned, total, positions| {
+                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, max_games, threads, |scanned, total, positions| {
                         let event_json = serde_json::json!({
                             "event": "build_pos_index_progress",
                             "data": {

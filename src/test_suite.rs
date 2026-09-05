@@ -213,4 +213,351 @@ fn test_alapin_sicilian_piece_placement_search() {
     assert_eq!(res_turn.matches.len(), 1, "Explicit black turn should match!");
 }
 
+#[test]
+fn test_dynamic_opening_tree_scid_and_pgn() {
+    let pgn_content = r#"[Event "Game 1"]
+[White "White 1"]
+[Black "Black 1"]
+[Result "1-0"]
+[WhiteElo "2400"]
+[BlackElo "2300"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d4 exd4 1-0
+
+[Event "Game 2"]
+[White "White 2"]
+[Black "Black 2"]
+[Result "0-1"]
+[WhiteElo "2500"]
+[BlackElo "2600"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 0-1
+
+[Event "Game 3"]
+[White "White 3"]
+[Black "Black 3"]
+[Result "1/2-1/2"]
+[WhiteElo "2700"]
+[BlackElo "2700"]
+
+1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 1/2-1/2
+"#;
+
+    let dir = tempdir().unwrap();
+    let pgn_path = dir.path().join("tree_test.pgn");
+    std::fs::write(&pgn_path, pgn_content).unwrap();
+
+    // 1. Test Dynamic PGN Tree
+    let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path).unwrap();
+
+    // Query starting position (unfiltered: all 3 games)
+    let tree_start = crate::position_index::PositionIndex::calculate_tree_for_pgn(
+        &pgn_db.entries,
+        pgn_db.mmap_ref(),
+        "",
+        None,
+        Some(500),
+    ).expect("calculate_tree_for_pgn should succeed for starting position");
+
+    assert_eq!(tree_start.total_games, 3);
+    assert_eq!(tree_start.moves.len(), 1);
+    assert_eq!(tree_start.moves[0].san, "e4");
+    assert_eq!(tree_start.moves[0].total_games, 3);
+    assert_eq!(tree_start.moves[0].white_wins, 1);
+    assert_eq!(tree_start.moves[0].draws, 1);
+    assert_eq!(tree_start.moves[0].black_wins, 1);
+
+    // Query starting position with filtered game IDs (e.g. only Game 1 and Game 2 -> White 1 and White 2)
+    let filtered_ids = vec![0usize, 1];
+    let tree_filtered_pgn = crate::position_index::PositionIndex::calculate_tree_for_pgn(
+        &pgn_db.entries,
+        pgn_db.mmap_ref(),
+        "",
+        Some(&filtered_ids),
+        Some(500),
+    ).expect("calculate_tree_for_pgn should succeed with filtered IDs");
+    assert_eq!(tree_filtered_pgn.total_games, 2);
+    assert_eq!(tree_filtered_pgn.white_wins, 1);
+    assert_eq!(tree_filtered_pgn.black_wins, 1);
+    assert_eq!(tree_filtered_pgn.draws, 0);
+
+    // Query position after 1.e4 (1...e5 vs 1...c5)
+    let fen_after_e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+    let tree_e4 = crate::position_index::PositionIndex::calculate_tree_for_pgn(
+        &pgn_db.entries,
+        pgn_db.mmap_ref(),
+        fen_after_e4,
+        None,
+        Some(500),
+    ).expect("calculate_tree_for_pgn should succeed for 1.e4");
+
+    assert_eq!(tree_e4.total_games, 3);
+    assert_eq!(tree_e4.moves.len(), 2);
+    let e5_move = tree_e4.moves.iter().find(|m| m.san == "e5").expect("e5 should be present");
+    assert_eq!(e5_move.total_games, 2);
+    let c5_move = tree_e4.moves.iter().find(|m| m.san == "c5").expect("c5 should be present");
+    assert_eq!(c5_move.total_games, 1);
+
+    // Query deeper position (after 1.e4 e5 2.Nf3 Nc6)
+    let fen_after_nc6 = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
+    let tree_nc6 = crate::position_index::PositionIndex::calculate_tree_for_pgn(
+        &pgn_db.entries,
+        pgn_db.mmap_ref(),
+        fen_after_nc6,
+        None,
+        Some(500),
+    ).expect("calculate_tree_for_pgn should succeed at ply 4");
+
+    assert_eq!(tree_nc6.total_games, 2);
+    assert_eq!(tree_nc6.moves.len(), 2);
+    assert!(tree_nc6.moves.iter().any(|m| m.san == "Bc4"));
+    assert!(tree_nc6.moves.iter().any(|m| m.san == "Bb5"));
+
+    // 2. Test Dynamic SCID Tree
+    let scid_path = dir.path().join("tree_test.si5");
+    let mut scid_db = crate::db::ScidDatabaseWrapper::create(&scid_path, ScidFormat::Si5).unwrap();
+    scid_db.add_game(r#"[Event "Game 1"]
+[White "White 1"]
+[Black "Black 1"]
+[Result "1-0"]
+[WhiteElo "2400"]
+[BlackElo "2300"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d4 exd4 1-0"#).unwrap();
+    scid_db.add_game(r#"[Event "Game 2"]
+[White "White 2"]
+[Black "Black 2"]
+[Result "0-1"]
+[WhiteElo "2500"]
+[BlackElo "2600"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 0-1"#).unwrap();
+    scid_db.add_game(r#"[Event "Game 3"]
+[White "White 3"]
+[Black "Black 3"]
+[Result "1/2-1/2"]
+[WhiteElo "2700"]
+[BlackElo "2700"]
+
+1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 1/2-1/2"#).unwrap();
+    scid_db.save().unwrap();
+
+    let tree_scid_start = crate::position_index::PositionIndex::calculate_tree_for_scid(
+        scid_db.entries(),
+        scid_db.games_path(),
+        "",
+        None,
+        Some(500),
+    ).expect("calculate_tree_for_scid should succeed for starting position");
+
+    assert_eq!(tree_scid_start.total_games, 3);
+    assert_eq!(tree_scid_start.moves.len(), 1);
+    assert_eq!(tree_scid_start.moves[0].san, "e4");
+
+    // SCID with filtered IDs (e.g. only game 2 -> 1.e4 e5 2.Nf3 Nc6 3.Bb5)
+    let tree_scid_filtered = crate::position_index::PositionIndex::calculate_tree_for_scid(
+        scid_db.entries(),
+        scid_db.games_path(),
+        fen_after_nc6,
+        Some(&[1usize]),
+        Some(500),
+    ).expect("calculate_tree_for_scid should succeed with filtered IDs");
+    assert_eq!(tree_scid_filtered.total_games, 1);
+    assert_eq!(tree_scid_filtered.moves.len(), 1);
+    assert_eq!(tree_scid_filtered.moves[0].san, "Bb5");
+
+    let tree_scid_nc6 = crate::position_index::PositionIndex::calculate_tree_for_scid(
+        scid_db.entries(),
+        scid_db.games_path(),
+        fen_after_nc6,
+        None,
+        Some(500),
+    ).expect("calculate_tree_for_scid should succeed at ply 4");
+
+    assert_eq!(tree_scid_nc6.total_games, 2);
+    assert_eq!(tree_scid_nc6.moves.len(), 2);
+    assert!(tree_scid_nc6.moves.iter().any(|m| m.san == "Bc4"));
+    assert!(tree_scid_nc6.moves.iter().any(|m| m.san == "Bb5"));
+}
+
+#[test]
+fn test_compact_single_file_pgn_index() {
+    let pgn_text = r#"[Event "World Championship"]
+[Site "London"]
+[Date "2018.11.09"]
+[White "Carlsen, Magnus"]
+[Black "Caruana, Fabiano"]
+[Result "1/2-1/2"]
+[ECO "B31"]
+[WhiteElo "2835"]
+[BlackElo "2832"]
+
+1. e4 c5 2. Nf3 Nc6 3. Bb5 g6 1/2-1/2
+
+[Event "World Championship"]
+[Site "London"]
+[Date "2018.11.12"]
+[White "Caruana, Fabiano"]
+[Black "Carlsen, Magnus"]
+[Result "1/2-1/2"]
+[ECO "D37"]
+[WhiteElo "2832"]
+[BlackElo "2835"]
+
+1. d4 Nf6 2. c4 e6 3. Nf3 d5 1/2-1/2
+
+[Event "Candidates 2024"]
+[Site "Toronto"]
+[Date "2024.04.04"]
+[White "Caruana, Fabiano"]
+[Black "Nakamura, Hikaru"]
+[Result "1/2-1/2"]
+[ECO "C55"]
+[WhiteElo "2803"]
+[BlackElo "2789"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 1/2-1/2
+"#;
+
+    let dir = tempdir().unwrap();
+    let pgn_path = dir.path().join("championship.pgn");
+    std::fs::write(&pgn_path, pgn_text).unwrap();
+
+    // 1. First open: generates and saves .pgn.idx
+    let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path).unwrap();
+    assert_eq!(pgn_db.game_count(), 3);
+    assert_eq!(pgn_db.names.players.len(), 4); // "?", "Carlsen, Magnus", "Caruana, Fabiano", "Nakamura, Hikaru"
+    assert_eq!(pgn_db.names.events.len(), 3);  // "?", "World Championship", "Candidates 2024"
+    assert_eq!(pgn_db.names.sites.len(), 3);   // "?", "London", "Toronto"
+
+    let idx_path = dir.path().join("championship.pgn.idx");
+    assert!(idx_path.exists(), "Single companion .pgn.idx must be created");
+
+    // Check index file size is tiny
+    let idx_size = std::fs::metadata(&idx_path).unwrap().len();
+    assert!(idx_size > 64 && idx_size < 1024, "Index should be very compact (< 1KB for 3 games)");
+
+    // 2. Re-open: should load directly from companion .pgn.idx without rescanning
+    let pgn_db2 = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path).unwrap();
+    assert_eq!(pgn_db2.game_count(), 3);
+    assert_eq!(pgn_db2.names.players.len(), 4);
+
+    // 3. Test game summary reconstruction
+    let g0 = pgn_db2.get_summary(0);
+    assert_eq!(g0.white, "Carlsen, Magnus");
+    assert_eq!(g0.black, "Caruana, Fabiano");
+    assert_eq!(g0.event, "World Championship");
+    assert_eq!(g0.site, "London");
+    assert_eq!(g0.eco, "B31");
+    assert_eq!(g0.date, "2018.11.09");
+    assert_eq!(g0.white_elo, 2835);
+    assert_eq!(g0.black_elo, 2832);
+
+    // 4. Test querying with player name filter
+    let (carlsen_games, count) = pgn_db2.query_games(&crate::db::GameFilter {
+        player: Some("Carlsen".to_string()),
+        ..Default::default()
+    }, 0, 50);
+    assert_eq!(count, 2);
+    assert_eq!(carlsen_games.len(), 2);
+
+    // 5. Test querying with event filter
+    let (candidates_games, count) = pgn_db2.query_games(&crate::db::GameFilter {
+        event: Some("Candidates".to_string()),
+        ..Default::default()
+    }, 0, 50);
+    assert_eq!(count, 1);
+    assert_eq!(candidates_games[0].white, "Caruana, Fabiano");
+    assert_eq!(candidates_games[0].black, "Nakamura, Hikaru");
+}
+
+#[test]
+fn test_scidpos5_inverted_index_filtered_and_unfiltered() {
+    let pgn_text = r#"[Event "Game 1"]
+[White "Player A"]
+[Black "Player B"]
+[Result "1-0"]
+[WhiteElo "2400"]
+[BlackElo "2300"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0
+
+[Event "Game 2"]
+[White "Player C"]
+[Black "Player D"]
+[Result "0-1"]
+[WhiteElo "2500"]
+[BlackElo "2600"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 0-1
+
+[Event "Game 3"]
+[White "Player E"]
+[Black "Player F"]
+[Result "1/2-1/2"]
+[WhiteElo "2700"]
+[BlackElo "2700"]
+
+1. e4 c5 2. Nf3 d6 3. d4 cxd4 1/2-1/2
+"#;
+
+    let dir = tempdir().unwrap();
+    let pgn_path = dir.path().join("inverted_test.pgn");
+    std::fs::write(&pgn_path, pgn_text).unwrap();
+
+    let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path).unwrap();
+
+    // 1. Build SCIDPOS5 index (storing all game IDs)
+    let pos_idx = crate::position_index::PositionIndex::build_for_pgn(
+        &pgn_path,
+        &pgn_db.entries,
+        pgn_db.mmap_ref(),
+        16,
+        None,
+        Some(1),
+        |_, _, _| {},
+    ).expect("build_for_pgn should succeed");
+
+    assert_eq!(pos_idx.header.magic, *crate::position_index::POS_INDEX_MAGIC);
+    assert_eq!(&pos_idx.header.magic, b"SCIDPOS5");
+    assert!(pos_idx.header.unique_positions > 0);
+
+    // 2. Query starting position unfiltered
+    let start_tree = pos_idx.query_tree_with_filter("", None).expect("Should find starting position");
+    assert_eq!(start_tree.total_games, 3);
+    assert_eq!(start_tree.moves.len(), 1);
+    assert_eq!(start_tree.moves[0].san, "e4");
+    assert_eq!(start_tree.moves[0].total_games, 3);
+    assert_eq!(start_tree.moves[0].white_wins, 1);
+    assert_eq!(start_tree.moves[0].black_wins, 1);
+    assert_eq!(start_tree.moves[0].draws, 1);
+
+    // 3. Query starting position with filter: only Game 1 and Game 2
+    let filtered_gids = vec![0usize, 1];
+    let filtered_tree = pos_idx.query_tree_with_filter("", Some(&filtered_gids)).expect("Should filter starting position");
+    assert_eq!(filtered_tree.total_games, 2);
+    assert_eq!(filtered_tree.moves.len(), 1);
+    assert_eq!(filtered_tree.moves[0].san, "e4");
+    assert_eq!(filtered_tree.moves[0].total_games, 2);
+    assert_eq!(filtered_tree.moves[0].white_wins, 1);
+    assert_eq!(filtered_tree.moves[0].black_wins, 1);
+    assert_eq!(filtered_tree.moves[0].draws, 0);
+
+    // 4. Query position after 1.e4 with filter (only Game 3 -> 1...c5)
+    let fen_after_e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+    let filter_g3 = vec![2usize];
+    let tree_g3 = pos_idx.query_tree_with_filter(fen_after_e4, Some(&filter_g3)).expect("Should filter after 1.e4");
+    assert_eq!(tree_g3.total_games, 1);
+    assert_eq!(tree_g3.moves.len(), 1);
+    assert_eq!(tree_g3.moves[0].san, "c5");
+    assert_eq!(tree_g3.moves[0].draws, 1);
+    assert_eq!(tree_g3.moves[0].total_games, 1);
+
+    // 5. Inverted search: get all game IDs where 1.e4 e5 2.Nf3 Nc6 is played
+    let fen_nc6 = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
+    let (_target_pos, target_hash) = crate::position_index::parse_target_position(fen_nc6).unwrap();
+    let games_with_pos = pos_idx.get_all_position_games(target_hash);
+    assert_eq!(games_with_pos, Some(vec![0, 1]));
+}
+
 

@@ -31,6 +31,13 @@ class BuildPosIndexDialog(QDialog):
         self.spin_depth.setSuffix(" plies (half-moves)")
         form.addRow("Indexing Depth:", self.spin_depth)
 
+        self.spin_max_games = QSpinBox()
+        self.spin_max_games.setRange(0, 100000)
+        self.spin_max_games.setValue(0)
+        self.spin_max_games.setSpecialValueText("All games (Complete Inverted Index)")
+        self.spin_max_games.setSuffix(" games per move")
+        form.addRow("Max Games / IDs per Move:", self.spin_max_games)
+
         cpu_count = os.cpu_count() or 4
         self.spin_threads = QSpinBox()
         self.spin_threads.setRange(1, cpu_count)
@@ -65,12 +72,14 @@ class BuildPosIndexDialog(QDialog):
             return
         self.btn_build.setEnabled(False)
         self.spin_depth.setEnabled(False)
+        self.spin_max_games.setEnabled(False)
         self.spin_threads.setEnabled(False)
         self.progress_bar.setValue(0)
         threads = self.spin_threads.value()
         self.lbl_progress.setText(f"Building index using {threads} worker threads...")
         self.client.send_request("build_pos_index", {
             "max_ply": self.spin_depth.value(),
+            "max_games": self.spin_max_games.value(),
             "threads": threads,
         })
 
@@ -83,6 +92,8 @@ class BuildPosIndexDialog(QDialog):
         self.lbl_progress.setText(f"✅ Finished in {elapsed_ms:,.1f} ms! Indexed {unique_positions:,} unique positions.")
         self.btn_build.setEnabled(True)
         self.spin_depth.setEnabled(True)
+        self.spin_max_games.setEnabled(True)
         self.spin_threads.setEnabled(True)
+
 
 
