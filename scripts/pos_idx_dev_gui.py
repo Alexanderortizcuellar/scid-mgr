@@ -34,9 +34,9 @@ class PosIdxDevWorkbench(QMainWindow):
         self.setWindowTitle("⚡ Position Index (.pos.idx) Dev & Test Workbench")
         self.resize(1100, 780)
 
-        self.client = BackendClient()
+        self.client = BackendClient(self)
         self.client.response_received.connect(self.on_backend_response)
-        self.client.event_received.connect(self.on_backend_event)
+        self.client.process_error.connect(self.on_backend_error)
 
         self.current_fen = ""
         self.move_history = []
@@ -208,10 +208,13 @@ class PosIdxDevWorkbench(QMainWindow):
         backend_bin = os.path.join(SCRIPT_DIR, "..", "target", "release", "scid-mgr.exe")
         if not os.path.exists(backend_bin):
             backend_bin = os.path.join(SCRIPT_DIR, "..", "target", "debug", "scid-mgr.exe")
-        self.client.start_backend(backend_bin)
-        self.status_bar.setText(f"Backend started: {backend_bin}")
+        try:
+            self.client.start(backend_bin)
+            self.status_bar.setText(f"Backend started: {backend_bin}")
+        except Exception as e:
+            self.status_bar.setText(f"Failed to start backend: {e}")
 
-        # If default DB exists, open it after 200ms
+        # If default DB exists, open it after 250ms
         if self.db_input.text() and os.path.exists(self.db_input.text()):
             QTimer.singleShot(250, self.open_database)
 
@@ -229,7 +232,7 @@ class PosIdxDevWorkbench(QMainWindow):
         if not path:
             return
         self.status_bar.setText(f"Opening {path}...")
-        self.client.send_request("open_db", {"path": path})
+        self.client.send_request("open", {"path": path})
 
     def open_build_dialog(self):
         dlg = BuildPosIndexDialog(self.client, default_ply=24, parent=self)
@@ -359,14 +362,15 @@ class PosIdxDevWorkbench(QMainWindow):
         self.client.send_request("opening_tree", {"fen": "", "game_ids": mock_gids}, callback=on_bench_resp)
 
     def on_backend_response(self, resp):
-        if resp.get("status") == "ok" and "db_type" in resp.get("data", {}):
-            d = resp["data"]
-            self.status_bar.setText(f"Opened {d.get('path')} ({d.get('total_games'):,} games)")
-            self.query_opening_tree("")
-            self.scan_diagnostics()
+        if resp.get("status") == "ok":
+            d = resp.get("data")
+            if isinstance(d, dict) and ("format" in d or "db_type" in d or "total_games" in d):
+                self.status_bar.setText(f"Opened {d.get('path', 'database')} ({d.get('total_games', 0):,} games)")
+                self.query_opening_tree("")
+                self.scan_diagnostics()
 
-    def on_backend_event(self, event):
-        pass
+    def on_backend_error(self, err_msg: str):
+        self.status_bar.setText(f"Backend error: {err_msg}")
 
     def closeEvent(self, event):
         self.client.stop()
