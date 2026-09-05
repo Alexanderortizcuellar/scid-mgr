@@ -14,7 +14,7 @@ use shakmaty::san::SanPlus;
 use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, Position};
 
-pub const POS_INDEX_MAGIC: &[u8; 8] = b"SCIDPOS3";
+pub const POS_INDEX_MAGIC: &[u8; 8] = b"SCIDPOS4";
 pub const DEFAULT_MAX_PLY_DEPTH: usize = 16; // 8 full moves
 const NUM_STRIPES: usize = 256;
 const HEADER_SIZE: usize = 64;
@@ -799,10 +799,9 @@ impl PositionIndex {
 }
 
 fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(32 + node.moves.len() * 40);
+    let mut buf = Vec::with_capacity(32 + node.moves.len() * 36);
     buf.extend_from_slice(&node.total_games.to_le_bytes());
     buf.extend_from_slice(&node.white_wins.to_le_bytes());
-    buf.extend_from_slice(&node.draws.to_le_bytes());
     buf.extend_from_slice(&node.black_wins.to_le_bytes());
 
     let sample_count = node.sample_game_ids.len().min(50) as u8;
@@ -818,7 +817,6 @@ fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
         buf.extend_from_slice(&m.packed_move.to_le_bytes());
         buf.extend_from_slice(&m.total_games.to_le_bytes());
         buf.extend_from_slice(&m.white_wins.to_le_bytes());
-        buf.extend_from_slice(&m.draws.to_le_bytes());
         buf.extend_from_slice(&m.black_wins.to_le_bytes());
         buf.extend_from_slice(&m.white_elo_sum.to_le_bytes());
         buf.extend_from_slice(&m.black_elo_sum.to_le_bytes());
@@ -835,15 +833,15 @@ fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
 }
 
 fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<PositionNode> {
-    if bytes.len() < 17 {
+    if bytes.len() < 13 {
         anyhow::bail!("Payload too small");
     }
 
     let total_games = u32::from_le_bytes(bytes[0..4].try_into()?);
     let white_wins = u32::from_le_bytes(bytes[4..8].try_into()?);
-    let draws = u32::from_le_bytes(bytes[8..12].try_into()?);
-    let black_wins = u32::from_le_bytes(bytes[12..16].try_into()?);
-    bytes = &bytes[16..];
+    let black_wins = u32::from_le_bytes(bytes[8..12].try_into()?);
+    let draws = total_games.saturating_sub(white_wins + black_wins);
+    bytes = &bytes[12..];
 
     let sample_count = bytes[0] as usize;
     bytes = &bytes[1..];
@@ -874,19 +872,19 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
 
     let mut moves = Vec::with_capacity(move_count);
     for _ in 0..move_count {
-        if bytes.len() < 39 {
+        if bytes.len() < 35 {
             break;
         }
         let packed_move = u16::from_le_bytes(bytes[0..2].try_into()?);
         let m_total = u32::from_le_bytes(bytes[2..6].try_into()?);
         let m_ww = u32::from_le_bytes(bytes[6..10].try_into()?);
-        let m_dr = u32::from_le_bytes(bytes[10..14].try_into()?);
-        let m_bw = u32::from_le_bytes(bytes[14..18].try_into()?);
-        let m_welo = u64::from_le_bytes(bytes[18..26].try_into()?);
-        let m_belo = u64::from_le_bytes(bytes[26..34].try_into()?);
-        let m_elo_cnt = u32::from_le_bytes(bytes[34..38].try_into()?);
-        let m_sample_cnt = bytes[38] as usize;
-        bytes = &bytes[39..];
+        let m_bw = u32::from_le_bytes(bytes[10..14].try_into()?);
+        let m_dr = m_total.saturating_sub(m_ww + m_bw);
+        let m_welo = u64::from_le_bytes(bytes[14..22].try_into()?);
+        let m_belo = u64::from_le_bytes(bytes[22..30].try_into()?);
+        let m_elo_cnt = u32::from_le_bytes(bytes[30..34].try_into()?);
+        let m_sample_cnt = bytes[34] as usize;
+        bytes = &bytes[35..];
 
         if bytes.len() < m_sample_cnt * 4 {
             break;
