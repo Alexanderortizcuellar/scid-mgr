@@ -14,7 +14,7 @@ use shakmaty::san::SanPlus;
 use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, Position};
 
-pub const POS_INDEX_MAGIC: &[u8; 8] = b"SCIDPOS2";
+pub const POS_INDEX_MAGIC: &[u8; 8] = b"SCIDPOS3";
 pub const DEFAULT_MAX_PLY_DEPTH: usize = 16; // 8 full moves
 const NUM_STRIPES: usize = 256;
 const HEADER_SIZE: usize = 64;
@@ -24,6 +24,85 @@ pub enum IndexStatus {
     Valid,
     Outdated,
     Missing,
+}
+
+/// Compact 16-bit binary move representation:
+/// - Bits 0..5: From Square (0..63)
+/// - Bits 6..11: To Square (0..63)
+/// - Bits 12..14: Promotion Piece (0=None, 1=Knight, 2=Bishop, 3=Rook, 4=Queen)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PackedMove(pub u16);
+
+impl PackedMove {
+    #[inline]
+    pub fn new(from: u8, to: u8, promo: Option<shakmaty::Role>) -> Self {
+        let p = match promo {
+            None => 0u16,
+            Some(shakmaty::Role::Knight) => 1,
+            Some(shakmaty::Role::Bishop) => 2,
+            Some(shakmaty::Role::Rook) => 3,
+            Some(shakmaty::Role::Queen) => 4,
+            _ => 0,
+        };
+        let val = (from as u16 & 0x3F) | ((to as u16 & 0x3F) << 6) | (p << 12);
+        PackedMove(val)
+    }
+
+    #[inline]
+    pub fn from_square(self) -> u8 {
+        (self.0 & 0x3F) as u8
+    }
+
+    #[inline]
+    pub fn to_square(self) -> u8 {
+        ((self.0 >> 6) & 0x3F) as u8
+    }
+
+    #[inline]
+    pub fn promotion(self) -> Option<shakmaty::Role> {
+        match (self.0 >> 12) & 0x07 {
+            1 => Some(shakmaty::Role::Knight),
+            2 => Some(shakmaty::Role::Bishop),
+            3 => Some(shakmaty::Role::Rook),
+            4 => Some(shakmaty::Role::Queen),
+            _ => None,
+        }
+    }
+
+    pub fn to_uci_string(self) -> String {
+        let from_sq = shakmaty::Square::new(self.from_square() as u32);
+        let to_sq = shakmaty::Square::new(self.to_square() as u32);
+        let promo_str = match self.promotion() {
+            Some(shakmaty::Role::Knight) => "n",
+            Some(shakmaty::Role::Bishop) => "b",
+            Some(shakmaty::Role::Rook) => "r",
+            Some(shakmaty::Role::Queen) => "q",
+            _ => "",
+        };
+        format!("{}{}{}", from_sq, to_sq, promo_str)
+    }
+
+    pub fn to_shakmaty_move(self, pos: &Chess) -> Option<shakmaty::Move> {
+        let from_sq = shakmaty::Square::new(self.from_square() as u32);
+        let to_sq = shakmaty::Square::new(self.to_square() as u32);
+        let promo = self.promotion();
+
+        for m in pos.legal_moves() {
+            if m.from() == Some(from_sq) && m.to() == to_sq && m.promotion() == promo {
+                return Some(m);
+            }
+        }
+        None
+    }
+}
+
+impl From<&shakmaty::Move> for PackedMove {
+    #[inline]
+    fn from(m: &shakmaty::Move) -> Self {
+        let from = m.from().map(|sq| sq as u8).unwrap_or(0);
+        let to = m.to() as u8;
+        PackedMove::new(from, to, m.promotion())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,8 +181,7 @@ pub struct SortedIndexEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MoveStats {
-    pub san: String,
-    pub uci: String,
+    pub packed_move: u16,
     pub total_games: u32,
     pub white_wins: u32,
     pub draws: u32,
@@ -315,19 +393,29 @@ impl PositionIndex {
 
         let node = self.get_position(zobrist_hash)?;
         let total = node.total_games.max(1);
+        let round_2dp = |v: f64| (v * 100.0).round() / 100.0;
 
         let mut move_views: Vec<OpeningTreeMoveView> = node
             .moves
             .iter()
             .map(|m| {
                 let m_total = m.total_games.max(1);
+                let packed = PackedMove(m.packed_move);
+                let uci = packed.to_uci_string();
+                let san = if let Some(shak_move) = packed.to_shakmaty_move(&pos) {
+                    let mut p_copy = pos.clone();
+                    SanPlus::from_move_and_play_unchecked(&mut p_copy, &shak_move).to_string()
+                } else {
+                    uci.clone()
+                };
+
                 OpeningTreeMoveView {
-                    san: m.san.clone(),
-                    uci: m.uci.clone(),
+                    san,
+                    uci,
                     total_games: m.total_games,
-                    white_pct: (m.white_wins as f64 / m_total as f64) * 100.0,
-                    draw_pct: (m.draws as f64 / m_total as f64) * 100.0,
-                    black_pct: (m.black_wins as f64 / m_total as f64) * 100.0,
+                    white_pct: round_2dp((m.white_wins as f64 / m_total as f64) * 100.0),
+                    draw_pct: round_2dp((m.draws as f64 / m_total as f64) * 100.0),
+                    black_pct: round_2dp((m.black_wins as f64 / m_total as f64) * 100.0),
                     white_wins: m.white_wins,
                     draws: m.draws,
                     black_wins: m.black_wins,
@@ -349,16 +437,18 @@ impl PositionIndex {
         // Sort moves by popularity (total games played)
         move_views.sort_unstable_by(|a, b| b.total_games.cmp(&a.total_games));
 
+        let fen_formatted = Fen::from_position(pos, EnPassantMode::Legal).to_string();
+
         Some(OpeningTreeReport {
-            fen: format!("{:?}", pos),
+            fen: fen_formatted,
             zobrist_hash,
             total_games: node.total_games,
             white_wins: node.white_wins,
             draws: node.draws,
             black_wins: node.black_wins,
-            white_pct: (node.white_wins as f64 / total as f64) * 100.0,
-            draw_pct: (node.draws as f64 / total as f64) * 100.0,
-            black_pct: (node.black_wins as f64 / total as f64) * 100.0,
+            white_pct: round_2dp((node.white_wins as f64 / total as f64) * 100.0),
+            draw_pct: round_2dp((node.draws as f64 / total as f64) * 100.0),
+            black_pct: round_2dp((node.black_wins as f64 / total as f64) * 100.0),
             moves: move_views,
             sample_game_ids: node.sample_game_ids,
         })
@@ -458,14 +548,11 @@ impl PositionIndex {
                                 };
 
                             let current_hash: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
-                            let mut pos_clone = pos.clone();
-                            let san = SanPlus::from_move_and_play_unchecked(&mut pos_clone, &mv);
-                            let uci = mv.to_uci(CastlingMode::Standard).to_string();
+                            let packed_mv = PackedMove::from(&mv);
 
                             accumulator.record_step(
                                 current_hash.0,
-                                san.to_string(),
-                                uci,
+                                packed_mv.0,
                                 w_win,
                                 draw,
                                 b_win,
@@ -712,7 +799,7 @@ impl PositionIndex {
 }
 
 fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(64 + node.moves.len() * 40);
+    let mut buf = Vec::with_capacity(32 + node.moves.len() * 40);
     buf.extend_from_slice(&node.total_games.to_le_bytes());
     buf.extend_from_slice(&node.white_wins.to_le_bytes());
     buf.extend_from_slice(&node.draws.to_le_bytes());
@@ -728,17 +815,7 @@ fn encode_position_payload(node: &PositionNode) -> Vec<u8> {
     buf.push(move_count);
 
     for m in &node.moves[..move_count as usize] {
-        let mut uci_bytes = [0u8; 5];
-        let u_bytes = m.uci.as_bytes();
-        let u_len = u_bytes.len().min(5);
-        uci_bytes[..u_len].copy_from_slice(&u_bytes[..u_len]);
-        buf.extend_from_slice(&uci_bytes);
-
-        let san_bytes = m.san.as_bytes();
-        let san_len = san_bytes.len().min(255) as u8;
-        buf.push(san_len);
-        buf.extend_from_slice(&san_bytes[..san_len as usize]);
-
+        buf.extend_from_slice(&m.packed_move.to_le_bytes());
         buf.extend_from_slice(&m.total_games.to_le_bytes());
         buf.extend_from_slice(&m.white_wins.to_le_bytes());
         buf.extend_from_slice(&m.draws.to_le_bytes());
@@ -797,34 +874,19 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
 
     let mut moves = Vec::with_capacity(move_count);
     for _ in 0..move_count {
-        if bytes.len() < 6 {
+        if bytes.len() < 39 {
             break;
         }
-        let uci_raw = &bytes[0..5];
-        let uci_end = uci_raw.iter().position(|&b| b == 0).unwrap_or(5);
-        let uci = String::from_utf8_lossy(&uci_raw[..uci_end]).to_string();
-        bytes = &bytes[5..];
-
-        let san_len = bytes[0] as usize;
-        bytes = &bytes[1..];
-        if bytes.len() < san_len {
-            break;
-        }
-        let san = String::from_utf8_lossy(&bytes[..san_len]).to_string();
-        bytes = &bytes[san_len..];
-
-        if bytes.len() < 37 {
-            break;
-        }
-        let m_total = u32::from_le_bytes(bytes[0..4].try_into()?);
-        let m_ww = u32::from_le_bytes(bytes[4..8].try_into()?);
-        let m_dr = u32::from_le_bytes(bytes[8..12].try_into()?);
-        let m_bw = u32::from_le_bytes(bytes[12..16].try_into()?);
-        let m_welo = u64::from_le_bytes(bytes[16..24].try_into()?);
-        let m_belo = u64::from_le_bytes(bytes[24..32].try_into()?);
-        let m_elo_cnt = u32::from_le_bytes(bytes[32..36].try_into()?);
-        let m_sample_cnt = bytes[36] as usize;
-        bytes = &bytes[37..];
+        let packed_move = u16::from_le_bytes(bytes[0..2].try_into()?);
+        let m_total = u32::from_le_bytes(bytes[2..6].try_into()?);
+        let m_ww = u32::from_le_bytes(bytes[6..10].try_into()?);
+        let m_dr = u32::from_le_bytes(bytes[10..14].try_into()?);
+        let m_bw = u32::from_le_bytes(bytes[14..18].try_into()?);
+        let m_welo = u64::from_le_bytes(bytes[18..26].try_into()?);
+        let m_belo = u64::from_le_bytes(bytes[26..34].try_into()?);
+        let m_elo_cnt = u32::from_le_bytes(bytes[34..38].try_into()?);
+        let m_sample_cnt = bytes[38] as usize;
+        bytes = &bytes[39..];
 
         if bytes.len() < m_sample_cnt * 4 {
             break;
@@ -837,8 +899,7 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
         bytes = &bytes[m_sample_cnt * 4..];
 
         moves.push(MoveStats {
-            san,
-            uci,
+            packed_move,
             total_games: m_total,
             white_wins: m_ww,
             draws: m_dr,
@@ -886,8 +947,7 @@ impl StripedPositionMap {
     fn record_step(
         &self,
         zobrist: u64,
-        san: String,
-        uci: String,
+        packed_move: u16,
         w_win: u32,
         draw: u32,
         b_win: u32,
@@ -916,12 +976,11 @@ impl StripedPositionMap {
             node.sample_game_ids.push(game_id);
         }
 
-        let move_stat = if let Some(pos) = node.moves.iter().position(|m| m.uci == uci) {
+        let move_stat = if let Some(pos) = node.moves.iter().position(|m| m.packed_move == packed_move) {
             &mut node.moves[pos]
         } else {
             node.moves.push(MoveStats {
-                san,
-                uci,
+                packed_move,
                 total_games: 0,
                 white_wins: 0,
                 draws: 0,
@@ -1016,13 +1075,11 @@ impl<'a> pgn_reader::Visitor for PgnTreeVisitor<'a> {
 
         if let Ok(m) = san_plus.san.to_move(&self.pos) {
             let current_hash: Zobrist64 = self.pos.zobrist_hash(EnPassantMode::Legal);
-            let uci = m.to_uci(CastlingMode::Standard).to_string();
-            let san_str = san_plus.to_string();
+            let packed_mv = PackedMove::from(&m);
 
             self.accumulator.record_step(
                 current_hash.0,
-                san_str,
-                uci,
+                packed_mv.0,
                 self.w_win,
                 self.draw,
                 self.b_win,
@@ -1045,6 +1102,9 @@ mod tests {
 
     #[test]
     fn test_encode_decode_payload() {
+        let e2e4 = PackedMove::new(12, 28, None); // e2 (12) -> e4 (28)
+        let d2d4 = PackedMove::new(11, 27, None); // d2 (11) -> d4 (27)
+
         let node = PositionNode {
             zobrist_hash: 0x123456789abcdef0,
             total_games: 100,
@@ -1053,8 +1113,7 @@ mod tests {
             black_wins: 30,
             moves: vec![
                 MoveStats {
-                    san: "e4".to_string(),
-                    uci: "e2e4".to_string(),
+                    packed_move: e2e4.0,
                     total_games: 60,
                     white_wins: 25,
                     draws: 20,
@@ -1065,8 +1124,7 @@ mod tests {
                     sample_game_ids: vec![1, 5, 12],
                 },
                 MoveStats {
-                    san: "d4".to_string(),
-                    uci: "d2d4".to_string(),
+                    packed_move: d2d4.0,
                     total_games: 40,
                     white_wins: 15,
                     draws: 10,
@@ -1090,12 +1148,12 @@ mod tests {
         assert_eq!(decoded.black_wins, 30);
         assert_eq!(decoded.sample_game_ids, vec![1, 2, 5, 7, 12]);
         assert_eq!(decoded.moves.len(), 2);
-        assert_eq!(decoded.moves[0].san, "e4");
-        assert_eq!(decoded.moves[0].uci, "e2e4");
+        assert_eq!(decoded.moves[0].packed_move, e2e4.0);
+        assert_eq!(PackedMove(decoded.moves[0].packed_move).to_uci_string(), "e2e4");
         assert_eq!(decoded.moves[0].total_games, 60);
         assert_eq!(decoded.moves[0].sample_game_ids, vec![1, 5, 12]);
-        assert_eq!(decoded.moves[1].san, "d4");
-        assert_eq!(decoded.moves[1].uci, "d2d4");
+        assert_eq!(decoded.moves[1].packed_move, d2d4.0);
+        assert_eq!(PackedMove(decoded.moves[1].packed_move).to_uci_string(), "d2d4");
         assert_eq!(decoded.moves[1].total_games, 40);
     }
 
