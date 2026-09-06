@@ -1,6 +1,6 @@
 # 🏗️ Architecture & End-to-End Workflow
 
-This document explains step-by-step how `scid-mgr` operates, from loading binary files off NVMe/SSD storage to rendering 60 FPS virtual table updates in the PyQt5 GUI.
+This document explains step-by-step how `scid-mgr` operates, from loading binary files off NVMe/SSD storage to serving high-speed search and query requests over JSON-RPC.
 
 ---
 
@@ -8,10 +8,10 @@ This document explains step-by-step how `scid-mgr` operates, from loading binary
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        PyQt5 GUI Frontend                              │
+│               Frontend / Client (e.g. Reference PyQt5 Test GUI)        │
 │  - VirtualScidTableModel (Windowed Chunk Cache, Smooth Scroll)         │
 │  - AdvancedSearchDialog (Board Editor, Bitboard Material, Metadata)    │
-│  - BenchmarkDialog (Live Metrics, Performance Profiling)               │
+│  - OpeningTreeWidget (Instant Move Tree & Diagnostics)                 │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ JSON-RPC (stdin / stdout pipes)
                                     ▼

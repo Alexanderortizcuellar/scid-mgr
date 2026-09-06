@@ -111,16 +111,20 @@ fn test_format_roundtrip(format: ScidFormat) -> Result<()> {
     println!("     PGN reconstruction verified for all games.");
 
     println!("  4. Testing filtering & queries...");
-    let mut filter = GameFilter::default();
-    filter.player = Some("Morphy".to_string());
-    let (results, count) = db.query_games(&filter, 0, 10);
+    let filter_player = GameFilter {
+        player: Some("Morphy".to_string()),
+        ..Default::default()
+    };
+    let (results, count) = db.query_games(&filter_player, 0, 10);
     assert_eq!(count, 1);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].white, "Paul Morphy");
 
-    filter = GameFilter::default();
-    filter.eco = Some("B".to_string());
-    let (results, count) = db.query_games(&filter, 0, 10);
+    let filter_eco = GameFilter {
+        eco: Some("B".to_string()),
+        ..Default::default()
+    };
+    let (results, count) = db.query_games(&filter_eco, 0, 10);
     assert_eq!(count, 1);
     assert_eq!(results[0].eco, "B85");
     println!("     Queries and filters returned expected results.");
@@ -514,6 +518,7 @@ fn test_scidpos5_inverted_index_filtered_and_unfiltered() {
         pgn_db.mmap_ref(),
         16,
         None,
+        None,
         Some(1),
         |_, _, _| {},
     ).expect("build_for_pgn should succeed");
@@ -559,5 +564,206 @@ fn test_scidpos5_inverted_index_filtered_and_unfiltered() {
     let games_with_pos = pos_idx.get_all_position_games(target_hash);
     assert_eq!(games_with_pos, Some(vec![0, 1]));
 }
+
+#[test]
+fn test_scid_pos_idx_multithreaded_build_and_query() {
+    let dir = tempdir().unwrap();
+    let scid_path = dir.path().join("multithread_tree_test.si5");
+    let mut scid_db = crate::db::ScidDatabaseWrapper::create(&scid_path, ScidFormat::Si5).unwrap();
+
+    // Add multiple games with different moves and results
+    for i in 0..100 {
+        let pgn = if i % 3 == 0 {
+            format!("[Event \"Test\"]\n[Result \"1-0\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0")
+        } else if i % 3 == 1 {
+            format!("[Event \"Test\"]\n[Result \"0-1\"]\n\n1. e4 c5 2. Nf3 d6 3. d4 cxd4 0-1")
+        } else {
+            format!("[Event \"Test\"]\n[Result \"1/2-1/2\"]\n\n1. d4 Nf6 2. c4 e6 3. Nf3 d5 1/2-1/2")
+        };
+        scid_db.add_game(&pgn).unwrap();
+    }
+    scid_db.save().unwrap();
+
+    let games_path = scid_db.games_path().to_path_buf();
+    let entries = scid_db.entries();
+    let db_path_buf = scid_db.index_path().to_path_buf();
+
+    // Build companion .pos.idx with multi-threading and max_games limit
+    let pos_idx = crate::position_index::PositionIndex::build_for_scid(
+        &db_path_buf,
+        entries,
+        &games_path,
+        16,
+        Some(10),
+        None,
+        Some(4),
+        |_, _, _| {},
+    ).expect("build_for_scid should succeed");
+
+    // Scan diagnostics
+    let diag = pos_idx.scan_diagnostics().expect("scan_diagnostics should succeed");
+    assert!(diag.total_game_sets > 0);
+
+    // Query starting position
+    let start_tree = pos_idx.query_tree("").expect("Should find starting position");
+    assert_eq!(start_tree.total_games, 100);
+    assert_eq!(start_tree.moves.len(), 2); // e4 and d4
+
+    // Query 1. e4
+    let fen_e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+    let e4_tree = pos_idx.query_tree(fen_e4).expect("Should find 1. e4");
+    assert_eq!(e4_tree.total_games, 67); // 34 (1.e4 e5) + 33 (1.e4 c5)
+    assert_eq!(e4_tree.moves.len(), 2); // e5 and c5
+
+    // Query 1. d4
+    let fen_d4 = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq d3 0 1";
+    let d4_tree = pos_idx.query_tree(fen_d4).expect("Should find 1. d4");
+    assert_eq!(d4_tree.total_games, 33);
+    assert_eq!(d4_tree.moves.len(), 1); // Nf6
+}
+
+#[test]
+fn test_candidate_acceleration_correctness() {
+    let dir = tempdir().unwrap();
+    let scid_path = dir.path().join("candidate_test.si5");
+    let mut scid_db = crate::db::ScidDatabaseWrapper::create(&scid_path, ScidFormat::Si5).unwrap();
+
+    let pgn_samples = [
+        "[Event \"WCh\"]\n[White \"Kasparov\"]\n[Black \"Karpov\"]\n[Result \"1-0\"]\n[ECO \"B90\"]\n[Date \"1985.10.15\"]\n\n1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 1-0",
+        "[Event \"WCh\"]\n[White \"Karpov\"]\n[Black \"Kasparov\"]\n[Result \"0-1\"]\n[ECO \"B90\"]\n[Date \"1985.10.17\"]\n\n1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 0-1",
+        "[Event \"Candidates\"]\n[White \"Fischer\"]\n[Black \"Petrosian\"]\n[Result \"1-0\"]\n[ECO \"B90\"]\n[Date \"1971.10.01\"]\n\n1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 1-0",
+        "[Event \"Olympiad\"]\n[White \"Tal\"]\n[Black \"Larsen\"]\n[Result \"1/2-1/2\"]\n[ECO \"C50\"]\n[Date \"1965.05.20\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1/2-1/2",
+        "[Event \"Candidates\"]\n[White \"Kasparov\"]\n[Black \"Anand\"]\n[Result \"1-0\"]\n[ECO \"C50\"]\n[Date \"1995.09.11\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0",
+    ];
+
+    for pgn in pgn_samples {
+        scid_db.add_game(pgn).unwrap();
+    }
+    scid_db.save().unwrap();
+
+    // 1. Full scan baseline (without .pos.idx)
+    let fen_najdorf = "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6";
+    let matcher = crate::position_search::parse_position_matcher(fen_najdorf, None, Some("exact")).unwrap();
+    let full_scan_matches = crate::position_search::search_position_matcher_mmap_with_progress(
+        scid_db.entries(),
+        scid_db.games_path(),
+        &matcher,
+        Some(16),
+        |_, _, _| {},
+    ).unwrap();
+    let full_scan_ids: Vec<usize> = full_scan_matches.iter().map(|m| m.game_id).collect();
+    assert_eq!(full_scan_ids, vec![0, 1, 2]);
+
+    // 2. Build companion .pos.idx
+    let db_path = scid_db.index_path().to_path_buf();
+    let games_path = scid_db.games_path().to_path_buf();
+    crate::position_index::PositionIndex::build_for_scid(
+        &db_path,
+        scid_db.entries(),
+        &games_path,
+        16,
+        None,
+        None,
+        None,
+        |_, _, _| {},
+    ).unwrap();
+
+    // 3. Approach B: Accelerated Position Search
+    let accelerated_res = scid_db.search_position(fen_najdorf, None, None, None).unwrap();
+    let accelerated_ids: Vec<usize> = accelerated_res.matches.iter().map(|m| m.game_id).collect();
+    assert_eq!(accelerated_ids, full_scan_ids, "Position search results must be 100% identical");
+
+    // 4. Combined Position + Header Filter (FEN + Result 1-0)
+    let filter_win = GameFilter {
+        fen: Some(fen_najdorf.to_string()),
+        result: Some("1-0".to_string()),
+        ..Default::default()
+    };
+    let (games_win, total_win) = scid_db.query_games(&filter_win, 0, 10);
+    assert_eq!(total_win, 2);
+    assert_eq!(games_win.len(), 2);
+    assert_eq!(games_win[0].id, 0); // Kasparov vs Karpov 1-0
+    assert_eq!(games_win[1].id, 2); // Fischer vs Petrosian 1-0
+
+    // 5. Combined Position + White Player Filter (FEN + White "Kasparov")
+    let filter_kasparov = GameFilter {
+        fen: Some(fen_najdorf.to_string()),
+        white: Some("Kasparov".to_string()),
+        ..Default::default()
+    };
+    let (games_kasp, total_kasp) = scid_db.query_games(&filter_kasparov, 0, 10);
+    assert_eq!(total_kasp, 1);
+    assert_eq!(games_kasp[0].id, 0);
+
+    // 6. Italian Game Search (1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5)
+    let fen_italian = "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
+    let filter_italian = GameFilter {
+        fen: Some(fen_italian.to_string()),
+        ..Default::default()
+    };
+    let (games_ita, total_ita) = scid_db.query_games(&filter_italian, 0, 10);
+    assert_eq!(total_ita, 2);
+    assert_eq!(games_ita[0].id, 3);
+    assert_eq!(games_ita[1].id, 4);
+}
+
+#[test]
+fn test_pos_idx_min_games_filter() {
+    let dir = tempdir().unwrap();
+    let scid_path = dir.path().join("min_games_test.si5");
+    let mut scid_db = crate::db::ScidDatabaseWrapper::create(&scid_path, ScidFormat::Si5).unwrap();
+
+    // 5 games with 1.e4, 3 games with 1.d4, and 1 rare game with 1.b4 (Sokolsky/Polish)
+    for _ in 0..5 {
+        scid_db.add_game("[Event \"Test\"]\n\n1. e4 e5 2. Nf3 Nc6 *").unwrap();
+    }
+    for _ in 0..3 {
+        scid_db.add_game("[Event \"Test\"]\n\n1. d4 d5 2. c4 c6 *").unwrap();
+    }
+    scid_db.add_game("[Event \"Rare\"]\n\n1. b4 e5 2. Bb2 Bxb4 *").unwrap();
+    scid_db.save().unwrap();
+
+    let db_path = scid_db.index_path().to_path_buf();
+    let games_path = scid_db.games_path().to_path_buf();
+
+    // 1. Build index with min_games = 1 (default: everything indexed)
+    let full_idx = crate::position_index::PositionIndex::build_for_scid(
+        &db_path,
+        scid_db.entries(),
+        &games_path,
+        16,
+        None,
+        Some(1),
+        None,
+        |_, _, _| {},
+    ).unwrap();
+
+    let fen_b4 = "rnbqkbnr/pppppppp/8/8/1P6/8/P1PPPPPP/RNBQKBNR b KQkq b3 0 1";
+    assert!(full_idx.query_tree(fen_b4).is_some(), "Rare position 1.b4 should exist when min_games=1");
+    let full_unique = full_idx.header.unique_positions;
+
+    // 2. Rebuild index with min_games = 3 (filter out positions appearing < 3 times)
+    let filtered_idx = crate::position_index::PositionIndex::build_for_scid(
+        &db_path,
+        scid_db.entries(),
+        &games_path,
+        16,
+        None,
+        Some(3),
+        None,
+        |_, _, _| {},
+    ).unwrap();
+
+    assert!(filtered_idx.header.unique_positions < full_unique, "Filtered unique positions count must be smaller");
+    assert!(filtered_idx.query_tree(fen_b4).is_none(), "Rare position 1.b4 (only 1 game) must be excluded when min_games=3");
+
+    // 1.e4 (5 games) and 1.d4 (3 games) must remain indexed
+    let fen_e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+    let fen_d4 = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq d3 0 1";
+    assert!(filtered_idx.query_tree(fen_e4).is_some(), "1.e4 (5 games) should be indexed");
+    assert!(filtered_idx.query_tree(fen_d4).is_some(), "1.d4 (3 games) should be indexed");
+}
+
+
 
 

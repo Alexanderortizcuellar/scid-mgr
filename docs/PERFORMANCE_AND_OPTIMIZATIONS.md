@@ -93,25 +93,27 @@ In PyQt5:
 
 ---
 
-## 6. Static Disk-Backed Position Index (`.pos.idx` v2) & Instant Opening Explorer
+## 6. Static Disk-Backed Position Index (`.pos.idx` v3) & Instant Opening Explorer
 
 ### Architecture & Format
 For sub-millisecond position lookups and live ChessBase/Lichess opening trees without memory overhead:
-- **Binary Header (64 bytes, `SCIDPOS2`)**: Stores `db_mtime_secs`, `db_game_count`, `max_ply_depth`, and byte offsets.
-- **Sorted Hash Table (16 bytes per unique position)**:
+- **Binary Header (64 bytes, `SCIDPOS5` v3)**: Stores `db_mtime_secs`, `db_size_bytes`, `db_game_count`, `max_ply_depth`, `unique_positions`, `index_offset`, and `data_offset`.
+- **Sorted Hash Table (12 bytes per unique position)**:
   - `hash: u64` (64-bit Zobrist Hash)
   - `data_offset: u32` (relative offset into data payload)
-  - `data_len: u32` (byte length of record payload)
   - Records are sorted strictly by Zobrist hash for **in-place binary search** (`binary_search_by_key`).
-- **Variable-Length Data Payload Section**:
-  - Encodes total game counts, win/draw/loss counters, sample game ID posting lists, and branching move statistics (UCI, SAN, ELO sums, scores).
+- **Compact Delta-Varint Posting Lists & Singleton Encoding**:
+  - Moves with 1 game use a compact singleton outcome byte + varint ID.
+  - Multi-game moves encode outcome sums, `id_count`, and sorted monotonically ascending delta-varints (`write_delta_game_ids`).
+- **Zero-Allocation Fast Skipping (`skip_varints`)**:
+  - When querying the opening explorer without explicit filter lists, `decode_position_payload` decodes only the requested sample game IDs (default 20) and rapidly skips remaining varints in the memory map without heap allocation.
 - **Zero Heap RAM Overhead (`memmap2`)**:
   - The index is never deserialized into heap memory or HashMaps.
   - Lookups execute directly on the memory-mapped virtual address space, keeping heap memory at **0 MB** extra.
-- **Validation**: On open, compares timestamp and game count in $< 0.01\text{ ms}$. Returns `Valid`, `Outdated`, or `Missing`.
+- **Validation**: On open, compares header magic, version, timestamp, and game count in $< 0.01\text{ ms}$. Returns `Valid`, `Outdated`, or `Missing`.
 - **Lookup Speed**:
-  - `query_tree(fen)`: **0.34 ms (348 µs)** average response with win/draw/loss counts, scores, and average ELO ratings.
-  - `search_position(fen)`: **< 0.1 ms** instant retrieval of matching game IDs, falling back seamlessly to multi-threaded move-stream scanning if the index is not present.
+  - `query_tree(fen)`: **< 0.05 ms** average response with win/draw/loss counts, score percentages, and move statistics.
+  - `search_position(fen)`: **< 0.01 ms** instant retrieval of matching game IDs, falling back seamlessly to multi-threaded move-stream scanning if the index is not present.
 
 ---
 
@@ -175,4 +177,47 @@ For large multi-gigabyte collections (e.g. 10.35M games in `LumbrasGigaBase_OTB.
 - Real-time matches counter (`🎯 Matches found: X`).
 - Live scanning speed estimation (e.g. `⚡ Scanning Speed: ~750,000 games/sec`).
 - Seamlessly auto-closes once the query results arrive and populate the table view.
+
+---
+
+## 9. Inverted Position Index Candidate Acceleration
+
+### Candidate Filtering Pipeline
+When a query contains an exact board position (`filter.fen`), `scid-mgr` uses `.pos.idx` as an inverted posting list accelerator:
+
+```text
+GUI search parameters (FEN + Header criteria)
+        │
+        ▼
+Position Zobrist hash
+        │
+        ▼
+.pos.idx binary search (< 0.05 ms)
+        │
+        ├── Position found in index:
+        │       │
+        │       ▼
+        │   Candidate Game IDs (e.g. 40,852 games)
+        │       │
+        │       ▼
+        │   Parallel metadata filter on candidates (.si5 / .pgn headers)
+        │       │
+        │       ▼
+        │   Final Matching Game IDs (< 2 ms)
+        │
+        └── Position not found or non-exact (e.g. piece placement):
+                │
+                ▼
+            Full database move-stream scan fallback (~1,450 ms)
+```
+
+### Comparative Benchmarks (1.49M Games in `twchess/data/database.si5`)
+| Query / Position Scenario | Approach A (Full DB Scan) | Approach B (Candidate-Accelerated) | Speedup Factor | Combined FEN + Header Filter |
+|:---|:---:|:---:|:---:|:---:|
+| **Sicilian Najdorf** (Tabiya, 40,852 games) | 1,455.45 ms | **1.30 ms** | **1,115.3x faster** | **2.59 ms** |
+| **French Defense** (1.e4 e6 2.d4 d5, 68,818 games) | 1,312.20 ms | **2.00 ms** | **656.6x faster** | **3.75 ms** |
+| **1.e4** (Large Candidate Set, 708,913 games / ~45% of DB) | 748.14 ms | **17.38 ms** | **43.0x faster** | **26.63 ms** |
+
+Correctness is strictly maintained: all candidate-accelerated queries match the full-scan result sets 100%, and unindexed positions gracefully fall back to move-stream parsing.
+
 

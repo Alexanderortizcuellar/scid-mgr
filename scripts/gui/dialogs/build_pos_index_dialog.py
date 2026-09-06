@@ -38,6 +38,13 @@ class BuildPosIndexDialog(QDialog):
         self.spin_max_games.setSuffix(" games per move")
         form.addRow("Max Games / IDs per Move:", self.spin_max_games)
 
+        self.spin_min_games = QSpinBox()
+        self.spin_min_games.setRange(1, 100000)
+        self.spin_min_games.setValue(1)
+        self.spin_min_games.setSpecialValueText("1 (Include all positions)")
+        self.spin_min_games.setSuffix(" occurrences min")
+        form.addRow("Min Position Frequency:", self.spin_min_games)
+
         cpu_count = os.cpu_count() or 4
         self.spin_threads = QSpinBox()
         self.spin_threads.setRange(1, cpu_count)
@@ -103,6 +110,7 @@ class BuildPosIndexDialog(QDialog):
         self.btn_view_diagnostics.setVisible(False)
         self.spin_depth.setEnabled(False)
         self.spin_max_games.setEnabled(False)
+        self.spin_min_games.setEnabled(False)
         self.spin_threads.setEnabled(False)
         self.progress_bar.setValue(0)
         threads = self.spin_threads.value()
@@ -110,6 +118,7 @@ class BuildPosIndexDialog(QDialog):
         self.client.send_request("build_pos_index", {
             "max_ply": self.spin_depth.value(),
             "max_games": self.spin_max_games.value(),
+            "min_games": self.spin_min_games.value(),
             "threads": threads,
         })
 
@@ -123,6 +132,7 @@ class BuildPosIndexDialog(QDialog):
         self.btn_build.setEnabled(True)
         self.spin_depth.setEnabled(True)
         self.spin_max_games.setEnabled(True)
+        self.spin_min_games.setEnabled(True)
         self.spin_threads.setEnabled(True)
         self.last_diagnostics = diagnostics
         self.btn_view_diagnostics.setVisible(True)

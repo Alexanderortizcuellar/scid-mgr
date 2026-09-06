@@ -248,7 +248,7 @@ impl PgnDatabaseWrapper {
             let records_bytes = unsafe {
                 std::slice::from_raw_parts(
                     entries.as_ptr() as *const u8,
-                    entries.len() * std::mem::size_of::<CompactPgnRecord>(),
+                    std::mem::size_of_val(entries),
                 )
             };
             writer.write_all(records_bytes)?;
@@ -675,23 +675,26 @@ impl PgnDatabaseWrapper {
             }
         });
 
-        let pos_matches = filter.fen.as_deref().and_then(|f| {
-            if f.trim().is_empty() {
-                None
-            } else {
-                self.search_position(
-                    f,
+        // ⚡ Candidate Game IDs from Position Search / .pos.idx Accelerator
+        let mut candidate_ids: Option<Vec<usize>> = None;
+        if let Some(ref f) = filter.fen {
+            let trimmed = f.trim();
+            if !trimmed.is_empty() {
+                if let Ok(res) = self.search_position(
+                    trimmed,
                     filter.turn.as_deref(),
                     filter.match_mode.as_deref(),
                     filter.max_ply,
                     |scanned, total, matches| {
                         progress(scanned, total, matches);
                     },
-                ).ok().map(|res| {
-                    res.matches.into_iter().map(|m| m.game_id).collect::<std::collections::HashSet<usize>>()
-                })
+                ) {
+                    candidate_ids = Some(res.matches.into_iter().map(|m| m.game_id).collect());
+                } else {
+                    candidate_ids = Some(Vec::new());
+                }
             }
-        });
+        }
 
         let mat_matches = filter.material.as_ref().and_then(|m| {
             self.search_material(m, |scanned, total, matches| {
@@ -701,68 +704,127 @@ impl PgnDatabaseWrapper {
             })
         });
 
-        let mut matching_indices: Vec<usize> = (0..self.entries.len())
-            .into_par_iter()
-            .filter(|&idx| {
-                if let Some(ref p_set) = pos_matches {
-                    if !p_set.contains(&idx) {
+        let mut matching_indices: Vec<usize> = if let Some(ref c_ids) = candidate_ids {
+            c_ids
+                .par_iter()
+                .filter(|&&idx| {
+                    if idx >= self.entries.len() {
                         return false;
                     }
-                }
-                if let Some(ref m_set) = mat_matches {
-                    if !m_set.contains(&idx) {
-                        return false;
+                    if let Some(ref m_set) = mat_matches {
+                        if !m_set.contains(&idx) {
+                            return false;
+                        }
                     }
-                }
 
-                let entry = &self.entries[idx];
+                    let entry = &self.entries[idx];
 
-                if let Some(res) = result_val {
-                    if entry.result != res {
-                        return false;
+                    if let Some(res) = result_val {
+                        if entry.result != res {
+                            return false;
+                        }
                     }
-                }
-                if let Some(ref eco) = eco_filter {
-                    if !eco.is_empty() && !entry.eco_str().starts_with(eco) {
-                        return false;
+                    if let Some(ref eco) = eco_filter {
+                        if !eco.is_empty() && !entry.eco_str().starts_with(eco) {
+                            return false;
+                        }
                     }
-                }
-                if let Some(d) = date_filter {
-                    if !d.is_empty() && !entry.date_str().starts_with(d) {
-                        return false;
+                    if let Some(d) = date_filter {
+                        if !d.is_empty() && !entry.date_str().starts_with(d) {
+                            return false;
+                        }
                     }
-                }
-                if let Some(ref p_flags) = matching_players {
-                    let w_ok = p_flags.get(entry.white_id as usize).copied().unwrap_or(false);
-                    let b_ok = p_flags.get(entry.black_id as usize).copied().unwrap_or(false);
-                    if !w_ok && !b_ok {
-                        return false;
+                    if let Some(ref p_flags) = matching_players {
+                        let w_ok = p_flags.get(entry.white_id as usize).copied().unwrap_or(false);
+                        let b_ok = p_flags.get(entry.black_id as usize).copied().unwrap_or(false);
+                        if !w_ok && !b_ok {
+                            return false;
+                        }
                     }
-                }
-                if let Some(ref w_flags) = matching_white {
-                    if !w_flags.get(entry.white_id as usize).copied().unwrap_or(false) {
-                        return false;
+                    if let Some(ref w_flags) = matching_white {
+                        if !w_flags.get(entry.white_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
                     }
-                }
-                if let Some(ref b_flags) = matching_black {
-                    if !b_flags.get(entry.black_id as usize).copied().unwrap_or(false) {
-                        return false;
+                    if let Some(ref b_flags) = matching_black {
+                        if !b_flags.get(entry.black_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
                     }
-                }
-                if let Some(ref ev_flags) = matching_events {
-                    if !ev_flags.get(entry.event_id as usize).copied().unwrap_or(false) {
-                        return false;
+                    if let Some(ref ev_flags) = matching_events {
+                        if !ev_flags.get(entry.event_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
                     }
-                }
-                if let Some(ref st_flags) = matching_sites {
-                    if !st_flags.get(entry.site_id as usize).copied().unwrap_or(false) {
-                        return false;
+                    if let Some(ref st_flags) = matching_sites {
+                        if !st_flags.get(entry.site_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
                     }
-                }
 
-                true
-            })
-            .collect();
+                    true
+                })
+                .copied()
+                .collect()
+        } else {
+            (0..self.entries.len())
+                .into_par_iter()
+                .filter(|&idx| {
+                    if let Some(ref m_set) = mat_matches {
+                        if !m_set.contains(&idx) {
+                            return false;
+                        }
+                    }
+
+                    let entry = &self.entries[idx];
+
+                    if let Some(res) = result_val {
+                        if entry.result != res {
+                            return false;
+                        }
+                    }
+                    if let Some(ref eco) = eco_filter {
+                        if !eco.is_empty() && !entry.eco_str().starts_with(eco) {
+                            return false;
+                        }
+                    }
+                    if let Some(d) = date_filter {
+                        if !d.is_empty() && !entry.date_str().starts_with(d) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref p_flags) = matching_players {
+                        let w_ok = p_flags.get(entry.white_id as usize).copied().unwrap_or(false);
+                        let b_ok = p_flags.get(entry.black_id as usize).copied().unwrap_or(false);
+                        if !w_ok && !b_ok {
+                            return false;
+                        }
+                    }
+                    if let Some(ref w_flags) = matching_white {
+                        if !w_flags.get(entry.white_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref b_flags) = matching_black {
+                        if !b_flags.get(entry.black_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref ev_flags) = matching_events {
+                        if !ev_flags.get(entry.event_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref st_flags) = matching_sites {
+                        if !st_flags.get(entry.site_id as usize).copied().unwrap_or(false) {
+                            return false;
+                        }
+                    }
+
+                    true
+                })
+                .collect()
+        };
 
         let total_count = matching_indices.len();
 
@@ -818,6 +880,36 @@ impl PgnDatabaseWrapper {
     {
         let start = Instant::now();
         let target_fen = fen_str.trim();
+        let is_exact_mode = mode_param.map(|m| {
+            let m = m.to_lowercase();
+            m == "exact" || m == "auto" || m.is_empty()
+        }).unwrap_or(true);
+
+        if is_exact_mode && turn_param.is_none() {
+            if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(target_fen) {
+                if let Ok(pos_idx) = crate::position_index::PositionIndex::load(&self.pgn_path) {
+                    if let Some(gids) = pos_idx.get_all_position_games(zobrist_hash) {
+                        let matches: Vec<crate::position_search::PositionMatch> = gids
+                            .into_iter()
+                            .map(|gid| crate::position_search::PositionMatch {
+                                game_id: gid as usize,
+                                ply: 0,
+                            })
+                            .collect();
+                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        progress(self.entries.len(), self.entries.len(), matches.len());
+                        return Ok(crate::position_search::PositionSearchResult {
+                            target_fen: target_fen.to_string(),
+                            target_hash: zobrist_hash,
+                            matches,
+                            total_games_searched: self.entries.len(),
+                            elapsed_ms,
+                        });
+                    }
+                }
+            }
+        }
+
         let max_ply_val = max_ply.unwrap_or(500);
 
         let matcher = crate::position_search::parse_position_matcher(target_fen, turn_param, mode_param)?;
@@ -1090,11 +1182,10 @@ impl pgn_reader::Visitor for MaterialFinder {
         if let Ok(m) = san_plus.san.to_move(&self.pos) {
             self.pos.play_unchecked(&m);
             self.ply += 1;
-            if self.match_any_ply && !self.matched {
-                if self.check_material() {
+            if self.match_any_ply && !self.matched
+                && self.check_material() {
                     self.matched = true;
                 }
-            }
         }
     }
 

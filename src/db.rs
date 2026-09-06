@@ -604,6 +604,36 @@ impl ScidDatabaseWrapper {
         F: Fn(usize, usize, usize) + Sync,
     {
         let start_time = std::time::Instant::now();
+        let is_exact_mode = mode_param.map(|m| {
+            let m = m.to_lowercase();
+            m == "exact" || m == "auto" || m.is_empty()
+        }).unwrap_or(true);
+
+        if is_exact_mode && turn_param.is_none() {
+            if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(fen_str) {
+                if let Ok(pos_idx) = crate::position_index::PositionIndex::load(&self.index_path) {
+                    if let Some(gids) = pos_idx.get_all_position_games(zobrist_hash) {
+                        let matches: Vec<crate::position_search::PositionMatch> = gids
+                            .into_iter()
+                            .map(|gid| crate::position_search::PositionMatch {
+                                game_id: gid as usize,
+                                ply: 0,
+                            })
+                            .collect();
+                        let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+                        progress(self.entries.len(), self.entries.len(), matches.len());
+                        return Ok(crate::position_search::PositionSearchResult {
+                            target_fen: fen_str.to_string(),
+                            target_hash: zobrist_hash,
+                            matches,
+                            total_games_searched: self.entries.len(),
+                            elapsed_ms,
+                        });
+                    }
+                }
+            }
+        }
+
         let matcher = crate::position_search::parse_position_matcher(fen_str, turn_param, mode_param)?;
         let matches = crate::position_search::search_position_matcher_mmap_with_progress(
             &self.entries,
@@ -699,7 +729,7 @@ impl ScidDatabaseWrapper {
 
         let eco_filter = filter.eco.as_ref().map(|s| s.to_uppercase());
         let date_filter = filter.date.as_ref().map(|s| s.trim());
-        let result_filter = filter.result.as_ref().map(|s| s.as_str());
+        let result_filter = filter.result.as_deref();
         let include_del = filter.include_deleted.unwrap_or(true);
         let only_del = filter.only_deleted.unwrap_or(false);
 
@@ -779,27 +809,24 @@ impl ScidDatabaseWrapper {
             }
         });
 
-        let pos_matches = filter.fen.as_deref().and_then(|f| {
+        // ⚡ Candidate Game IDs from Position Search / .pos.idx Accelerator
+        let mut candidate_ids: Option<Vec<usize>> = None;
+        if let Some(f) = filter.fen.as_deref() {
             let trimmed = f.trim();
-            if trimmed.is_empty() {
-                None
-            } else if let Ok(res) = self.search_position_with_progress(
-                trimmed,
-                filter.turn.as_deref(),
-                filter.match_mode.as_deref(),
-                filter.max_ply,
-                &progress,
-            ) {
-                Some(
-                    res.matches
-                        .into_iter()
-                        .map(|m| m.game_id)
-                        .collect::<std::collections::HashSet<usize>>(),
-                )
-            } else {
-                None
+            if !trimmed.is_empty() {
+                if let Ok(res) = self.search_position_with_progress(
+                    trimmed,
+                    filter.turn.as_deref(),
+                    filter.match_mode.as_deref(),
+                    filter.max_ply,
+                    &progress,
+                ) {
+                    candidate_ids = Some(res.matches.into_iter().map(|m| m.game_id).collect());
+                } else {
+                    candidate_ids = Some(Vec::new());
+                }
             }
-        });
+        }
 
         let mat_matches = filter.material.as_ref().and_then(|m| {
             self.search_material_with_progress(m, &progress).ok().map(|vec| {
@@ -807,7 +834,7 @@ impl ScidDatabaseWrapper {
             })
         });
 
-        let has_filter = pos_matches.is_some()
+        let has_filter = candidate_ids.is_some()
             || mat_matches.is_some()
             || only_del
             || !include_del
@@ -820,16 +847,89 @@ impl ScidDatabaseWrapper {
             || event_matches.is_some()
             || site_matches.is_some();
 
-        let mut matched_indices: Vec<usize> = if has_filter {
+        let mut matched_indices: Vec<usize> = if let Some(ref c_ids) = candidate_ids {
+            c_ids
+                .par_iter()
+                .filter_map(|&idx| {
+                    if idx >= self.entries.len() {
+                        return None;
+                    }
+                    let entry = &self.entries[idx];
+                    if let Some(ref m_set) = mat_matches {
+                        if !m_set.contains(&idx) {
+                            return None;
+                        }
+                    }
+                    if only_del {
+                        if !entry.deleted {
+                            return None;
+                        }
+                    } else if !include_del && entry.deleted {
+                        return None;
+                    }
+                    if let Some(res) = result_filter {
+                        if res != "All" && !res.is_empty() {
+                            let actual_res = result_code_to_str(entry.result);
+                            if actual_res != res {
+                                return None;
+                            }
+                        }
+                    }
+                    if let Some(eco_prefix) = &eco_filter {
+                        if !eco_prefix.is_empty() {
+                            let actual_eco = eco_to_string(entry.eco_code).unwrap_or_default();
+                            if !actual_eco.starts_with(eco_prefix) {
+                                return None;
+                            }
+                        }
+                    }
+                    if let Some(date_pat) = date_filter {
+                        if !date_pat.is_empty() {
+                            let actual_date = date_to_pgn(entry.date);
+                            if !actual_date.contains(date_pat) {
+                                return None;
+                            }
+                        }
+                    }
+                    if let Some(ref m) = player_matches {
+                        let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        if !w_ok && !b_ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = white_matches {
+                        let ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = black_matches {
+                        let ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = event_matches {
+                        let ok = (entry.event_id as usize) < m.len() && m[entry.event_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    if let Some(ref m) = site_matches {
+                        let ok = (entry.site_id as usize) < m.len() && m[entry.site_id as usize];
+                        if !ok {
+                            return None;
+                        }
+                    }
+                    Some(idx)
+                })
+                .collect()
+        } else if has_filter {
             self.entries
                 .par_iter()
                 .enumerate()
                 .filter_map(|(idx, entry)| {
-                    if let Some(ref p_set) = pos_matches {
-                        if !p_set.contains(&idx) {
-                            return None;
-                        }
-                    }
                     if let Some(ref m_set) = mat_matches {
                         if !m_set.contains(&idx) {
                             return None;

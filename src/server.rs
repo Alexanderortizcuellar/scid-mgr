@@ -9,6 +9,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+#[allow(clippy::large_enum_variant)]
 pub enum DatabaseBackend {
     Scid(ScidDatabaseWrapper),
     Pgn(PgnDatabaseWrapper),
@@ -475,6 +476,42 @@ fn handle_command(
             }
         }
 
+        "get_game_summaries" => {
+            let db = match current_db {
+                Some(db) => db,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    }
+                }
+            };
+            let ids: Vec<usize> = req
+                .params
+                .get("game_ids")
+                .or_else(|| req.params.get("ids"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let summaries: Vec<crate::db::GameSummary> = match db {
+                DatabaseBackend::Scid(s) => ids.iter().filter_map(|&gid| s.get_game_summary(gid)).collect(),
+                DatabaseBackend::Pgn(p) => ids.iter().filter_map(|&gid| {
+                    if gid < p.entries.len() {
+                        Some(p.get_summary(gid))
+                    } else {
+                        None
+                    }
+                }).collect(),
+            };
+            ResponseMessage {
+                id,
+                status: "ok".to_string(),
+                data: Some(serde_json::json!({ "game_summaries": summaries })),
+                error: None,
+            }
+        }
+
 
         "search_position" | "position_search" => {
             let db = match current_db {
@@ -506,39 +543,6 @@ fn handle_command(
                 }
             };
 
-            // ⚡ Instant Sub-Millisecond lookup if PositionIndex is active
-            if let Some(pos_idx) = current_pos_index.as_ref() {
-                if let Ok(f) = fen.trim().parse::<shakmaty::fen::Fen>() {
-                    if let Ok(p) = f.into_position::<shakmaty::Chess>(shakmaty::CastlingMode::Standard) {
-                        use shakmaty::zobrist::ZobristHash;
-                        let h: shakmaty::zobrist::Zobrist64 = p.zobrist_hash(shakmaty::EnPassantMode::Legal);
-                        if let Some(game_ids) = pos_idx.get_position_sample_games(h.0) {
-                            let matches: Vec<crate::position_search::PositionMatch> = game_ids
-                                .iter()
-                                .map(|&gid| crate::position_search::PositionMatch { game_id: gid as usize, ply: 0 })
-                                .collect();
-                            let total_games = match db {
-                                DatabaseBackend::Scid(s) => s.game_count(),
-                                DatabaseBackend::Pgn(p) => p.game_count(),
-                            };
-                            let res = crate::position_search::PositionSearchResult {
-                                target_fen: fen.to_string(),
-                                target_hash: h.0,
-                                matches,
-                                total_games_searched: total_games,
-                                elapsed_ms: 0.08,
-                            };
-                            return ResponseMessage {
-                                id,
-                                status: "ok".to_string(),
-                                data: Some(serde_json::to_value(&res).unwrap_or_default()),
-                                error: None,
-                            };
-                        }
-                    }
-                }
-            }
-
             let turn_param = req
                 .params
                 .get("turn")
@@ -551,6 +555,50 @@ fn handle_command(
                 .or_else(|| req.params.get("mode"))
                 .or_else(|| req.params.get("params").and_then(|p| p.get("match_mode").or_else(|| p.get("mode"))))
                 .and_then(|v| v.as_str());
+
+            let is_exact = mode_param.map(|m| {
+                let m = m.to_lowercase();
+                m == "exact" || m == "auto" || m.is_empty()
+            }).unwrap_or(true);
+
+            // ⚡ Instant Sub-Millisecond candidate lookup if PositionIndex is active
+            if is_exact && turn_param.is_none() {
+                if current_pos_index.is_none() {
+                    let db_path = match db {
+                        DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                        DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+                    };
+                    *current_pos_index = PositionIndex::load(&db_path).ok();
+                }
+
+                if let Some(pos_idx) = current_pos_index.as_ref() {
+                    if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(fen) {
+                        if let Some(game_ids) = pos_idx.get_all_position_games(zobrist_hash) {
+                            let matches: Vec<crate::position_search::PositionMatch> = game_ids
+                                .into_iter()
+                                .map(|gid| crate::position_search::PositionMatch { game_id: gid as usize, ply: 0 })
+                                .collect();
+                            let total_games = match db {
+                                DatabaseBackend::Scid(s) => s.game_count(),
+                                DatabaseBackend::Pgn(p) => p.game_count(),
+                            };
+                            let res = crate::position_search::PositionSearchResult {
+                                target_fen: fen.to_string(),
+                                target_hash: zobrist_hash,
+                                matches,
+                                total_games_searched: total_games,
+                                elapsed_ms: 0.05,
+                            };
+                            return ResponseMessage {
+                                id,
+                                status: "ok".to_string(),
+                                data: Some(serde_json::to_value(&res).unwrap_or_default()),
+                                error: None,
+                            };
+                        }
+                    }
+                }
+            }
 
             let max_ply = req
                 .params
@@ -645,6 +693,22 @@ fn handle_command(
                 .or_else(|| req.params.get("params"))
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
 
+            let include_all_game_ids = req.params.get("include_all_game_ids")
+                .or_else(|| req.params.get("all_game_ids"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let max_sample_ids: Option<usize> = if include_all_game_ids {
+                None
+            } else {
+                req.params.get("max_sample_games")
+                    .or_else(|| req.params.get("max_samples"))
+                    .or_else(|| req.params.get("sample_games"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+                    .or(Some(20))
+            };
+
             let db = match current_db {
                 Some(d) => d,
                 None => {
@@ -690,7 +754,7 @@ fn handle_command(
             }
 
             if let Some(pos_idx) = current_pos_index.as_ref() {
-                report = pos_idx.query_tree_with_filter(fen, target_game_ids.as_deref());
+                report = pos_idx.query_tree_with_options(fen, target_game_ids.as_deref(), max_sample_ids);
             }
 
             // 2. Dynamic Fallback: If .pos.idx is missing or position is beyond max depth
@@ -717,7 +781,69 @@ fn handle_command(
                 };
             }
 
-            if let Some(rep) = report {
+            let include_last_played = req.params.get("include_last_played").and_then(|v| v.as_bool()).unwrap_or(true);
+            let include_sample_games = req.params.get("include_sample_games").and_then(|v| v.as_bool()).unwrap_or(true);
+
+            if let Some(mut rep) = report {
+                if include_last_played {
+                    for m in &mut rep.moves {
+                        match db {
+                            DatabaseBackend::Scid(s) => {
+                                let mut max_date: u32 = 0;
+                                for &gid in &m.sample_game_ids {
+                                    let idx = gid as usize;
+                                    if idx < s.entries().len() {
+                                        let d = s.entries()[idx].date;
+                                        if d > max_date {
+                                            max_date = d;
+                                        }
+                                    }
+                                }
+                                if max_date > 0 {
+                                    let d_str = chess_scid_rw::dates::date_to_pgn(max_date);
+                                    let clean_d = d_str.trim_end_matches(".??").trim_end_matches(".?");
+                                    if !clean_d.starts_with('?') && !clean_d.is_empty() {
+                                        m.last_played = Some(clean_d.to_string());
+                                    }
+                                }
+                            }
+                            DatabaseBackend::Pgn(p) => {
+                                let mut max_date_str: Option<String> = None;
+                                for &gid in &m.sample_game_ids {
+                                    let idx = gid as usize;
+                                    if idx < p.entries.len() {
+                                        let d = p.entries[idx].date_str();
+                                        if !d.is_empty() && !d.starts_with('?') {
+                                            if max_date_str.as_ref().map_or(true, |cur| d > *cur) {
+                                                max_date_str = Some(d);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(d_str) = max_date_str {
+                                    let clean_d = d_str.trim_end_matches(".??").trim_end_matches(".?");
+                                    if !clean_d.starts_with('?') && !clean_d.is_empty() {
+                                        m.last_played = Some(clean_d.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if include_sample_games {
+                    rep.sample_games = match db {
+                        DatabaseBackend::Scid(s) => rep.sample_game_ids.iter().take(15).filter_map(|&gid| s.get_game_summary(gid as usize)).collect(),
+                        DatabaseBackend::Pgn(p) => rep.sample_game_ids.iter().take(15).filter_map(|&gid| {
+                            if (gid as usize) < p.entries.len() {
+                                Some(p.get_summary(gid as usize))
+                            } else {
+                                None
+                            }
+                        }).collect(),
+                    };
+                }
+
                 ResponseMessage {
                     id,
                     status: "ok".to_string(),
@@ -739,6 +865,7 @@ fn handle_command(
                         "draw_pct": 0.0,
                         "black_pct": 0.0,
                         "sample_game_ids": [],
+                        "sample_games": [],
                     })),
                     error: None,
                 }
@@ -854,6 +981,7 @@ fn handle_command(
 
             let max_ply = req.params.get("max_ply").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
             let max_games = req.params.get("max_games").or_else(|| req.params.get("max_game_ids")).and_then(|v| v.as_u64()).map(|g| g as usize);
+            let min_games = req.params.get("min_games").and_then(|v| v.as_u64()).map(|g| g as usize);
             let threads = req.params.get("threads").and_then(|v| v.as_u64()).map(|t| t as usize).or(Some(*current_thread_count));
             let start = Instant::now();
 
@@ -862,7 +990,7 @@ fn handle_command(
                     let games_path = s.games_path().to_path_buf();
                     let entries = s.entries();
                     let db_path = s.index_path().to_path_buf();
-                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, max_games, threads, |scanned, total, positions| {
+                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, max_games, min_games, threads, |scanned, total, positions| {
                         let event_json = serde_json::json!({
                             "event": "build_pos_index_progress",
                             "data": {
@@ -883,7 +1011,7 @@ fn handle_command(
                     let db_path = p.pgn_path.clone();
                     let entries = &p.entries;
                     let mmap = p.mmap_ref();
-                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, max_games, threads, |scanned, total, positions| {
+                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, max_games, min_games, threads, |scanned, total, positions| {
                         let event_json = serde_json::json!({
                             "event": "build_pos_index_progress",
                             "data": {

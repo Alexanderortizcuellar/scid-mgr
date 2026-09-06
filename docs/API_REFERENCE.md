@@ -82,6 +82,8 @@ Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loade
 Queries the instant Opening Tree / Explorer for any board position (FEN or starting board).
 - **Params**:
   - `fen`: `string` (optional FEN position; defaults to starting board)
+  - `max_sample_games`: `number` (optional, default: `20`; limits sample game IDs returned per move; use `0` for pure stats)
+  - `include_all_game_ids`: `boolean` (optional, default: `false`; decodes and returns the full posting list of game IDs for all moves)
   - `use_search_results`: `boolean` (optional; if `true`, calculates stats strictly for the current filtered search results)
   - `game_ids`: `number[]` (optional; calculates stats strictly for an explicit list of game IDs)
   - `filter`: `GameFilter` (optional; dynamically filters games by player, date, ECO, rating, etc. before computing position tree)
@@ -92,10 +94,17 @@ Checks the companion `.pos.idx` index status (`valid`, `outdated`, `missing`) an
 - **Returns**: `{ status: "valid" | "outdated" | "missing", header: {...}, loaded: boolean, unique_positions: number }`
 
 ### `build_pos_index`
-Constructs or rebuilds the companion `.pos.idx` index in parallel across all CPU cores. Emits streaming `build_pos_index_progress` events.
+Constructs or rebuilds the companion `.pos.idx` (v3) index in parallel across all CPU cores. Emits streaming `build_pos_index_progress` events.
 - **Params**:
   - `max_ply`: `number` (optional, default: 24 plies / 12 moves)
-- **Returns**: `{ status: "valid", unique_positions: number, elapsed_ms: number }`
+  - `max_games`: `number` (optional, default: 0 for all games in inverted index)
+  - `min_games`: `number` (optional, default: 1; minimum game occurrences for a position to be indexed, filtering out rare one-off positions)
+  - `threads`: `number` (optional worker thread count)
+- **Returns**: `{ status: "valid", unique_positions: number, elapsed_ms: number, diagnostics: {...} }`
+
+### `diag_pos_idx`
+Scans and analyzes the companion `.pos.idx` memory map, calculating Delta-Varint vs Roaring Bitmap posting list distributions, compression savings, and move bucket metrics.
+- **Returns**: `{ total_game_sets, delta_varint_count, roaring_count, bytes_adaptive, bucket_1_10, bucket_11_100, bucket_101_1k, ... }`
 
 ### `search_material`
 Searches by bitboard piece count and opposite/same-colored bishops.

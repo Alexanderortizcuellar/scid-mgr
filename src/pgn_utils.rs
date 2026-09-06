@@ -367,7 +367,7 @@ where
     let mut exported = 0;
 
     const CHUNK_SIZE: usize = 8000;
-    let num_chunks = (total_games + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let num_chunks = total_games.div_ceil(CHUNK_SIZE);
 
     for chunk_idx in 0..num_chunks {
         let start_i = chunk_idx * CHUNK_SIZE;
@@ -387,12 +387,10 @@ where
             .collect();
 
         // High-speed sequential write
-        for maybe_pgn in chunk_pgns {
-            if let Some(pgn) = maybe_pgn {
-                writer.write_all(pgn.trim().as_bytes())?;
-                writer.write_all(b"\n\n")?;
-                exported += 1;
-            }
+        for pgn in chunk_pgns.into_iter().flatten() {
+            writer.write_all(pgn.trim().as_bytes())?;
+            writer.write_all(b"\n\n")?;
+            exported += 1;
         }
 
         if last_report.elapsed().as_millis() >= 100 || chunk_idx + 1 == num_chunks {

@@ -3,7 +3,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QComboBox
+    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
+    QComboBox, QCheckBox
 )
 from ..backend_client import BackendClient
 from .board_widget import ChessBoardEditorWidget
@@ -12,14 +13,15 @@ class OpeningTreeWidget(QWidget):
     """
     Interactive Opening Explorer & Tree View (Lichess/ChessBase style).
     - Clicking any move instantly fetches the next branch in < 1ms.
-    - Displays win/draw/loss % bars and average ELO.
+    - Displays win/draw/loss % bars, Last Played (or Average ELO).
+    - Displays sample games with 1-click preview and double-click to load.
     """
     def __init__(self, client: BackendClient, main_window, parent=None):
         super().__init__(parent)
         self.client = client
         self.main_window = main_window
         self.board = chess.Board()
-        self.move_history = [] # list of (Move, san)
+        self.move_history = []  # list of (Move, san)
         self.current_report = None
 
         self.init_ui()
@@ -44,6 +46,12 @@ class OpeningTreeWidget(QWidget):
         tb_layout.addWidget(self.lbl_moves_seq)
 
         tb_layout.addStretch()
+
+        self.chk_last_played = QCheckBox("Last Played")
+        self.chk_last_played.setChecked(True)
+        self.chk_last_played.setToolTip("Toggle displaying 'Last Played' date vs 'Avg Elo (W/B)' in the candidate moves table")
+        self.chk_last_played.toggled.connect(self.on_last_played_toggled)
+        tb_layout.addWidget(self.chk_last_played)
 
         self.combo_scope = QComboBox()
         self.combo_scope.addItems(["🌐 Entire Database", "🔍 Search Results"])
@@ -88,7 +96,7 @@ class OpeningTreeWidget(QWidget):
 
         main_layout.addWidget(self.summary_card)
 
-        # Splitter (Board on left, Moves Tree Table on right)
+        # Splitter (Board on left, Explorer Panels on right)
         splitter = QSplitter(Qt.Horizontal)
 
         # Left: Board Container
@@ -99,31 +107,81 @@ class OpeningTreeWidget(QWidget):
         b_box.addWidget(self.board_editor)
         splitter.addWidget(board_panel)
 
-        # Right: Tree Table & Top Games
-        right_panel = QWidget()
-        r_box = QVBoxLayout(right_panel)
-        r_box.setContentsMargins(0, 0, 0, 0)
-        r_box.setSpacing(6)
+        # Right: Vertical Splitter (Top: Candidate Moves, Bottom: Sample Games)
+        right_splitter = QSplitter(Qt.Vertical)
 
-        # Tree Table
+        # 1. Candidate Moves Panel
+        moves_panel = QWidget()
+        m_box = QVBoxLayout(moves_panel)
+        m_box.setContentsMargins(0, 0, 0, 0)
+        m_box.setSpacing(4)
+
+        lbl_moves_title = QLabel("Candidate Moves")
+        lbl_moves_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #424242;")
+        m_box.addWidget(lbl_moves_title)
+
         self.tree_table = QTableWidget()
         self.tree_table.setColumnCount(7)
-        self.tree_table.setHorizontalHeaderLabels([
-            "Move", "Games", "Score", "1-0 %", "1/2 %", "0-1 %", "Avg Elo (W/B)"
-        ])
-        header = self.tree_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(True)
+        self._update_table_headers()
+        tree_header = self.tree_table.horizontalHeader()
+        tree_header.setSectionResizeMode(QHeaderView.Interactive)
+        tree_header.setStretchLastSection(True)
         self.tree_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.tree_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tree_table.doubleClicked.connect(self.on_row_double_clicked)
-        r_box.addWidget(self.tree_table)
+        self.tree_table.itemSelectionChanged.connect(self.on_tree_selection_changed)
+        m_box.addWidget(self.tree_table)
+        right_splitter.addWidget(moves_panel)
 
-        splitter.addWidget(right_panel)
+        # 2. Sample Games Panel
+        sample_panel = QWidget()
+        s_box = QVBoxLayout(sample_panel)
+        s_box.setContentsMargins(0, 4, 0, 0)
+        s_box.setSpacing(4)
+
+        self.lbl_sample_games_title = QLabel("Sample Games in Position (Double-click to load)")
+        self.lbl_sample_games_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #424242;")
+        s_box.addWidget(self.lbl_sample_games_title)
+
+        self.sample_games_table = QTableWidget()
+        self.sample_games_table.setColumnCount(7)
+        self.sample_games_table.setHorizontalHeaderLabels([
+            "ID", "White", "Black", "Result", "Date", "ECO", "Event"
+        ])
+        s_header = self.sample_games_table.horizontalHeader()
+        s_header.setSectionResizeMode(QHeaderView.Interactive)
+        s_header.setStretchLastSection(True)
+        self.sample_games_table.setColumnWidth(0, 50)
+        self.sample_games_table.setColumnWidth(1, 130)
+        self.sample_games_table.setColumnWidth(2, 130)
+        self.sample_games_table.setColumnWidth(3, 65)
+        self.sample_games_table.setColumnWidth(4, 80)
+        self.sample_games_table.setColumnWidth(5, 55)
+        self.sample_games_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.sample_games_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.sample_games_table.doubleClicked.connect(self.on_sample_game_double_clicked)
+        s_box.addWidget(self.sample_games_table)
+        right_splitter.addWidget(sample_panel)
+
+        right_splitter.setStretchFactor(0, 6)
+        right_splitter.setStretchFactor(1, 4)
+
+        splitter.addWidget(right_splitter)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
 
         main_layout.addWidget(splitter)
+
+    def _update_table_headers(self):
+        last_col = "Last Played" if self.chk_last_played.isChecked() else "Avg Elo (W/B)"
+        self.tree_table.setHorizontalHeaderLabels([
+            "Move", "Games", "Score", "1-0 %", "1/2 %", "0-1 %", last_col
+        ])
+
+    def on_last_played_toggled(self, checked: bool):
+        self._update_table_headers()
+        if self.current_report:
+            self._render_tree_table(self.current_report.get("moves", []))
 
     def on_scope_changed(self, index: int):
         if index == 1:
@@ -175,6 +233,71 @@ class OpeningTreeWidget(QWidget):
             san = item.text().strip()
             self.play_move_san(san)
 
+    def on_tree_selection_changed(self):
+        selected_rows = self.tree_table.selectionModel().selectedRows()
+        if not selected_rows:
+            if self.current_report:
+                self.lbl_sample_games_title.setText("Sample Games in Position (Double-click to load)")
+                self._populate_sample_games(self.current_report.get("sample_games", []))
+            return
+
+        row = selected_rows[0].row()
+        if not self.current_report or row >= len(self.current_report.get("moves", [])):
+            return
+
+        move_data = self.current_report["moves"][row]
+        san = move_data.get("san", "")
+        sample_ids = move_data.get("sample_game_ids", [])
+        if sample_ids:
+            self.lbl_sample_games_title.setText(f"Sample Games for {san} ({len(sample_ids)} games) (Double-click to load)")
+            self.client.send_request("get_game_summaries", {"game_ids": sample_ids})
+        else:
+            self.sample_games_table.setRowCount(0)
+
+    def on_sample_game_double_clicked(self, index):
+        row = index.row()
+        item = self.sample_games_table.item(row, 0)
+        if item:
+            try:
+                game_id = int(item.text())
+                self.main_window.load_game_by_id(game_id)
+            except ValueError:
+                pass
+
+    def on_game_summaries_received(self, summaries: list):
+        self._populate_sample_games(summaries)
+
+    def _populate_sample_games(self, games: list):
+        self.sample_games_table.setRowCount(len(games))
+        for row, g in enumerate(games):
+            gid = str(g.get("id", row + 1))
+            white = g.get("white", "?")
+            black = g.get("black", "?")
+            result = g.get("result", "*")
+            date = g.get("date", "????.??.??")
+            eco = g.get("eco", "")
+            event = g.get("event", "")
+
+            it_id = QTableWidgetItem(gid)
+            it_id.setTextAlignment(Qt.AlignCenter)
+            it_w = QTableWidgetItem(white)
+            it_b = QTableWidgetItem(black)
+            it_r = QTableWidgetItem(result)
+            it_r.setTextAlignment(Qt.AlignCenter)
+            it_d = QTableWidgetItem(date)
+            it_d.setTextAlignment(Qt.AlignCenter)
+            it_eco = QTableWidgetItem(eco)
+            it_eco.setTextAlignment(Qt.AlignCenter)
+            it_ev = QTableWidgetItem(event)
+
+            self.sample_games_table.setItem(row, 0, it_id)
+            self.sample_games_table.setItem(row, 1, it_w)
+            self.sample_games_table.setItem(row, 2, it_b)
+            self.sample_games_table.setItem(row, 3, it_r)
+            self.sample_games_table.setItem(row, 4, it_d)
+            self.sample_games_table.setItem(row, 5, it_eco)
+            self.sample_games_table.setItem(row, 6, it_ev)
+
     def _update_history_label(self):
         if not self.move_history:
             self.lbl_moves_seq.setText("1. Starting Position")
@@ -198,6 +321,16 @@ class OpeningTreeWidget(QWidget):
         self.lbl_summary_score.setText(f"⚪ White: {w_pct:.1f}% | 🤝 Draw: {d_pct:.1f}% | ⚫ Black: {b_pct:.1f}%")
 
         moves = report.get("moves", [])
+        self._render_tree_table(moves)
+
+        # Populate initial sample games for the position
+        sample_games = report.get("sample_games", [])
+        self.lbl_sample_games_title.setText(f"Sample Games in Position ({len(sample_games)} games) (Double-click to load)")
+        self._populate_sample_games(sample_games)
+
+    def _render_tree_table(self, moves: list):
+        show_last_played = self.chk_last_played.isChecked()
+        self.tree_table.blockSignals(True)
         self.tree_table.setRowCount(len(moves))
 
         for row, m in enumerate(moves):
@@ -207,9 +340,13 @@ class OpeningTreeWidget(QWidget):
             md_pct = m.get("draw_pct", 0.0)
             mb_pct = m.get("black_pct", 0.0)
             score = mw_pct + (md_pct / 2.0)
-            avg_w = m.get("avg_white_elo")
-            avg_b = m.get("avg_black_elo")
-            elo_str = f"{avg_w or '-'}/{avg_b or '-'}"
+
+            if show_last_played:
+                stat_str = m.get("last_played") or "-"
+            else:
+                avg_w = m.get("avg_white_elo")
+                avg_b = m.get("avg_black_elo")
+                stat_str = f"{avg_w or '-'}/{avg_b or '-'}"
 
             item_san = QTableWidgetItem(san)
             item_san.setFont(QFont("Arial", 10, QFont.Bold))
@@ -226,8 +363,8 @@ class OpeningTreeWidget(QWidget):
             item_b = QTableWidgetItem(f"{mb_pct:.1f}%")
             item_b.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             item_b.setForeground(QColor("#c62828"))
-            item_elo = QTableWidgetItem(elo_str)
-            item_elo.setTextAlignment(Qt.AlignCenter)
+            item_stat = QTableWidgetItem(stat_str)
+            item_stat.setTextAlignment(Qt.AlignCenter)
 
             self.tree_table.setItem(row, 0, item_san)
             self.tree_table.setItem(row, 1, item_games)
@@ -235,7 +372,9 @@ class OpeningTreeWidget(QWidget):
             self.tree_table.setItem(row, 3, item_w)
             self.tree_table.setItem(row, 4, item_d)
             self.tree_table.setItem(row, 5, item_b)
-            self.tree_table.setItem(row, 6, item_elo)
+            self.tree_table.setItem(row, 6, item_stat)
+
+        self.tree_table.blockSignals(False)
 
     def unload_index(self):
         if self.client.is_running():
@@ -243,6 +382,7 @@ class OpeningTreeWidget(QWidget):
             self.main_window.status_bar.showMessage("Position index unloaded from RAM.", 4000)
             self.lbl_index_badge.setText("⚪ Fast Index: On Disk (Unloaded)")
             self.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
+
 
 
 

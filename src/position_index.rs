@@ -15,6 +15,7 @@ use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, Position};
 
 pub const POS_INDEX_MAGIC: &[u8; 8] = b"SCIDPOS5";
+pub const POS_INDEX_VERSION: u32 = 3;
 pub const DEFAULT_MAX_PLY_DEPTH: usize = 16; // 8 full moves
 const NUM_STRIPES: usize = 256;
 const HEADER_SIZE: usize = 64;
@@ -87,12 +88,7 @@ impl PackedMove {
         let to_sq = shakmaty::Square::new(self.to_square() as u32);
         let promo = self.promotion();
 
-        for m in pos.legal_moves() {
-            if m.from() == Some(from_sq) && m.to() == to_sq && m.promotion() == promo {
-                return Some(m);
-            }
-        }
-        None
+        pos.legal_moves().into_iter().find(|m| m.from() == Some(from_sq) && m.to() == to_sq && m.promotion() == promo)
     }
 }
 
@@ -284,6 +280,8 @@ pub struct OpeningTreeMoveView {
     pub black_wins: u32,
     pub avg_white_elo: Option<u32>,
     pub avg_black_elo: Option<u32>,
+    #[serde(default)]
+    pub last_played: Option<String>,
     pub sample_game_ids: Vec<u32>,
 }
 
@@ -300,6 +298,8 @@ pub struct OpeningTreeReport {
     pub black_pct: f64,
     pub moves: Vec<OpeningTreeMoveView>,
     pub sample_game_ids: Vec<u32>,
+    #[serde(default)]
+    pub sample_games: Vec<crate::db::GameSummary>,
 }
 
 /// Static, disk-backed position index using zero-copy memory mapping (`memmap2`)
@@ -372,7 +372,7 @@ impl PositionIndex {
             .unwrap_or_default()
             .as_secs();
 
-        if header.db_game_count != expected_game_count as u64 || header.db_mtime_secs != current_mtime {
+        if header.version != POS_INDEX_VERSION || header.db_game_count != expected_game_count as u64 || header.db_mtime_secs != current_mtime {
             return (IndexStatus::Outdated, Some(header));
         }
 
@@ -399,6 +399,9 @@ impl PositionIndex {
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
         let header = PositionIndexHeader::read_from_slice(&mmap[0..HEADER_SIZE])?;
+        if header.version != POS_INDEX_VERSION {
+            anyhow::bail!("Unsupported position index version: {} (expected {})", header.version, POS_INDEX_VERSION);
+        }
 
         Ok(Self {
             path: actual_path,
@@ -427,6 +430,11 @@ impl PositionIndex {
 
     /// Look up a position by its 64-bit Zobrist hash in O(log N) using binary search directly on mmap (< 0.001 ms)
     pub fn get_position(&self, target_hash: u64) -> Option<PositionNode> {
+        self.get_position_with_limit(target_hash, None)
+    }
+
+    /// Look up a position with an optional cap on decoded game IDs to minimize allocations and latency (< 0.001 ms)
+    pub fn get_position_with_limit(&self, target_hash: u64, max_game_ids: Option<usize>) -> Option<PositionNode> {
         let entries = self.index_entries();
         let idx = entries.binary_search_by_key(&target_hash, |e| { e.hash }).ok()?;
         let entry = &entries[idx];
@@ -442,20 +450,29 @@ impl PositionIndex {
         }
 
         let payload = &self.mmap[start..end];
-        decode_position_payload(payload, target_hash).ok()
+        decode_position_payload(payload, target_hash, max_game_ids).ok()
     }
 
     /// Query the opening tree for any board position (FEN or standard starting board) with zero heap RAM overhead
     pub fn query_tree(&self, fen_str: &str) -> Option<OpeningTreeReport> {
-        let (pos, zobrist_hash) = parse_target_position(fen_str)?;
-        let node = self.get_position(zobrist_hash)?;
-        Some(generate_opening_tree_report(&node, &pos, zobrist_hash))
+        self.query_tree_with_options(fen_str, None, Some(20))
     }
 
     /// Query the opening tree with an optional game IDs filter using the inverted position posting list (< 0.05 ms)
     pub fn query_tree_with_filter(&self, fen_str: &str, filter_game_ids: Option<&[usize]>) -> Option<OpeningTreeReport> {
+        let max_samples = if filter_game_ids.is_some() { None } else { Some(20) };
+        self.query_tree_with_options(fen_str, filter_game_ids, max_samples)
+    }
+
+    /// Query the opening tree with explicit game IDs filter and customizable sample IDs limit
+    pub fn query_tree_with_options(
+        &self,
+        fen_str: &str,
+        filter_game_ids: Option<&[usize]>,
+        _max_sample_ids: Option<usize>,
+    ) -> Option<OpeningTreeReport> {
         let (pos, zobrist_hash) = parse_target_position(fen_str)?;
-        let node = self.get_position(zobrist_hash)?;
+        let node = self.get_position_with_limit(zobrist_hash, None)?;
         if let Some(ids) = filter_game_ids {
             Some(generate_filtered_opening_tree_report(&node, &pos, zobrist_hash, ids))
         } else {
@@ -763,7 +780,7 @@ impl PositionIndex {
 
     /// Fast lookup of sample matching game IDs for position search (< 0.001 ms)
     pub fn get_position_sample_games(&self, zobrist_hash: u64) -> Option<Vec<u32>> {
-        self.get_position(zobrist_hash).map(|n| {
+        self.get_position_with_limit(zobrist_hash, Some(50)).map(|n| {
             let mut ids = Vec::new();
             for m in n.moves {
                 for id in m.game_ids {
@@ -790,12 +807,14 @@ impl PositionIndex {
     }
 
     /// Build static, disk-backed .pos.idx file for SCID databases in parallel
+    #[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
     pub fn build_for_scid<P: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
         db_path: P,
         entries: &[chess_scid_rw::entry::IndexEntry],
         games_path: &Path,
         max_ply: usize,
         max_game_ids: Option<usize>,
+        min_games: Option<usize>,
         threads: Option<usize>,
         progress: F,
     ) -> Result<Self> {
@@ -947,18 +966,21 @@ impl PositionIndex {
             db_metadata.len(),
             total_games as u64,
             max_ply as u32,
+            min_games,
         )?;
 
         Self::load(db_p)
     }
 
     /// Build static, disk-backed .pos.idx file for PGN databases in parallel
+    #[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
     pub fn build_for_pgn<P: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
         db_path: P,
         entries: &[crate::pgn_db::PgnIndexEntry],
         mmap: &memmap2::Mmap,
         max_ply: usize,
         max_game_ids: Option<usize>,
+        min_games: Option<usize>,
         threads: Option<usize>,
         progress: F,
     ) -> Result<Self> {
@@ -988,7 +1010,7 @@ impl PositionIndex {
                         let slice =
                             &mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
                         let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
-                        let mut indexer = PgnTreeVisitor::new(
+                        let mut visitor = PgnTreeVisitor::new(
                             max_ply,
                             w_win,
                             draw,
@@ -997,7 +1019,7 @@ impl PositionIndex {
                             max_games_limit,
                             &accumulator,
                         );
-                        let _ = reader.read_game(&mut indexer);
+                        let _ = reader.read_game(&mut visitor);
                     }
 
                     let current_scanned =
@@ -1034,6 +1056,7 @@ impl PositionIndex {
             db_metadata.len(),
             total_games as u64,
             max_ply as u32,
+            min_games,
         )?;
 
         Self::load(db_p)
@@ -1047,7 +1070,14 @@ impl PositionIndex {
         db_size_bytes: u64,
         db_game_count: u64,
         max_ply_depth: u32,
+        min_games: Option<usize>,
     ) -> Result<PathBuf> {
+        if let Some(min_g) = min_games {
+            if min_g > 1 {
+                positions_map.retain(|_, node| (node.total_games as usize) >= min_g);
+            }
+        }
+
         let idx_path = Self::companion_path(db_path);
         let temp_path = idx_path.with_file_name(format!(
             "{}.tmp",
@@ -1067,7 +1097,11 @@ impl PositionIndex {
         let mut encoding_stats = GameSetEncodingStats::new();
 
         for hash in hashes {
-            if let Some(node) = positions_map.remove(&hash) {
+            if let Some(mut node) = positions_map.remove(&hash) {
+                for m in &mut node.moves {
+                    m.game_ids.sort_unstable();
+                    m.game_ids.dedup();
+                }
                 let curr_offset = data_payload.len() as u32;
                 let payload_bytes = encode_position_payload(&node, Some(&mut encoding_stats));
                 data_payload.extend_from_slice(&payload_bytes);
@@ -1081,7 +1115,7 @@ impl PositionIndex {
 
         let header = PositionIndexHeader {
             magic: *POS_INDEX_MAGIC,
-            version: 2,
+            version: POS_INDEX_VERSION,
             flags: 0,
             db_mtime_secs,
             db_size_bytes,
@@ -1162,17 +1196,24 @@ impl PositionIndex {
             for _ in 0..move_count {
                 if slice.len() < 2 { break; }
                 slice = &slice[2..]; // packed_move
-                let _m_tot = read_varint(&mut slice)?;
-                let _m_ww = read_varint(&mut slice)?;
-                let _m_bw = read_varint(&mut slice)?;
-
                 let prev_len = slice.len();
-                let id_count = read_varint(&mut slice)? as usize;
-                for _ in 0..id_count {
-                    let _ = read_varint(&mut slice)?;
+                let outcome_code = read_varint(&mut slice)?;
+                if outcome_code < 3 {
+                    let _ = read_varint(&mut slice)?; // single game_id
+                    let delta_len = prev_len - slice.len();
+                    stats.record_sample(1, delta_len);
+                } else {
+                    let m_ww = (outcome_code - 3) as u32;
+                    let m_dr = read_varint(&mut slice)? as u32;
+                    let m_bw = read_varint(&mut slice)? as u32;
+                    let _m_tot = (m_ww + m_dr + m_bw) as usize;
+                    let id_count = read_varint(&mut slice)? as usize;
+                    for _ in 0..id_count {
+                        let _ = read_varint(&mut slice)?;
+                    }
+                    let delta_len = prev_len - slice.len();
+                    stats.record_sample(id_count, delta_len);
                 }
-                let delta_len = prev_len - slice.len();
-                stats.record_sample(id_count, delta_len);
             }
         }
         Ok(stats)
@@ -1264,7 +1305,6 @@ pub fn read_varint(bytes: &mut &[u8]) -> Result<u64> {
 
 #[inline]
 pub fn write_delta_game_ids<W: Write>(w: &mut W, ids: &[u32]) -> std::io::Result<()> {
-    write_varint(w, ids.len() as u64)?;
     let mut prev = 0u64;
     for &id in ids {
         let id64 = id as u64;
@@ -1276,8 +1316,7 @@ pub fn write_delta_game_ids<W: Write>(w: &mut W, ids: &[u32]) -> std::io::Result
 }
 
 #[inline]
-pub fn read_delta_game_ids(bytes: &mut &[u8]) -> Result<Vec<u32>> {
-    let count = read_varint(bytes)? as usize;
+pub fn read_delta_game_ids(bytes: &mut &[u8], count: usize) -> Result<Vec<u32>> {
     let mut ids = Vec::with_capacity(count);
     let mut prev = 0u64;
     for _ in 0..count {
@@ -1298,11 +1337,30 @@ fn encode_position_payload(node: &PositionNode, mut stats: Option<&mut GameSetEn
 
     for m in &node.moves {
         buf.extend_from_slice(&m.packed_move.to_le_bytes());
-        let _ = write_varint(&mut buf, m.total_games as u64);
-        let _ = write_varint(&mut buf, m.white_wins as u64);
-        let _ = write_varint(&mut buf, m.black_wins as u64);
         let prev_len = buf.len();
-        let _ = write_delta_game_ids(&mut buf, &m.game_ids);
+
+        if m.total_games == 1 && m.game_ids.len() <= 1 {
+            // Lichess-style Singleton outcome code:
+            // 0 = White win, 1 = Black win, 2 = Draw
+            let code = if m.white_wins == 1 {
+                0u64
+            } else if m.black_wins == 1 {
+                1u64
+            } else {
+                2u64
+            };
+            let _ = write_varint(&mut buf, code);
+            let single_id = m.game_ids.first().copied().unwrap_or(0) as u64;
+            let _ = write_varint(&mut buf, single_id);
+        } else {
+            // Multi-game move: (white_wins + 3), draws, black_wins, id_count, followed by delta-varints
+            let _ = write_varint(&mut buf, (m.white_wins as u64) + 3);
+            let _ = write_varint(&mut buf, m.draws as u64);
+            let _ = write_varint(&mut buf, m.black_wins as u64);
+            let _ = write_varint(&mut buf, m.game_ids.len() as u64);
+            let _ = write_delta_game_ids(&mut buf, &m.game_ids);
+        }
+
         if let Some(ref mut st) = stats {
             st.record_sample(m.game_ids.len(), buf.len() - prev_len);
         }
@@ -1311,7 +1369,27 @@ fn encode_position_payload(node: &PositionNode, mut stats: Option<&mut GameSetEn
     buf
 }
 
-fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<PositionNode> {
+#[inline]
+pub fn skip_varints(bytes: &mut &[u8], count: usize) -> Result<()> {
+    let mut remaining = count;
+    while remaining > 0 {
+        if bytes.is_empty() {
+            anyhow::bail!("Unexpected EOF skipping varint");
+        }
+        let byte = bytes[0];
+        *bytes = &bytes[1..];
+        if (byte & 0x80) == 0 {
+            remaining -= 1;
+        }
+    }
+    Ok(())
+}
+
+fn decode_position_payload(
+    mut bytes: &[u8],
+    zobrist_hash: u64,
+    max_decode_game_ids: Option<usize>,
+) -> Result<PositionNode> {
     let total_games = read_varint(&mut bytes)? as u32;
     let white_wins = read_varint(&mut bytes)? as u32;
     let black_wins = read_varint(&mut bytes)? as u32;
@@ -1325,12 +1403,39 @@ fn decode_position_payload(mut bytes: &[u8], zobrist_hash: u64) -> Result<Positi
         }
         let packed_move = u16::from_le_bytes(bytes[0..2].try_into()?);
         bytes = &bytes[2..];
-        let m_total = read_varint(&mut bytes)? as u32;
-        let m_ww = read_varint(&mut bytes)? as u32;
-        let m_bw = read_varint(&mut bytes)? as u32;
-        let m_dr = m_total.saturating_sub(m_ww + m_bw);
 
-        let game_ids = read_delta_game_ids(&mut bytes)?;
+        let outcome_code = read_varint(&mut bytes)?;
+        let (m_total, m_ww, m_dr, m_bw, game_ids) = match outcome_code {
+            0 => {
+                let gid = read_varint(&mut bytes)? as u32;
+                (1, 1, 0, 0, if max_decode_game_ids == Some(0) { Vec::new() } else { vec![gid] })
+            }
+            1 => {
+                let gid = read_varint(&mut bytes)? as u32;
+                (1, 0, 0, 1, if max_decode_game_ids == Some(0) { Vec::new() } else { vec![gid] })
+            }
+            2 => {
+                let gid = read_varint(&mut bytes)? as u32;
+                (1, 0, 1, 0, if max_decode_game_ids == Some(0) { Vec::new() } else { vec![gid] })
+            }
+            code => {
+                let m_ww = (code - 3) as u32;
+                let m_dr = read_varint(&mut bytes)? as u32;
+                let m_bw = read_varint(&mut bytes)? as u32;
+                let m_total = m_ww + m_dr + m_bw;
+                let id_count = read_varint(&mut bytes)? as usize;
+                let read_count = match max_decode_game_ids {
+                    Some(limit) => id_count.min(limit),
+                    None => id_count,
+                };
+                let ids = read_delta_game_ids(&mut bytes, read_count)?;
+                let remaining = id_count.saturating_sub(read_count);
+                if remaining > 0 {
+                    skip_varints(&mut bytes, remaining)?;
+                }
+                (m_total, m_ww, m_dr, m_bw, ids)
+            }
+        };
 
         moves.push(MoveStats {
             packed_move,
@@ -1374,6 +1479,7 @@ impl StripedPositionMap {
         (x as usize) & (NUM_STRIPES - 1)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_step(
         &self,
         zobrist: u64,
@@ -1462,8 +1568,8 @@ pub fn generate_opening_tree_report(
                 uci.clone()
             };
 
-            let sample_game_ids: Vec<u32> = m.game_ids.iter().take(20).copied().collect();
-            for &id in &m.game_ids {
+            let sample_game_ids: Vec<u32> = m.game_ids.iter().rev().take(30).copied().collect();
+            for &id in m.game_ids.iter().rev() {
                 if all_sample_game_ids.len() < 50 && !all_sample_game_ids.contains(&id) {
                     all_sample_game_ids.push(id);
                 }
@@ -1481,12 +1587,13 @@ pub fn generate_opening_tree_report(
                 black_wins: m.black_wins,
                 avg_white_elo: None,
                 avg_black_elo: None,
+                last_played: None,
                 sample_game_ids,
             }
         })
         .collect();
 
-    move_views.sort_unstable_by(|a, b| b.total_games.cmp(&a.total_games));
+    move_views.sort_unstable_by_key(|a| std::cmp::Reverse(a.total_games));
 
     let fen_formatted = Fen::from_position(pos.clone(), EnPassantMode::Legal).to_string();
 
@@ -1514,6 +1621,7 @@ pub fn generate_opening_tree_report(
         },
         moves: move_views,
         sample_game_ids: all_sample_game_ids,
+        sample_games: Vec::new(),
     }
 }
 
@@ -1561,8 +1669,8 @@ pub fn generate_filtered_opening_tree_report(
         filtered_draws += md;
         filtered_black_wins += mb;
 
-        let sample_game_ids: Vec<u32> = matched_ids.iter().take(20).copied().collect();
-        for &id in &matched_ids {
+        let sample_game_ids: Vec<u32> = matched_ids.iter().rev().take(30).copied().collect();
+        for &id in matched_ids.iter().rev() {
             if all_sample_game_ids.len() < 50 && !all_sample_game_ids.contains(&id) {
                 all_sample_game_ids.push(id);
             }
@@ -1589,11 +1697,12 @@ pub fn generate_filtered_opening_tree_report(
             black_wins: mb,
             avg_white_elo: None,
             avg_black_elo: None,
+            last_played: None,
             sample_game_ids,
         });
     }
 
-    move_views.sort_unstable_by(|a, b| b.total_games.cmp(&a.total_games));
+    move_views.sort_unstable_by_key(|a| std::cmp::Reverse(a.total_games));
 
     let fen_formatted = Fen::from_position(pos.clone(), EnPassantMode::Legal).to_string();
     let total = filtered_total_games.max(1);
@@ -1622,6 +1731,7 @@ pub fn generate_filtered_opening_tree_report(
         },
         moves: move_views,
         sample_game_ids: all_sample_game_ids,
+        sample_games: Vec::new(),
     }
 }
 
@@ -1713,60 +1823,55 @@ impl<'a> pgn_reader::Visitor for PgnTreeVisitor<'a> {
     fn end_game(&mut self) {}
 }
 
+struct PgnPositionMatch {
+    next_move: Option<PackedMove>,
+}
+
 struct PgnTreeStatsVisitor {
     target_hash: u64,
-    found: bool,
-    next_move: Option<PackedMove>,
     pos: Chess,
     max_ply: usize,
-    ply: usize,
+    current_ply: usize,
+    found: bool,
+    next_move: Option<PackedMove>,
 }
 
 impl PgnTreeStatsVisitor {
     fn new(target_hash: u64, max_ply: usize) -> Self {
-        let p = Chess::default();
-        let current_hash: Zobrist64 = p.zobrist_hash(EnPassantMode::Legal);
-        let found = current_hash.0 == target_hash;
+        let pos = Chess::default();
+        let initial_hash: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+        let found = initial_hash.0 == target_hash;
         Self {
             target_hash,
+            pos,
+            max_ply,
+            current_ply: 0,
             found,
             next_move: None,
-            pos: p,
-            max_ply,
-            ply: 0,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PgnPositionMatch {
-    pub next_move: Option<PackedMove>,
 }
 
 impl pgn_reader::Visitor for PgnTreeStatsVisitor {
     type Result = Option<PgnPositionMatch>;
 
-    fn begin_variation(&mut self) -> pgn_reader::Skip {
-        pgn_reader::Skip(true)
-    }
-
-    fn san(&mut self, san_plus: SanPlus) {
+    fn san(&mut self, san: SanPlus) {
         if self.found {
             if self.next_move.is_none() {
-                if let Ok(m) = san_plus.san.to_move(&self.pos) {
+                if let Ok(m) = san.san.to_move(&self.pos) {
                     self.next_move = Some(PackedMove::from(&m));
                 }
             }
             return;
         }
 
-        if self.ply >= self.max_ply {
+        if self.current_ply >= self.max_ply {
             return;
         }
 
-        if let Ok(m) = san_plus.san.to_move(&self.pos) {
+        if let Ok(m) = san.san.to_move(&self.pos) {
             self.pos.play_unchecked(&m);
-            self.ply += 1;
+            self.current_ply += 1;
             let current_hash: Zobrist64 = self.pos.zobrist_hash(EnPassantMode::Legal);
             if current_hash.0 == self.target_hash {
                 self.found = true;
@@ -1793,11 +1898,12 @@ mod tests {
     fn test_encode_decode_payload() {
         let e2e4 = PackedMove::new(12, 28, None); // e2 (12) -> e4 (28)
         let d2d4 = PackedMove::new(11, 27, None); // d2 (11) -> d4 (27)
+        let c2c4 = PackedMove::new(10, 26, None); // singleton move
 
         let node = PositionNode {
             zobrist_hash: 0x123456789abcdef0,
-            total_games: 100,
-            white_wins: 40,
+            total_games: 101,
+            white_wins: 41,
             draws: 30,
             black_wins: 30,
             moves: vec![
@@ -1807,7 +1913,7 @@ mod tests {
                     white_wins: 25,
                     draws: 20,
                     black_wins: 15,
-                    game_ids: vec![1, 5, 12],
+                    game_ids: (1..=60).collect(),
                 },
                 MoveStats {
                     packed_move: d2d4.0,
@@ -1815,28 +1921,49 @@ mod tests {
                     white_wins: 15,
                     draws: 10,
                     black_wins: 15,
-                    game_ids: vec![2, 7],
+                    game_ids: (100..140).collect(),
+                },
+                MoveStats {
+                    packed_move: c2c4.0,
+                    total_games: 1,
+                    white_wins: 1,
+                    draws: 0,
+                    black_wins: 0,
+                    game_ids: vec![999],
                 },
             ],
         };
 
         let encoded = encode_position_payload(&node, None);
-        let decoded = decode_position_payload(&encoded, node.zobrist_hash).expect("decode failed");
+        let decoded = decode_position_payload(&encoded, node.zobrist_hash, None).expect("decode failed");
 
         assert_eq!(decoded.zobrist_hash, node.zobrist_hash);
-        assert_eq!(decoded.total_games, 100);
-        assert_eq!(decoded.white_wins, 40);
+        assert_eq!(decoded.total_games, 101);
+        assert_eq!(decoded.white_wins, 41);
         assert_eq!(decoded.draws, 30);
         assert_eq!(decoded.black_wins, 30);
-        assert_eq!(decoded.moves.len(), 2);
+        assert_eq!(decoded.moves.len(), 3);
         assert_eq!(decoded.moves[0].packed_move, e2e4.0);
         assert_eq!(PackedMove(decoded.moves[0].packed_move).to_uci_string(), "e2e4");
         assert_eq!(decoded.moves[0].total_games, 60);
-        assert_eq!(decoded.moves[0].game_ids, vec![1, 5, 12]);
+        assert_eq!(decoded.moves[0].game_ids.len(), 60);
         assert_eq!(decoded.moves[1].packed_move, d2d4.0);
         assert_eq!(PackedMove(decoded.moves[1].packed_move).to_uci_string(), "d2d4");
         assert_eq!(decoded.moves[1].total_games, 40);
-        assert_eq!(decoded.moves[1].game_ids, vec![2, 7]);
+        assert_eq!(decoded.moves[1].game_ids.len(), 40);
+        assert_eq!(decoded.moves[2].packed_move, c2c4.0);
+        assert_eq!(decoded.moves[2].total_games, 1);
+        assert_eq!(decoded.moves[2].white_wins, 1);
+        assert_eq!(decoded.moves[2].game_ids, vec![999]);
+
+        // Test decode with sample limit
+        let decoded_limited = decode_position_payload(&encoded, node.zobrist_hash, Some(5)).expect("limited decode failed");
+        assert_eq!(decoded_limited.moves[0].total_games, 60);
+        assert_eq!(decoded_limited.moves[0].game_ids.len(), 5);
+        assert_eq!(decoded_limited.moves[1].total_games, 40);
+        assert_eq!(decoded_limited.moves[1].game_ids.len(), 5);
+        assert_eq!(decoded_limited.moves[2].total_games, 1);
+        assert_eq!(decoded_limited.moves[2].game_ids.len(), 1);
     }
 
     #[test]
@@ -1872,10 +1999,8 @@ mod tests {
             let mut buf = Vec::new();
             write_delta_game_ids(&mut buf, &ids).expect("write failed");
             let mut slice = buf.as_slice();
-            let decoded = read_delta_game_ids(&mut slice).expect("read failed");
+            let decoded = read_delta_game_ids(&mut slice, ids.len()).expect("read failed");
             assert_eq!(decoded, ids);
         }
     }
 }
-
-

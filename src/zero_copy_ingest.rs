@@ -150,6 +150,7 @@ fn encode_scid_move_byte(
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn update_piece_slots(
     slots: &mut [[u8; 16]; 2],
     counts: &mut [usize; 2],
@@ -222,13 +223,14 @@ pub fn parse_game_bytes_fast(bytes: &[u8]) -> Option<(RawPgnTags, Vec<u8>)> {
                             let mut y = 0u32;
                             let mut m = 0u32;
                             let mut d = 0u32;
-                            let mut part = 0;
-                            for chunk in val.split('.') {
+                            for (part, chunk) in val.split('.').enumerate() {
                                 let num = chunk.parse::<u32>().unwrap_or(0);
-                                if part == 0 { y = num; }
-                                else if part == 1 { m = num; }
-                                else if part == 2 { d = num; }
-                                part += 1;
+                                match part {
+                                    0 => y = num,
+                                    1 => m = num,
+                                    2 => d = num,
+                                    _ => break,
+                                }
                             }
                             tags.date = (y << 9) | (m << 5) | d;
                         }
@@ -494,7 +496,7 @@ where
 
     // 3. Process batches in parallel with Rayon
     const CHUNK_SIZE: usize = 16000;
-    let num_chunks = (total_games + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let num_chunks = total_games.div_ceil(CHUNK_SIZE);
 
     let mut imported = 0;
     let mut errors = 0;

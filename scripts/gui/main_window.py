@@ -735,6 +735,13 @@ class MainWindow(QMainWindow):
             if self.client.is_running():
                 self.client.send_request("get_pgn", {"index": game_id})
 
+    def load_game_by_id(self, game_id: int):
+        self.selected_game_id = game_id
+        self.lbl_selected_game.setText(f"Selected Game #{game_id}")
+        if self.client.is_running():
+            self.client.send_request("get_pgn", {"index": game_id})
+        self.tabs.setCurrentIndex(0)
+
     def add_game_dialog(self):
         if not self.client.is_running():
             QMessageBox.warning(self, "Backend Offline", "Start backend first.")
@@ -983,6 +990,10 @@ class MainWindow(QMainWindow):
         # Handle Opening Tree Report
         if "moves" in resp_data and "white_pct" in resp_data:
             self.opening_tree_widget.on_tree_report(resp_data)
+
+        # Handle Game Summaries response
+        if "game_summaries" in resp_data:
+            self.opening_tree_widget.on_game_summaries_received(resp_data["game_summaries"])
 
         # Handle PGN response
         if "pgn" in resp_data:

@@ -228,6 +228,10 @@ enum Commands {
         #[arg(long, default_value = "0")]
         max_games: usize,
 
+        /// Minimum games reaching a position to include it in the index (default: 1, i.e. all positions)
+        #[arg(long, default_value = "1")]
+        min_games: usize,
+
         /// Number of worker threads (default: all available CPU cores)
         #[arg(long)]
         threads: Option<usize>,
@@ -249,6 +253,14 @@ enum Commands {
         /// Optional FEN position (defaults to initial board)
         #[arg(long)]
         fen: Option<String>,
+
+        /// Max sample game IDs to retrieve (defaults to 20; 0 for stats only)
+        #[arg(long, default_value = "20")]
+        sample_games: usize,
+
+        /// Retrieve all game IDs from posting list
+        #[arg(long)]
+        all_game_ids: bool,
     },
 
     /// Run the interactive JSON-RPC server
@@ -617,13 +629,14 @@ fn main() -> Result<()> {
             println!("==========================================================================================");
             println!("Overall Benchmark Duration: {:.2} ms ({:.2} s)\n", report.total_time_ms, report.total_time_ms / 1000.0);
         }
-        Some(Commands::BuildPosIdx { db_path, max_ply, max_games, threads }) => {
+        Some(Commands::BuildPosIdx { db_path, max_ply, max_games, min_games, threads }) => {
             let start = std::time::Instant::now();
             let path_str = db_path.to_string_lossy();
             let max_games_opt = if max_games > 0 { Some(max_games) } else { None };
+            let min_games_opt = if min_games > 1 { Some(min_games) } else { None };
             let idx = if path_str.ends_with(".pgn") {
                 let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
-                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, max_games_opt, threads, |scanned, total, positions| {
+                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, max_games_opt, min_games_opt, threads, |scanned, total, positions| {
                     print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 })?
@@ -632,7 +645,7 @@ fn main() -> Result<()> {
                 let games_path = db.games_path().to_path_buf();
                 let entries = db.entries();
                 let db_path_buf = db.index_path().to_path_buf();
-                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, max_games_opt, threads, |scanned, total, positions| {
+                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, max_games_opt, min_games_opt, threads, |scanned, total, positions| {
                     print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 })?
@@ -673,11 +686,12 @@ fn main() -> Result<()> {
             println!("==========================================================================================");
             println!("Diagnostics scan completed in {:.2} ms\n", elapsed);
         }
-        Some(Commands::Tree { db_path, fen }) => {
+        Some(Commands::Tree { db_path, fen, sample_games, all_game_ids }) => {
             let fen_str = fen.as_deref().unwrap_or("");
+            let sample_limit = if all_game_ids { None } else { Some(sample_games) };
             let mut tree_report = position_index::PositionIndex::load(&db_path)
                 .ok()
-                .and_then(|idx| idx.query_tree(fen_str));
+                .and_then(|idx| idx.query_tree_with_options(fen_str, None, sample_limit));
 
             if tree_report.is_none() {
                 let lower = db_path.to_string_lossy().to_lowercase();

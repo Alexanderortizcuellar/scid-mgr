@@ -91,6 +91,7 @@ pub(crate) fn standard_piece_slots() -> [[u8; 16]; 2] {
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn update_slots_on_move(
     slots: &mut [[u8; 16]; 2],
     counts: &mut [usize; 2],
@@ -540,7 +541,7 @@ pub fn search_position_mmap(
 /// Parses FEN or partial board string into list of required (Square, Role, Color) pieces
 pub fn parse_piece_placements(board_str: &str) -> Vec<(Square, Role, Color)> {
     let mut pieces = Vec::new();
-    let board_part = board_str.trim().split_whitespace().next().unwrap_or(board_str.trim());
+    let board_part = board_str.split_whitespace().next().unwrap_or(board_str.trim());
     let ranks: Vec<&str> = board_part.split('/').collect();
     if ranks.len() != 8 {
         return pieces;
