@@ -24,7 +24,7 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
   - Sub-millisecond queries, multi-criteria header filtering, parallel sorting with alphabetical rank tables, and instant statistics.
   - Zero-copy memory mapping (`memmap2`) for move streams with low memory footprint (~580 MB for 10.35 million games).
 - **Sub-Millisecond Companion Position Index (`.pos.idx` v3)**:
-  - Custom inverted position index format with hybrid Delta-Varint and Roaring Bitmap compression.
+  - Custom inverted position index format with sorted Zobrist 64-bit keys and Delta-Varint posting list compression.
   - Instant Opening Tree / Explorer (< 0.05 ms lookup time) returning move win/draw/loss statistics, average ratings, and sample game IDs.
   - Dynamic opening tree filtering by metadata (player, rating, date, ECO, custom candidate game lists).
 - **Advanced Search Engine**:
@@ -95,7 +95,7 @@ cargo run --release -- test
 # Query Instant Opening Tree with sample game IDs
 .\target\release\scid-mgr.exe tree my_database.si5 --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1" --sample-games 20
 
-# Run Diagnostics on Companion Position Index (Delta-Varint vs Roaring Bitmap compression stats)
+# Run Diagnostics on Companion Position Index (Delta-Varint compression and posting list distribution)
 .\target\release\scid-mgr.exe diag-pos-idx my_database.si5
 
 # Run Comprehensive Multi-Threaded Engine Benchmarks

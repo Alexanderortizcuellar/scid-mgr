@@ -103,8 +103,8 @@ Constructs or rebuilds the companion `.pos.idx` (v3) index in parallel across al
 - **Returns**: `{ status: "valid", unique_positions: number, elapsed_ms: number, diagnostics: {...} }`
 
 ### `diag_pos_idx`
-Scans and analyzes the companion `.pos.idx` memory map, calculating Delta-Varint vs Roaring Bitmap posting list distributions, compression savings, and move bucket metrics.
-- **Returns**: `{ total_game_sets, delta_varint_count, roaring_count, bytes_adaptive, bucket_1_10, bucket_11_100, bucket_101_1k, ... }`
+Scans and analyzes the companion `.pos.idx` memory map, calculating Delta-Varint posting list distributions, byte sizes, and move bucket metrics.
+- **Returns**: `{ total_game_sets, delta_varint_count, bytes_adaptive, bucket_1_10, bucket_11_100, bucket_101_1k, ... }`
 
 ### `search_material`
 Searches by bitboard piece count and opposite/same-colored bishops.

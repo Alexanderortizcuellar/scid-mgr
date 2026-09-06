@@ -1159,14 +1159,10 @@ impl PositionIndex {
             std::fs::metadata(&idx_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0)
         );
         eprintln!(
-            "[PositionIndex] GameSet Encoding: {} total sets | DeltaVarint: {} ({:.1}%) | Roaring: {} ({:.1}%) | Savings vs Delta: {:.2}% | Savings vs Roaring: {:.2}%",
+            "[PositionIndex] GameSet Encoding: {} total sets | Delta-Varint: {} ({:.1}%)",
             encoding_stats.total_game_sets,
             encoding_stats.delta_varint_count,
             if encoding_stats.total_game_sets > 0 { (encoding_stats.delta_varint_count as f64 / encoding_stats.total_game_sets as f64) * 100.0 } else { 0.0 },
-            encoding_stats.roaring_count,
-            if encoding_stats.total_game_sets > 0 { (encoding_stats.roaring_count as f64 / encoding_stats.total_game_sets as f64) * 100.0 } else { 0.0 },
-            encoding_stats.savings_vs_delta_pct(),
-            encoding_stats.savings_vs_roaring_pct()
         );
         Ok(idx_path)
     }

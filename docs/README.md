@@ -20,7 +20,7 @@ Welcome to the comprehensive technical documentation for **`scid-mgr`** — an u
 
 - **Scale**: Seamlessly loads, filters, and sorts the **10.35-Million-Game** `LumbrasGigaBase_OTB.si5` database in **< 2 seconds**.
 - **Dual Engine**: Full native read/write/compact support for SCID **SI5 & SI4** formats, plus parallel direct **PGN** indexing.
-- **Sub-Millisecond Opening Tree**: Inverted position index (`.pos.idx` v3) supporting sub-0.05 ms position lookup with Delta-Varint & Roaring compression.
+- **Sub-Millisecond Opening Tree**: Inverted position index (`.pos.idx` v3) supporting sub-0.05 ms position lookup with compact Delta-Varint compression.
 - **Search Capabilities**:
   - Exact & partial piece-on-square visual board searches.
   - Bitboard material searches (e.g. Opposite-Colored Bishops, piece counts).

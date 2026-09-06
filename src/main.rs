@@ -237,7 +237,7 @@ enum Commands {
         threads: Option<usize>,
     },
 
-    /// Analyze companion .pos.idx GameSet encoding diagnostics (Delta-Varint vs Roaring Bitmap)
+    /// Analyze companion .pos.idx GameSet encoding diagnostics and Delta-Varint metrics
     DiagPosIdx {
         /// Path to .si5, .si4, or .pgn database
         #[arg(value_name = "DB_PATH")]
@@ -659,7 +659,7 @@ fn main() -> Result<()> {
             let stats = idx.scan_diagnostics()?;
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
             println!("==========================================================================================");
-            println!("                GAMESET ENCODING DIAGNOSTICS & ADAPTIVE METRICS REPORT                    ");
+            println!("                  POSITION INDEX GAMESET ENCODING DIAGNOSTICS REPORT                      ");
             println!("==========================================================================================");
             println!("Index Path:          {}", idx.path.display());
             println!("Unique Positions:    {}", idx.header.unique_positions);
@@ -667,14 +667,8 @@ fn main() -> Result<()> {
             println!("Index File Size:     {:.2} MB", std::fs::metadata(&idx.path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0));
             println!("------------------------------------------------------------------------------------------");
             println!("Total Move GameSets: {}", stats.total_game_sets);
-            println!("DeltaVarint Chosen:  {} ({:.2}%)", stats.delta_varint_count, if stats.total_game_sets > 0 { (stats.delta_varint_count as f64 / stats.total_game_sets as f64) * 100.0 } else { 0.0 });
-            println!("Roaring Chosen:      {} ({:.2}%)", stats.roaring_count, if stats.total_game_sets > 0 { (stats.roaring_count as f64 / stats.total_game_sets as f64) * 100.0 } else { 0.0 });
-            println!("------------------------------------------------------------------------------------------");
-            println!("Bytes if all Delta:  {} bytes ({:.2} MB)", stats.bytes_if_all_delta, stats.bytes_if_all_delta as f64 / 1_048_576.0);
-            println!("Bytes if all Roar:   {} bytes ({:.2} MB)", stats.bytes_if_all_roaring, stats.bytes_if_all_roaring as f64 / 1_048_576.0);
-            println!("Actual Adaptive:     {} bytes ({:.2} MB)", stats.bytes_adaptive, stats.bytes_adaptive as f64 / 1_048_576.0);
-            println!("Savings vs Delta:    {:.2}%", stats.savings_vs_delta_pct());
-            println!("Savings vs Roaring:  {:.2}%", stats.savings_vs_roaring_pct());
+            println!("Delta-Varint Sets:   {} ({:.2}%)", stats.delta_varint_count, if stats.total_game_sets > 0 { (stats.delta_varint_count as f64 / stats.total_game_sets as f64) * 100.0 } else { 0.0 });
+            println!("Payload Data Size:   {} bytes ({:.2} MB)", stats.bytes_adaptive, stats.bytes_adaptive as f64 / 1_048_576.0);
             println!("------------------------------------------------------------------------------------------");
             println!("Size Distribution:");
             println!("  1 - 10 games:       {:>10}", stats.bucket_1_10);
