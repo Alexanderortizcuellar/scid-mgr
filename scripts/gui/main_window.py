@@ -300,7 +300,9 @@ class MainWindow(QMainWindow):
 
         self.table_view.verticalHeader().setDefaultSectionSize(26)
         self.table_view.selectionModel().selectionChanged.connect(self.on_table_selection_changed)
-        self.table_view.verticalScrollBar().valueChanged.connect(self.on_scroll_changed)
+        sb = self.table_view.verticalScrollBar()
+        sb.valueChanged.connect(self.on_scroll_changed)
+        sb.sliderReleased.connect(self.on_scroll_settled)
         left_layout.addWidget(self.table_view)
 
         self._set_default_column_widths()

@@ -1,11 +1,12 @@
 from typing import Optional, Dict, Any, Set
+from collections import OrderedDict
 from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, pyqtSignal
 from PyQt5.QtGui import QColor
 from .backend_client import BackendClient
 
 class VirtualScidTableModel(QAbstractTableModel):
     """
-    Pure passive virtual scrolling table model for SCID games.
+    Pure passive virtual scrolling table model for SCID games with LRU cache eviction.
     data() only reads from cache. It NEVER initiates network/pipe calls during rendering.
     Data chunks are fetched strictly when scrolling settles.
     """
@@ -26,6 +27,7 @@ class VirtualScidTableModel(QAbstractTableModel):
         10: "round",
     }
     CHUNK_SIZE = 100
+    MAX_CACHED_CHUNKS = 25  # Strictly caps Python RAM to ~2,500 games (< 2 MB)
     stats_updated = pyqtSignal(int, int)  # total_games, loaded_games
 
     def __init__(self, client: BackendClient, parent=None):
@@ -33,7 +35,7 @@ class VirtualScidTableModel(QAbstractTableModel):
         self.client = client
         self.total_count = 0
         self.filters: Dict[str, Any] = {}
-        self.cached_chunks: Dict[int, list] = {}
+        self.cached_chunks: OrderedDict[int, list] = OrderedDict()
         self.in_flight_pages: Set[int] = set()
         self.sort_col: Optional[int] = None
         self.sort_asc: bool = True
@@ -132,6 +134,7 @@ class VirtualScidTableModel(QAbstractTableModel):
         offset = row % self.CHUNK_SIZE
         chunk = self.cached_chunks.get(page)
         if chunk and offset < len(chunk):
+            self.cached_chunks.move_to_end(page)
             return chunk[offset]
         return None
 
@@ -201,6 +204,11 @@ class VirtualScidTableModel(QAbstractTableModel):
             self.in_flight_pages.remove(page)
 
         self.cached_chunks[page] = games
+        self.cached_chunks.move_to_end(page)
+
+        # LRU Eviction: strictly limit cache size so Python RAM stays tiny
+        while len(self.cached_chunks) > self.MAX_CACHED_CHUNKS:
+            self.cached_chunks.popitem(last=False)
 
         if total != self.total_count:
             self.beginResetModel()
