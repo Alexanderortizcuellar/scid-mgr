@@ -1634,6 +1634,107 @@ fn handle_command(
             }
         }
 
+        "sort_database" | "sort_db" => {
+            let s = match current_db {
+                Some(DatabaseBackend::Scid(ref mut s)) => s,
+                Some(DatabaseBackend::Pgn(_)) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Cannot sort PGN database in-place with sort_database; use sort_pgn instead".to_string()),
+                    };
+                }
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    };
+                }
+            };
+
+            let sort_by = req.params.get("sort_by").and_then(|v| v.as_str()).unwrap_or("date");
+            let sort_asc = req.params.get("sort_asc").and_then(|v| v.as_bool()).unwrap_or(true);
+            let delete_removed = req.params.get("delete_removed").and_then(|v| v.as_bool()).unwrap_or(true);
+            let output_path = req.params.get("output_path").and_then(|v| v.as_str());
+
+            let res = if let Some(out_p) = output_path {
+                s.sort_database_to(Path::new(out_p), sort_by, sort_asc, delete_removed)
+            } else {
+                s.sort_database(sort_by, sort_asc, delete_removed)
+            };
+
+            match res {
+                Ok(count) => {
+                    *current_pos_index = None;
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({ "sorted_games": count, "sort_by": sort_by, "sort_asc": sort_asc })),
+                        error: None,
+                    }
+                }
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("Database sort failed: {}", e)),
+                }
+            }
+        }
+
+        "sort_pgn" => {
+            let input_path = req.params.get("input_path").and_then(|v| v.as_str());
+            let output_path = req.params.get("output_path").and_then(|v| v.as_str());
+            let sort_by = req.params.get("sort_by").and_then(|v| v.as_str()).unwrap_or("date");
+            let sort_asc = req.params.get("sort_asc").and_then(|v| v.as_bool()).unwrap_or(true);
+
+            let in_p_buf = match input_path {
+                Some(p) => PathBuf::from(p),
+                None => {
+                    if let Some(DatabaseBackend::Pgn(ref p)) = current_db {
+                        p.pgn_path.clone()
+                    } else {
+                        return ResponseMessage {
+                            id,
+                            status: "error".to_string(),
+                            data: None,
+                            error: Some("Missing 'input_path' parameter and no active PGN database".to_string()),
+                        };
+                    }
+                }
+            };
+
+            let out_p = match output_path {
+                Some(p) => Path::new(p),
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Missing 'output_path' parameter".to_string()),
+                    };
+                }
+            };
+
+            match crate::pgn_db::sort_pgn_file(&in_p_buf, out_p, Some(sort_by), sort_asc) {
+                Ok(count) => ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::json!({ "sorted_games": count, "sort_by": sort_by, "sort_asc": sort_asc })),
+                    error: None,
+                },
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("PGN sort failed: {}", e)),
+                }
+            }
+        }
+
         "benchmark" | "bench" => {
             let db = match current_db {
                 Some(db) => db,

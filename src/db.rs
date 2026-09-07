@@ -562,6 +562,114 @@ impl ScidDatabaseWrapper {
         Ok(())
     }
 
+    /// Sorts the database in-place, rewriting and compacting the move streams and index entries in the sorted order.
+    pub fn sort_database(&mut self, sort_by: &str, sort_asc: bool, delete_removed: bool) -> Result<usize> {
+        let mut indices: Vec<usize> = if delete_removed {
+            (0..self.entries.len())
+                .filter(|&i| !self.entries[i].deleted)
+                .collect()
+        } else {
+            (0..self.entries.len()).collect()
+        };
+
+        self.sort_indices(&mut indices, Some(sort_by), Some(sort_asc));
+
+        let mut sorted_entries = Vec::with_capacity(indices.len());
+        let mut sorted_games = Vec::new();
+
+        for idx in indices {
+            let mut entry = self.entries[idx].clone();
+            if let Ok(blob) = self.get_blob(&entry) {
+                let new_offset = sorted_games.len() as u64;
+                sorted_games.extend_from_slice(blob);
+                entry.offset = new_offset;
+                sorted_entries.push(entry);
+            }
+        }
+
+        let count = sorted_entries.len();
+        self.entries = sorted_entries;
+        self.pending_games = sorted_games;
+        self.games_mmap = None;
+        self.dirty = true;
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
+
+        // Save rewritten index, namebase, and games
+        self.save()?;
+
+        // If a companion .pos.idx existed, remove it as Game IDs have been reordered
+        let pos_idx_path = crate::position_index::PositionIndex::companion_path(&self.index_path);
+        if pos_idx_path.exists() {
+            let _ = std::fs::remove_file(&pos_idx_path);
+        }
+
+        Ok(count)
+    }
+
+    /// Sorts the database and writes the resulting sorted database to a new destination path.
+    pub fn sort_database_to(&self, dest_path: &Path, sort_by: &str, sort_asc: bool, delete_removed: bool) -> Result<usize> {
+        let (dest_format, dest_index_path) = detect_format_from_path(dest_path);
+        let (dest_namebase_path, dest_games_path) = match dest_format {
+            ScidFormat::Si4 => {
+                let p = Si4Paths::from_index_path(&dest_index_path);
+                (p.namebase, p.games)
+            }
+            ScidFormat::Si5 => {
+                let p = Si5Paths::from_index_path(&dest_index_path);
+                (p.namebase, p.games)
+            }
+        };
+
+        let mut indices: Vec<usize> = if delete_removed {
+            (0..self.entries.len())
+                .filter(|&i| !self.entries[i].deleted)
+                .collect()
+        } else {
+            (0..self.entries.len()).collect()
+        };
+
+        self.sort_indices(&mut indices, Some(sort_by), Some(sort_asc));
+
+        let mut sorted_entries = Vec::with_capacity(indices.len());
+        let mut sorted_games = Vec::new();
+
+        for idx in indices {
+            let mut entry = self.entries[idx].clone();
+            if let Ok(blob) = self.get_blob(&entry) {
+                let new_offset = sorted_games.len() as u64;
+                sorted_games.extend_from_slice(blob);
+                entry.offset = new_offset;
+                sorted_entries.push(entry);
+            }
+        }
+
+        let count = sorted_entries.len();
+
+        // 1. Write Index
+        let index_bytes = match dest_format {
+            ScidFormat::Si4 => chess_scid_rw::si4::index::write_all_entries(&sorted_entries),
+            ScidFormat::Si5 => chess_scid_rw::si5::index::write_all_entries(&sorted_entries),
+        };
+        fs::write(&dest_index_path, index_bytes)
+            .with_context(|| format!("Writing {}", dest_index_path.display()))?;
+
+        // 2. Write Namebase
+        let names_bytes = match dest_format {
+            ScidFormat::Si4 => chess_scid_rw::si4::namebase::write_namebase(&self.names),
+            ScidFormat::Si5 => chess_scid_rw::si5::namebase::write_namebase(&self.names),
+        };
+        fs::write(&dest_namebase_path, names_bytes)
+            .with_context(|| format!("Writing {}", dest_namebase_path.display()))?;
+
+        // 3. Write Games
+        fs::write(&dest_games_path, &sorted_games)
+            .with_context(|| format!("Writing {}", dest_games_path.display()))?;
+
+        Ok(count)
+    }
+
     pub fn get_game_summary(&self, index: usize) -> Option<GameSummary> {
         let entry = self.entries.get(index)?;
         let white = self.names.player(entry.white_id).to_string();

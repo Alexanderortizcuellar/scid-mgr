@@ -126,5 +126,24 @@ Imports games from a `.pgn` file into the active database. Emits streaming progr
 ### `export_pgn`
 Exports the database to a `.pgn` file at ultra-fast speeds. Emits streaming progress events (`export_progress`).
 
+### `sort_database` (or `sort_db`)
+Permanently sorts and compacts a SCID database in-place or writes to a new destination database.
+- **Params**:
+  - `sort_by`: `string` (`"date"`, `"white_elo"`, `"black_elo"`, `"white"`, `"black"`, `"eco"`, `"result"`, `"event"`, `"site"`, default: `"date"`)
+  - `sort_asc`: `boolean` (default: `true`)
+  - `delete_removed`: `boolean` (default: `true`, purges deleted games during compaction)
+  - `output_path`: `string` (optional; if omitted, sorts and saves the database in-place)
+- **Returns**: `{ sorted_games, sort_by, sort_asc }`
+
+### `sort_pgn`
+Sorts all games in a source PGN file according to specified criteria and writes them to a new PGN file.
+- **Params**:
+  - `input_path`: `string` (optional if a PGN database is already open)
+  - `output_path`: `string` (destination `.pgn` path)
+  - `sort_by`: `string` (default: `"date"`)
+  - `sort_asc`: `boolean` (default: `true`)
+- **Returns**: `{ sorted_games, sort_by, sort_asc }`
+
 ### `add_game`, `update_game`, `delete_game`, `undelete_game`, `compact`, `save`
 Mutation commands for editing games, marking deletions, reclaiming dead space, and writing companion files.
+

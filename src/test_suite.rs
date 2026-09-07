@@ -764,6 +764,136 @@ fn test_pos_idx_min_games_filter() {
     assert!(filtered_idx.query_tree(fen_d4).is_some(), "1.d4 (3 games) should be indexed");
 }
 
+#[test]
+fn test_sort_pgn_chronological_and_descending() {
+    let temp_dir = std::env::temp_dir().join(format!("scid_sort_pgn_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let input_pgn = temp_dir.join("unsorted.pgn");
+    let output_asc = temp_dir.join("sorted_asc.pgn");
+    let output_desc = temp_dir.join("sorted_desc.pgn");
+
+    let pgn_content = r#"[Event "Game 1"]
+[Site "Site 1"]
+[Date "2024.01.01"]
+[White "Player D"]
+[Black "Player A"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 1-0
+
+[Event "Game 2"]
+[Site "Site 2"]
+[Date "1990.05.12"]
+[White "Player B"]
+[Black "Player C"]
+[Result "0-1"]
+
+1. d4 d5 2. c4 e6 0-1
+
+[Event "Game 3"]
+[Site "Site 3"]
+[Date "2005.11.20"]
+[White "Player C"]
+[Black "Player B"]
+[Result "1/2-1/2"]
+
+1. c4 Nf6 2. Nc3 g6 1/2-1/2
+
+[Event "Game 4"]
+[Site "Site 4"]
+[Date "1972.07.11"]
+[White "Player A"]
+[Black "Player D"]
+[Result "1-0"]
+
+1. e4 c5 2. Nf3 d6 1-0
+"#;
+
+    std::fs::write(&input_pgn, pgn_content).unwrap();
+
+    // 1. Sort Ascending by Date
+    let count_asc = crate::pgn_db::sort_pgn_file(&input_pgn, &output_asc, Some("date"), true).unwrap();
+    assert_eq!(count_asc, 4);
+
+    let db_asc = crate::pgn_db::PgnDatabase::open(&output_asc).unwrap();
+    assert_eq!(db_asc.entries.len(), 4);
+    assert_eq!(db_asc.entries[0].date_str(), "1972.07.11");
+    assert_eq!(db_asc.entries[1].date_str(), "1990.05.12");
+    assert_eq!(db_asc.entries[2].date_str(), "2005.11.20");
+    assert_eq!(db_asc.entries[3].date_str(), "2024.01.01");
+
+    // Verify game moves are intact
+    let g0_text = db_asc.get_game_pgn(0).unwrap();
+    assert!(g0_text.contains("1972.07.11") && g0_text.contains("1. e4 c5"));
+
+    // 2. Sort Descending by Date
+    let count_desc = crate::pgn_db::sort_pgn_file(&input_pgn, &output_desc, Some("date"), false).unwrap();
+    assert_eq!(count_desc, 4);
+
+    let db_desc = crate::pgn_db::PgnDatabase::open(&output_desc).unwrap();
+    assert_eq!(db_desc.entries[0].date_str(), "2024.01.01");
+    assert_eq!(db_desc.entries[1].date_str(), "2005.11.20");
+    assert_eq!(db_desc.entries[2].date_str(), "1990.05.12");
+    assert_eq!(db_desc.entries[3].date_str(), "1972.07.11");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_sort_scid_database_in_place_and_to_dest() {
+    let temp_dir = std::env::temp_dir().join(format!("scid_sort_db_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let db_path = temp_dir.join("test_sort.si5");
+    let mut db = crate::db::ScidDatabaseWrapper::create(&db_path, crate::db::ScidFormat::Si5).unwrap();
+
+    db.add_game("[Event \"Modern\"]\n[Date \"2023.01.01\"]\n[WhiteElo \"2800\"]\n[White \"Carlsen\"]\n[Black \"Nakamura\"]\n\n1. e4 e5 2. Nf3 *").unwrap();
+    db.add_game("[Event \"Old Deleted\"]\n[Date \"1985.06.15\"]\n[WhiteElo \"2500\"]\n[White \"Kasparov\"]\n[Black \"Karpov\"]\n\n1. d4 d5 2. c4 *").unwrap();
+    db.add_game("[Event \"Mid 2010\"]\n[Date \"2010.12.01\"]\n[WhiteElo \"2750\"]\n[White \"Anand\"]\n[Black \"Topalov\"]\n\n1. e4 c6 2. d4 *").unwrap();
+    db.add_game("[Event \"Mid 1999\"]\n[Date \"1999.03.20\"]\n[WhiteElo \"2600\"]\n[White \"Kramnik\"]\n[Black \"Leko\"]\n\n1. Nf3 d5 2. g3 *").unwrap();
+    db.save().unwrap();
+
+    // Mark game #1 as deleted
+    db.delete_game(1).unwrap();
+
+    // 1. Sort In-Place by Date Ascending (and purge deleted)
+    let sorted_count = db.sort_database("date", true, true).unwrap();
+    assert_eq!(sorted_count, 3, "Deleted game should have been purged");
+    assert_eq!(db.game_count(), 3);
+
+    // Reopen database from disk to verify persistence
+    let reopened = crate::db::ScidDatabaseWrapper::open(&db_path).unwrap();
+    assert_eq!(reopened.game_count(), 3);
+
+    let g0 = reopened.get_game_summary(0).unwrap();
+    let g1 = reopened.get_game_summary(1).unwrap();
+    let g2 = reopened.get_game_summary(2).unwrap();
+
+    assert_eq!(g0.date, "1999.03.20");
+    assert_eq!(g0.white, "Kramnik");
+    assert_eq!(g1.date, "2010.12.01");
+    assert_eq!(g1.white, "Anand");
+    assert_eq!(g2.date, "2023.01.01");
+    assert_eq!(g2.white, "Carlsen");
+
+    // Verify PGN reconstruction works for all sorted games
+    let pgn0 = reopened.game_pgn(0).unwrap();
+    assert!(pgn0.contains("Kramnik") && pgn0.contains("1. Nf3"));
+
+    // 2. Sort to new database by White Elo Descending
+    let dest_db_path = temp_dir.join("sorted_by_elo.si5");
+    let dest_count = reopened.sort_database_to(&dest_db_path, "white_elo", false, true).unwrap();
+    assert_eq!(dest_count, 3);
+
+    let elo_db = crate::db::ScidDatabaseWrapper::open(&dest_db_path).unwrap();
+    assert_eq!(elo_db.get_game_summary(0).unwrap().white, "Carlsen"); // 2800
+    assert_eq!(elo_db.get_game_summary(1).unwrap().white, "Anand");   // 2750
+    assert_eq!(elo_db.get_game_summary(2).unwrap().white, "Kramnik"); // 2600
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
 
 
 

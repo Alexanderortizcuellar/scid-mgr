@@ -101,6 +101,15 @@ cargo run --release -- test
 # Run Comprehensive Multi-Threaded Engine Benchmarks
 .\target\release\scid-mgr.exe bench my_database.si5
 
+# Sort a PGN file chronologically into a new PGN file (or by white_elo, player, etc.)
+.\target\release\scid-mgr.exe sort-pgn unsorted.pgn sorted_by_date.pgn --sort-by date
+
+# Sort and compact a SCID database in-place (purges deleted games and re-indexes)
+.\target\release\scid-mgr.exe sort-db my_database.si5 --sort-by date
+
+# Sort a SCID database into a new database by White Elo descending
+.\target\release\scid-mgr.exe sort-db my_database.si5 sorted_by_elo.si5 --sort-by white_elo --desc
+
 # Export SCID database to PGN file
 .\target\release\scid-mgr.exe export my_database.si5 exported_games.pgn
 ```

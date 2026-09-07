@@ -108,6 +108,8 @@ pub struct PgnDatabaseWrapper {
     query_cache: std::sync::Mutex<Option<(GameFilter, Vec<usize>)>>,
 }
 
+pub type PgnDatabase = PgnDatabaseWrapper;
+
 impl PgnDatabaseWrapper {
     /// Opens a .pgn file directly. If a companion single-file `<file>.pgn.idx` exists and matches,
     /// it loads in a few milliseconds; otherwise it runs a parallel 1-pass index scan and caches.
@@ -550,6 +552,35 @@ impl PgnDatabaseWrapper {
                 }
             });
         }
+    }
+
+    /// Sorts all games in the PGN file according to specified criteria and writes them to a new PGN file.
+    pub fn sort_and_export<P: AsRef<Path>>(&self, output_path: P, sort_by: Option<&str>, sort_asc: bool) -> Result<usize> {
+        let mut indices: Vec<usize> = (0..self.entries.len()).collect();
+        self.sort_indices(&mut indices, sort_by, Some(sort_asc));
+
+        let file = File::create(output_path.as_ref())
+            .with_context(|| format!("Failed to create output PGN file: {}", output_path.as_ref().display()))?;
+        let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
+
+        for &idx in &indices {
+            let entry = &self.entries[idx];
+            let start = entry.offset as usize;
+            let end = start + entry.length as usize;
+            if end <= self.mmap.len() && start < end {
+                let slice = &self.mmap[start..end];
+                writer.write_all(slice)?;
+                if !slice.ends_with(b"\n\n") {
+                    if slice.ends_with(b"\n") {
+                        writer.write_all(b"\n")?;
+                    } else {
+                        writer.write_all(b"\n\n")?;
+                    }
+                }
+            }
+        }
+        writer.flush()?;
+        Ok(indices.len())
     }
 
     pub fn get_summary(&self, idx: usize) -> GameSummary {
@@ -1196,4 +1227,15 @@ impl pgn_reader::Visitor for MaterialFinder {
             self.matched
         }
     }
+}
+
+/// Standalone function to sort any PGN file by field (e.g. "date", "white_elo", "white", etc.)
+pub fn sort_pgn_file<P1: AsRef<Path>, P2: AsRef<Path>>(
+    input_path: P1,
+    output_path: P2,
+    sort_by: Option<&str>,
+    sort_asc: bool,
+) -> Result<usize> {
+    let db = PgnDatabase::open(input_path.as_ref())?;
+    db.sort_and_export(output_path, sort_by, sort_asc)
 }
