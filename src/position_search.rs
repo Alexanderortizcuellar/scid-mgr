@@ -86,7 +86,9 @@ pub(crate) fn standard_piece_slots() -> [[u8; 16]; 2] {
         // White: 0:K(e1=4), 1:Ra1(0), 2:Nb1(1), 3:Bc1(2), 4:Qd1(3), 5:Bf1(5), 6:Ng1(6), 7:Rh1(7), 8..15: Pawns a2..h2 (8..15)
         [4, 0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         // Black: 0:K(e8=60), 1:Ra8(56), 2:Nb8(57), 3:Bc8(58), 4:Qd8(59), 5:Bf8(61), 6:Ng8(62), 7:Rh8(63), 8..15: Pawns a7..h7 (48..55)
-        [60, 56, 57, 58, 59, 61, 62, 63, 48, 49, 50, 51, 52, 53, 54, 55],
+        [
+            60, 56, 57, 58, 59, 61, 62, 63, 48, 49, 50, 51, 52, 53, 54, 55,
+        ],
     ]
 }
 
@@ -106,9 +108,17 @@ pub(crate) fn update_slots_on_move(
 
     if is_castle_kingside || is_castle_queenside {
         let (rook_from, rook_to) = if side_idx == 0 {
-            if is_castle_kingside { (7, 5) } else { (0, 3) }
+            if is_castle_kingside {
+                (7, 5)
+            } else {
+                (0, 3)
+            }
         } else {
-            if is_castle_kingside { (63, 61) } else { (56, 59) }
+            if is_castle_kingside {
+                (63, 61)
+            } else {
+                (56, 59)
+            }
         };
         if let Some(r_idx) = (0..counts[side_idx]).find(|&i| slots[side_idx][i] == rook_from) {
             slots[side_idx][r_idx] = rook_to;
@@ -152,33 +162,61 @@ pub(crate) fn decode_raw_move(
     let (to_sq, promo, is_castle_k, is_castle_q) = match piece.role {
         Role::Pawn => {
             const PROMO: [Option<Role>; 16] = [
-                None, None, None,
-                Some(Role::Queen), Some(Role::Queen), Some(Role::Queen),
-                Some(Role::Rook), Some(Role::Rook), Some(Role::Rook),
-                Some(Role::Bishop), Some(Role::Bishop), Some(Role::Bishop),
-                Some(Role::Knight), Some(Role::Knight), Some(Role::Knight),
+                None,
+                None,
+                None,
+                Some(Role::Queen),
+                Some(Role::Queen),
+                Some(Role::Queen),
+                Some(Role::Rook),
+                Some(Role::Rook),
+                Some(Role::Rook),
+                Some(Role::Bishop),
+                Some(Role::Bishop),
+                Some(Role::Bishop),
+                Some(Role::Knight),
+                Some(Role::Knight),
+                Some(Role::Knight),
                 None,
             ];
             const SQDIFF: [i32; 16] = [7, 8, 9, 7, 8, 9, 7, 8, 9, 7, 8, 9, 7, 8, 9, 16];
             let idx = code as usize;
-            if idx >= 16 { return None; }
+            if idx >= 16 {
+                return None;
+            }
             let diff = SQDIFF[idx];
-            let to = if color == Color::White { from_idx + diff } else { from_idx - diff };
-            if !(0..64).contains(&to) { return None; }
+            let to = if color == Color::White {
+                from_idx + diff
+            } else {
+                from_idx - diff
+            };
+            if !(0..64).contains(&to) {
+                return None;
+            }
             (Square::try_from(to as u8).ok()?, PROMO[idx], false, false)
         }
         Role::Knight => {
             const SQDIFF: [i32; 16] = [0, -17, -15, -10, -6, 6, 10, 15, 17, 0, 0, 0, 0, 0, 0, 0];
             let idx = code as usize;
-            if idx >= 16 { return None; }
+            if idx >= 16 {
+                return None;
+            }
             let to = from_idx + SQDIFF[idx];
-            if !(0..64).contains(&to) { return None; }
+            if !(0..64).contains(&to) {
+                return None;
+            }
             (Square::try_from(to as u8).ok()?, None, false, false)
         }
         Role::Bishop => {
             let fylediff = (code & 0x07) - i32::from(from_sq.file() as u8);
-            let to = if code >= 8 { from_idx - 7 * fylediff } else { from_idx + 9 * fylediff };
-            if !(0..64).contains(&to) { return None; }
+            let to = if code >= 8 {
+                from_idx - 7 * fylediff
+            } else {
+                from_idx + 9 * fylediff
+            };
+            if !(0..64).contains(&to) {
+                return None;
+            }
             (Square::try_from(to as u8).ok()?, None, false, false)
         }
         Role::Rook => {
@@ -187,16 +225,22 @@ pub(crate) fn decode_raw_move(
             } else {
                 (code - 8) * 8 + i32::from(from_sq.file() as u8)
             };
-            if !(0..64).contains(&to) { return None; }
+            if !(0..64).contains(&to) {
+                return None;
+            }
             (Square::try_from(to as u8).ok()?, None, false, false)
         }
         Role::Queen => {
             if code == i32::from(from_sq.file() as u8) {
-                if *cursor >= blob.len() { return None; }
+                if *cursor >= blob.len() {
+                    return None;
+                }
                 let b2 = blob[*cursor];
                 *cursor += 1;
                 let to = i32::from(b2) - 64;
-                if !(0..64).contains(&to) { return None; }
+                if !(0..64).contains(&to) {
+                    return None;
+                }
                 (Square::try_from(to as u8).ok()?, None, false, false)
             } else {
                 let to = if code < 8 {
@@ -204,22 +248,36 @@ pub(crate) fn decode_raw_move(
                 } else {
                     (code - 8) * 8 + i32::from(from_sq.file() as u8)
                 };
-                if !(0..64).contains(&to) { return None; }
+                if !(0..64).contains(&to) {
+                    return None;
+                }
                 (Square::try_from(to as u8).ok()?, None, false, false)
             }
         }
         Role::King => {
-            if code == 0 { return None; } // null move
+            if code == 0 {
+                return None;
+            } // null move
             if code <= 8 {
                 const SQDIFF: [i32; 9] = [0, -9, -8, -7, -1, 1, 7, 8, 9];
                 let to = from_idx + SQDIFF[code as usize];
-                if !(0..64).contains(&to) { return None; }
+                if !(0..64).contains(&to) {
+                    return None;
+                }
                 (Square::try_from(to as u8).ok()?, None, false, false)
             } else if code == 9 {
-                let to_sq = if color == Color::White { Square::C1 } else { Square::C8 };
+                let to_sq = if color == Color::White {
+                    Square::C1
+                } else {
+                    Square::C8
+                };
                 (to_sq, None, false, true)
             } else if code == 10 {
-                let to_sq = if color == Color::White { Square::G1 } else { Square::G8 };
+                let to_sq = if color == Color::White {
+                    Square::G1
+                } else {
+                    Square::G8
+                };
                 (to_sq, None, true, false)
             } else {
                 return None;
@@ -229,13 +287,27 @@ pub(crate) fn decode_raw_move(
 
     let mv = if is_castle_k || is_castle_q {
         let (king, rook) = if color == Color::White {
-            if is_castle_k { (Square::E1, Square::H1) } else { (Square::E1, Square::A1) }
+            if is_castle_k {
+                (Square::E1, Square::H1)
+            } else {
+                (Square::E1, Square::A1)
+            }
         } else {
-            if is_castle_k { (Square::E8, Square::H8) } else { (Square::E8, Square::A8) }
+            if is_castle_k {
+                (Square::E8, Square::H8)
+            } else {
+                (Square::E8, Square::A8)
+            }
         };
         Move::Castle { king, rook }
-    } else if piece.role == Role::Pawn && pos.board().piece_at(to_sq).is_none() && from_sq.file() != to_sq.file() {
-        Move::EnPassant { from: from_sq, to: to_sq }
+    } else if piece.role == Role::Pawn
+        && pos.board().piece_at(to_sq).is_none()
+        && from_sq.file() != to_sq.file()
+    {
+        Move::EnPassant {
+            from: from_sq,
+            to: to_sq,
+        }
     } else {
         let capture = pos.board().piece_at(to_sq).map(|p| p.role);
         Move::Normal {
@@ -255,7 +327,14 @@ pub(crate) fn decode_raw_move(
         None
     };
 
-    Some((mv, piece_idx, u8::from(to_sq), is_castle_k, is_castle_q, captured_sq))
+    Some((
+        mv,
+        piece_idx,
+        u8::from(to_sq),
+        is_castle_k,
+        is_castle_q,
+        captured_sq,
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -365,7 +444,10 @@ pub fn parse_position_matcher(
         return Ok(PositionTargetMatcher::PartialPieces(pieces));
     }
 
-    Err(anyhow::anyhow!("Could not parse board position: {}", fen_str))
+    Err(anyhow::anyhow!(
+        "Could not parse board position: {}",
+        fen_str
+    ))
 }
 
 /// Search for a target position across all games directly in .sg5 / .sg4 via memory mapping with streaming progress
@@ -448,17 +530,11 @@ where
                             continue;
                         }
 
-                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
-                            byte,
-                            &mut cursor,
-                            blob,
-                            &pos,
-                            &slots,
-                            &counts,
-                        ) {
-                            Some(m) => m,
-                            None => break,
-                        };
+                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) =
+                            match decode_raw_move(byte, &mut cursor, blob, &pos, &slots, &counts) {
+                                Some(m) => m,
+                                None => break,
+                            };
 
                         let side_idx = usize::from(pos.turn() == Color::Black);
                         update_slots_on_move(
@@ -487,7 +563,8 @@ where
                 })
                 .collect();
 
-            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed) + chunk_matches.len();
+            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed)
+                + chunk_matches.len();
             let cur_s = scanned_counter.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
             progress(cur_s.min(total), total, cur_m);
 
@@ -514,7 +591,9 @@ where
         board: target_pos.board().clone(),
         turn: Some(target_pos.turn()),
     };
-    let matches = search_position_matcher_mmap_with_progress(entries, games_path, &matcher, max_ply, progress)?;
+    let matches = search_position_matcher_mmap_with_progress(
+        entries, games_path, &matcher, max_ply, progress,
+    )?;
     let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
     let h: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
     let target_hash_u64 = h.0;
@@ -541,7 +620,10 @@ pub fn search_position_mmap(
 /// Parses FEN or partial board string into list of required (Square, Role, Color) pieces
 pub fn parse_piece_placements(board_str: &str) -> Vec<(Square, Role, Color)> {
     let mut pieces = Vec::new();
-    let board_part = board_str.split_whitespace().next().unwrap_or(board_str.trim());
+    let board_part = board_str
+        .split_whitespace()
+        .next()
+        .unwrap_or(board_str.trim());
     let ranks: Vec<&str> = board_part.split('/').collect();
     if ranks.len() != 8 {
         return pieces;
@@ -672,17 +754,11 @@ where
                             continue;
                         }
 
-                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
-                            byte,
-                            &mut cursor,
-                            blob,
-                            &pos,
-                            &slots,
-                            &counts,
-                        ) {
-                            Some(m) => m,
-                            None => break,
-                        };
+                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) =
+                            match decode_raw_move(byte, &mut cursor, blob, &pos, &slots, &counts) {
+                                Some(m) => m,
+                                None => break,
+                            };
 
                         let side_idx = usize::from(pos.turn() == Color::Black);
                         update_slots_on_move(
@@ -715,7 +791,8 @@ where
                 })
                 .collect();
 
-            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed) + chunk_matches.len();
+            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed)
+                + chunk_matches.len();
             let cur_s = scanned_counter.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
             progress(cur_s.min(total), total, cur_m);
 
@@ -734,7 +811,14 @@ pub fn search_piece_placements_mmap(
     match_any_ply: bool,
     max_ply: Option<usize>,
 ) -> Result<Vec<usize>> {
-    search_piece_placements_mmap_with_progress(entries, games_path, required, match_any_ply, max_ply, |_, _, _| {})
+    search_piece_placements_mmap_with_progress(
+        entries,
+        games_path,
+        required,
+        match_any_ply,
+        max_ply,
+        |_, _, _| {},
+    )
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -918,17 +1002,11 @@ where
                             continue;
                         }
 
-                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) = match decode_raw_move(
-                            byte,
-                            &mut cursor,
-                            blob,
-                            &pos,
-                            &slots,
-                            &counts,
-                        ) {
-                            Some(m) => m,
-                            None => break,
-                        };
+                        let (mv, piece_idx, to_sq, is_castle_k, is_castle_q, captured_sq) =
+                            match decode_raw_move(byte, &mut cursor, blob, &pos, &slots, &counts) {
+                                Some(m) => m,
+                                None => break,
+                            };
 
                         let side_idx = usize::from(pos.turn() == Color::Black);
                         update_slots_on_move(
@@ -961,7 +1039,8 @@ where
                 })
                 .collect();
 
-            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed) + chunk_matches.len();
+            let cur_m = match_counter.fetch_add(chunk_matches.len(), Ordering::Relaxed)
+                + chunk_matches.len();
             let cur_s = scanned_counter.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
             progress(cur_s.min(total), total, cur_m);
 

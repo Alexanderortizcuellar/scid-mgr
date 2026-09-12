@@ -920,15 +920,17 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"🔍 Searching: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
             return
 
-        if data.get("event") == "build_pos_index_progress":
+        if data.get("event") in ("build_pos_index_progress", "build_tree_progress"):
+            event = data.get("event")
             prog = data.get("data", {})
             scanned = prog.get("scanned", 0)
             total = prog.get("total", 0)
             positions = prog.get("positions", 0)
             pct = prog.get("percent", 0.0)
+            task_name = "Tree Index (.tree.idx)" if event == "build_tree_progress" else "Position Booster (.pos.idx)"
             if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
-                self.build_pos_dialog.update_progress(scanned, total, positions, pct)
-            self.status_bar.showMessage(f"⚡ Indexing Positions: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}")
+                self.build_pos_dialog.update_progress(scanned, total, positions, pct, task_name)
+            self.status_bar.showMessage(f"⚡ Indexing [{task_name}]: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}")
             return
 
         # Log to tab
@@ -967,25 +969,27 @@ class MainWindow(QMainWindow):
             self.lbl_players_count.setText(f"Players: {stats.get('players_count', 0):,}")
             self.lbl_events_count.setText(f"Events: {stats.get('events_count', 0):,}")
 
-            # Position Index status badge update
+            # Fast Indexes status update
             pos_status = stats.get("pos_index_status", resp_data.get("pos_index_status", "missing"))
             pos_count = stats.get("pos_index_unique_positions", resp_data.get("pos_index_unique_positions", 0))
-            self.update_pos_index_badge(pos_status, pos_count)
+            tree_status = stats.get("tree_index_status", resp_data.get("tree_index_status", "missing"))
+            tree_count = stats.get("tree_index_unique_positions", resp_data.get("tree_index_unique_positions", 0))
+            self.update_indexes_badge(pos_status, pos_count, tree_status, tree_count)
 
             # Reload model
             self.table_model.set_filters(self.table_model.filters)
 
-        # Handle Position Index Status or Complete
-        if "pos_index_status" in resp_data:
-            self.update_pos_index_badge(resp_data.get("pos_index_status"), resp_data.get("pos_index_unique_positions", 0))
+        # Handle Position Index / Tree Index Status
+        if "pos_index_status" in resp_data or "tree_index_status" in resp_data:
+            p_st = resp_data.get("pos_index_status", getattr(self, "pos_index_status", "missing"))
+            p_cnt = resp_data.get("pos_index_unique_positions", getattr(self, "pos_index_unique_positions", 0))
+            t_st = resp_data.get("tree_index_status", getattr(self, "tree_index_status", "missing"))
+            t_cnt = resp_data.get("tree_index_unique_positions", getattr(self, "tree_index_unique_positions", 0))
+            self.update_indexes_badge(p_st, p_cnt, t_st, t_cnt)
 
         if "unique_positions" in resp_data and "elapsed_ms" in resp_data and "moves" not in resp_data:
             unique_pos = resp_data.get("unique_positions", 0)
-            elapsed = resp_data.get("elapsed_ms", 0.0)
-            diag_info = resp_data.get("diagnostics")
-            self.update_pos_index_badge("valid", unique_pos)
-            if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
-                self.build_pos_dialog.on_complete(unique_pos, elapsed, diag_info)
+            self.refresh_database_info()
             if "Opening Tree" in self.tabs.tabText(self.tabs.currentIndex()):
                 self.opening_tree_widget.refresh_current_position()
 
@@ -1045,22 +1049,36 @@ class MainWindow(QMainWindow):
         self.build_pos_dialog = BuildPosIndexDialog(self.client, parent=self)
         self.build_pos_dialog.show()
 
-    def update_pos_index_badge(self, status: str, count: int = 0):
-        if status == "valid":
-            self.btn_pos_index.setText(f"🟢 Fast Index: Active ({count:,})")
+    def update_indexes_badge(self, pos_status: str, pos_count: int = 0, tree_status: str = "missing", tree_count: int = 0):
+        self.pos_index_status = pos_status
+        self.pos_index_unique_positions = pos_count
+        self.tree_index_status = tree_status
+        self.tree_index_unique_positions = tree_count
+
+        # Update Tree Widget badge
+        self.opening_tree_widget.update_tree_index_badge(tree_status, tree_count)
+
+        # Update Main Window badge
+        if pos_status == "valid" and tree_status == "valid":
+            self.btn_pos_index.setText(f"🟢 Fast Indexes: Active (Tree: {tree_count:,} | Pos: {pos_count:,})")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
-            self.opening_tree_widget.lbl_index_badge.setText(f"🟢 Fast Index: Active ({count:,} pos)")
-            self.opening_tree_widget.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
-        elif status == "outdated":
-            self.btn_pos_index.setText("🟠 Fast Index: Outdated [Rebuild]")
+        elif tree_status == "valid":
+            self.btn_pos_index.setText(f"🟢 Tree Idx: Active ({tree_count:,}) | ⚪ Pos Idx")
+            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
+        elif pos_status == "valid":
+            self.btn_pos_index.setText(f"🟢 Pos Idx: Active ({pos_count:,}) | ⚪ Tree Idx")
+            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
+        elif pos_status == "outdated" or tree_status == "outdated":
+            self.btn_pos_index.setText("🟠 Fast Indexes: Outdated [Rebuild]")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #fff3e0; color: #e65100; border: 1px solid #ffb74d; border-radius: 3px;")
-            self.opening_tree_widget.lbl_index_badge.setText("🟠 Fast Index: Outdated (Rebuild Recommended)")
-            self.opening_tree_widget.lbl_index_badge.setStyleSheet("color: #e65100; font-weight: bold; font-size: 11px;")
         else:
-            self.btn_pos_index.setText("⚡ Build Fast Index")
+            self.btn_pos_index.setText("⚡ Build Fast Indexes")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
-            self.opening_tree_widget.lbl_index_badge.setText("⚪ Fast Index: Not Built")
-            self.opening_tree_widget.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
+
+    def update_pos_index_badge(self, status: str, count: int = 0):
+        t_st = getattr(self, "tree_index_status", "missing")
+        t_cnt = getattr(self, "tree_index_unique_positions", 0)
+        self.update_indexes_badge(status, count, t_st, t_cnt)
 
     def open_benchmark_dialog(self):
         if not self.client.is_running():

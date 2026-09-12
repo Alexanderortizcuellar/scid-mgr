@@ -33,7 +33,9 @@ fn standard_piece_slots() -> [[u8; 16]; 2] {
         // White: 0:K(e1=4), 1:Ra1(0), 2:Nb1(1), 3:Bc1(2), 4:Qd1(3), 5:Bf1(5), 6:Ng1(6), 7:Rh1(7), 8..15: Pawns a2..h2 (8..15)
         [4, 0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         // Black: 0:K(e8=60), 1:Ra8(56), 2:Nb8(57), 3:Bc8(58), 4:Qd8(59), 5:Bf8(61), 6:Ng8(62), 7:Rh8(63), 8..15: Pawns a7..h7 (48..55)
-        [60, 56, 57, 58, 59, 61, 62, 63, 48, 49, 50, 51, 52, 53, 54, 55],
+        [
+            60, 56, 57, 58, 59, 61, 62, 63, 48, 49, 50, 51, 52, 53, 54, 55,
+        ],
     ]
 }
 
@@ -166,9 +168,17 @@ fn update_piece_slots(
 
     if is_castle_kingside || is_castle_queenside {
         let (rook_from, rook_to) = if side_idx == 0 {
-            if is_castle_kingside { (7, 5) } else { (0, 3) }
+            if is_castle_kingside {
+                (7, 5)
+            } else {
+                (0, 3)
+            }
         } else {
-            if is_castle_kingside { (63, 61) } else { (56, 59) }
+            if is_castle_kingside {
+                (63, 61)
+            } else {
+                (56, 59)
+            }
         };
         let rook_idx = match (0..counts[side_idx]).find(|&i| slots[side_idx][i] == rook_from) {
             Some(i) => i,
@@ -209,8 +219,12 @@ pub fn parse_game_bytes_fast(bytes: &[u8]) -> Option<(RawPgnTags, Vec<u8>)> {
                 cursor += 1; // consume ']'
                 let tag_slice = &bytes[line_start + 1..cursor - 1];
                 if let Some(space_pos) = tag_slice.iter().position(|&b| b == b' ') {
-                    let tag_name = std::str::from_utf8(&tag_slice[..space_pos]).unwrap_or("").trim();
-                    let tag_val_raw = std::str::from_utf8(&tag_slice[space_pos + 1..]).unwrap_or("").trim();
+                    let tag_name = std::str::from_utf8(&tag_slice[..space_pos])
+                        .unwrap_or("")
+                        .trim();
+                    let tag_val_raw = std::str::from_utf8(&tag_slice[space_pos + 1..])
+                        .unwrap_or("")
+                        .trim();
                     let val = tag_val_raw.trim_matches('"');
 
                     match tag_name {
@@ -258,11 +272,17 @@ pub fn parse_game_bytes_fast(bytes: &[u8]) -> Option<(RawPgnTags, Vec<u8>)> {
                     }
                 }
             }
-            while cursor < len && (bytes[cursor] == b'\r' || bytes[cursor] == b'\n' || bytes[cursor] == b' ') {
+            while cursor < len
+                && (bytes[cursor] == b'\r' || bytes[cursor] == b'\n' || bytes[cursor] == b' ')
+            {
                 cursor += 1;
             }
             moves_start_idx = cursor;
-        } else if bytes[cursor] == b'\r' || bytes[cursor] == b'\n' || bytes[cursor] == b' ' || bytes[cursor] == b'\t' {
+        } else if bytes[cursor] == b'\r'
+            || bytes[cursor] == b'\n'
+            || bytes[cursor] == b' '
+            || bytes[cursor] == b'\t'
+        {
             cursor += 1;
             moves_start_idx = cursor;
         } else {
@@ -345,59 +365,60 @@ pub fn parse_game_bytes_fast(bytes: &[u8]) -> Option<(RawPgnTags, Vec<u8>)> {
         let side_idx = usize::from(color == Color::Black);
 
         // Extract move properties
-        let (from_sq, to_sq, role, promo, is_castle_kingside, is_castle_queenside, captured_sq) = match mv {
-            Move::Normal {
-                role,
-                from,
-                to,
-                capture,
-                promotion,
-            } => {
-                let cap_sq = capture.map(|_| u8::from(to));
-                (
-                    u8::from(from),
-                    u8::from(to),
+        let (from_sq, to_sq, role, promo, is_castle_kingside, is_castle_queenside, captured_sq) =
+            match mv {
+                Move::Normal {
                     role,
+                    from,
+                    to,
+                    capture,
                     promotion,
-                    false,
-                    false,
-                    cap_sq,
-                )
-            }
-            Move::EnPassant { from, to } => {
-                let cap_rank = from.rank();
-                let cap_file = to.file();
-                let cap_sq = u8::from(Square::from_coords(cap_file, cap_rank));
-                (
-                    u8::from(from),
-                    u8::from(to),
-                    Role::Pawn,
-                    None,
-                    false,
-                    false,
-                    Some(cap_sq),
-                )
-            }
-            Move::Castle { king, rook } => {
-                let is_kingside = rook.file() > king.file();
-                let to_file = if is_kingside {
-                    shakmaty::File::G
-                } else {
-                    shakmaty::File::C
-                };
-                let to_sq = u8::from(Square::from_coords(to_file, king.rank()));
-                (
-                    u8::from(king),
-                    to_sq,
-                    Role::King,
-                    None,
-                    is_kingside,
-                    !is_kingside,
-                    None,
-                )
-            }
-            Move::Put { .. } => return None,
-        };
+                } => {
+                    let cap_sq = capture.map(|_| u8::from(to));
+                    (
+                        u8::from(from),
+                        u8::from(to),
+                        role,
+                        promotion,
+                        false,
+                        false,
+                        cap_sq,
+                    )
+                }
+                Move::EnPassant { from, to } => {
+                    let cap_rank = from.rank();
+                    let cap_file = to.file();
+                    let cap_sq = u8::from(Square::from_coords(cap_file, cap_rank));
+                    (
+                        u8::from(from),
+                        u8::from(to),
+                        Role::Pawn,
+                        None,
+                        false,
+                        false,
+                        Some(cap_sq),
+                    )
+                }
+                Move::Castle { king, rook } => {
+                    let is_kingside = rook.file() > king.file();
+                    let to_file = if is_kingside {
+                        shakmaty::File::G
+                    } else {
+                        shakmaty::File::C
+                    };
+                    let to_sq = u8::from(Square::from_coords(to_file, king.rank()));
+                    (
+                        u8::from(king),
+                        to_sq,
+                        Role::King,
+                        None,
+                        is_kingside,
+                        !is_kingside,
+                        None,
+                    )
+                }
+                Move::Put { .. } => return None,
+            };
 
         // Find piece index in SCID slots
         let piece_idx = (0..16).find(|&i| slots[side_idx][i] == from_sq)?;

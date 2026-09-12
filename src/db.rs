@@ -177,8 +177,8 @@ impl ScidDatabaseWrapper {
             return Err(anyhow!("Index file not found: {}", index_path.display()));
         }
 
-        let index_bytes = fs::read(&index_path)
-            .with_context(|| format!("Reading {}", index_path.display()))?;
+        let index_bytes =
+            fs::read(&index_path).with_context(|| format!("Reading {}", index_path.display()))?;
         let names_bytes = fs::read(&namebase_path)
             .with_context(|| format!("Reading {}", namebase_path.display()))?;
 
@@ -370,8 +370,8 @@ impl ScidDatabaseWrapper {
     }
 
     pub fn add_game(&mut self, pgn: &str) -> Result<usize> {
-        let parsed = pgn_ingest::parse_game(pgn)
-            .map_err(|e| anyhow!("Failed to parse PGN: {:?}", e))?;
+        let parsed =
+            pgn_ingest::parse_game(pgn).map_err(|e| anyhow!("Failed to parse PGN: {:?}", e))?;
 
         let encoded_blob = chess_scid_rw::game_blob::encode_mainline(&parsed.game)
             .map_err(|e| anyhow!("Failed to encode game blob: {:?}", e))?;
@@ -417,8 +417,8 @@ impl ScidDatabaseWrapper {
             return Err(anyhow!("Game index {} out of bounds", index));
         }
 
-        let parsed = pgn_ingest::parse_game(pgn)
-            .map_err(|e| anyhow!("Failed to parse PGN: {:?}", e))?;
+        let parsed =
+            pgn_ingest::parse_game(pgn).map_err(|e| anyhow!("Failed to parse PGN: {:?}", e))?;
 
         let encoded_blob = chess_scid_rw::game_blob::encode_mainline(&parsed.game)
             .map_err(|e| anyhow!("Failed to encode game blob: {:?}", e))?;
@@ -495,7 +495,8 @@ impl ScidDatabaseWrapper {
         let mut compacted_entries = Vec::with_capacity(self.entries.len());
         let mut compacted_games = Vec::new();
 
-        let old_total_bytes = self.games_mmap.as_ref().map(|m| m.len()).unwrap_or(0) + self.pending_games.len();
+        let old_total_bytes =
+            self.games_mmap.as_ref().map(|m| m.len()).unwrap_or(0) + self.pending_games.len();
 
         let old_entries = std::mem::take(&mut self.entries);
         for mut entry in old_entries {
@@ -563,7 +564,12 @@ impl ScidDatabaseWrapper {
     }
 
     /// Sorts the database in-place, rewriting and compacting the move streams and index entries in the sorted order.
-    pub fn sort_database(&mut self, sort_by: &str, sort_asc: bool, delete_removed: bool) -> Result<usize> {
+    pub fn sort_database(
+        &mut self,
+        sort_by: &str,
+        sort_asc: bool,
+        delete_removed: bool,
+    ) -> Result<usize> {
         let mut indices: Vec<usize> = if delete_removed {
             (0..self.entries.len())
                 .filter(|&i| !self.entries[i].deleted)
@@ -609,7 +615,13 @@ impl ScidDatabaseWrapper {
     }
 
     /// Sorts the database and writes the resulting sorted database to a new destination path.
-    pub fn sort_database_to(&self, dest_path: &Path, sort_by: &str, sort_asc: bool, delete_removed: bool) -> Result<usize> {
+    pub fn sort_database_to(
+        &self,
+        dest_path: &Path,
+        sort_by: &str,
+        sort_asc: bool,
+        delete_removed: bool,
+    ) -> Result<usize> {
         let (dest_format, dest_index_path) = detect_format_from_path(dest_path);
         let (dest_namebase_path, dest_games_path) = match dest_format {
             ScidFormat::Si4 => {
@@ -712,13 +724,17 @@ impl ScidDatabaseWrapper {
         F: Fn(usize, usize, usize) + Sync,
     {
         let start_time = std::time::Instant::now();
-        let is_exact_mode = mode_param.map(|m| {
-            let m = m.to_lowercase();
-            m == "exact" || m == "auto" || m.is_empty()
-        }).unwrap_or(true);
+        let is_exact_mode = mode_param
+            .map(|m| {
+                let m = m.to_lowercase();
+                m == "exact" || m == "auto" || m.is_empty()
+            })
+            .unwrap_or(true);
 
         if is_exact_mode && turn_param.is_none() {
-            if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(fen_str) {
+            if let Some((_pos, zobrist_hash)) =
+                crate::position_index::parse_target_position(fen_str)
+            {
                 if let Ok(pos_idx) = crate::position_index::PositionIndex::load(&self.index_path) {
                     if let Some(gids) = pos_idx.get_all_position_games(zobrist_hash) {
                         let matches: Vec<crate::position_search::PositionMatch> = gids
@@ -742,7 +758,8 @@ impl ScidDatabaseWrapper {
             }
         }
 
-        let matcher = crate::position_search::parse_position_matcher(fen_str, turn_param, mode_param)?;
+        let matcher =
+            crate::position_search::parse_position_matcher(fen_str, turn_param, mode_param)?;
         let matches = crate::position_search::search_position_matcher_mmap_with_progress(
             &self.entries,
             &self.games_path,
@@ -779,7 +796,12 @@ impl ScidDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
-        crate::position_search::search_material_mmap_with_progress(&self.entries, &self.games_path, filter, progress)
+        crate::position_search::search_material_mmap_with_progress(
+            &self.entries,
+            &self.games_path,
+            filter,
+            progress,
+        )
     }
 
     pub fn search_material(
@@ -817,7 +839,11 @@ impl ScidDatabaseWrapper {
                     return (summaries, total_matches);
                 } else if cached_filter.same_search_criteria(filter) {
                     let mut sorted_indices = cached_indices.clone();
-                    self.sort_indices(&mut sorted_indices, filter.sort_by.as_deref(), filter.sort_asc);
+                    self.sort_indices(
+                        &mut sorted_indices,
+                        filter.sort_by.as_deref(),
+                        filter.sort_asc,
+                    );
                     let total_matches = sorted_indices.len();
                     let start = page * page_size;
                     let summaries = if start >= total_matches {
@@ -937,9 +963,12 @@ impl ScidDatabaseWrapper {
         }
 
         let mat_matches = filter.material.as_ref().and_then(|m| {
-            self.search_material_with_progress(m, &progress).ok().map(|vec| {
-                vec.into_iter().collect::<std::collections::HashSet<usize>>()
-            })
+            self.search_material_with_progress(m, &progress)
+                .ok()
+                .map(|vec| {
+                    vec.into_iter()
+                        .collect::<std::collections::HashSet<usize>>()
+                })
         });
 
         let has_filter = candidate_ids.is_some()
@@ -1000,8 +1029,10 @@ impl ScidDatabaseWrapper {
                         }
                     }
                     if let Some(ref m) = player_matches {
-                        let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
-                        let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        let w_ok =
+                            (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        let b_ok =
+                            (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
                         if !w_ok && !b_ok {
                             return None;
                         }
@@ -1075,8 +1106,10 @@ impl ScidDatabaseWrapper {
                         }
                     }
                     if let Some(ref m) = player_matches {
-                        let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
-                        let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        let w_ok =
+                            (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        let b_ok =
+                            (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
                         if !w_ok && !b_ok {
                             return None;
                         }
@@ -1113,7 +1146,11 @@ impl ScidDatabaseWrapper {
         };
 
         // Ultra-Fast Parallel Multi-Field Sorting
-        self.sort_indices(&mut matched_indices, filter.sort_by.as_deref(), filter.sort_asc);
+        self.sort_indices(
+            &mut matched_indices,
+            filter.sort_by.as_deref(),
+            filter.sort_asc,
+        );
 
         let total_matches = matched_indices.len();
         let start = page * page_size;
@@ -1152,7 +1189,12 @@ impl ScidDatabaseWrapper {
         }
     }
 
-    pub fn sort_indices(&self, matched_indices: &mut [usize], sort_by: Option<&str>, sort_asc: Option<bool>) {
+    pub fn sort_indices(
+        &self,
+        matched_indices: &mut [usize],
+        sort_by: Option<&str>,
+        sort_asc: Option<bool>,
+    ) {
         if let Some(sort_field) = sort_by {
             let is_asc = sort_asc.unwrap_or(true);
             let entries = &self.entries;
@@ -1162,49 +1204,70 @@ impl ScidDatabaseWrapper {
                     if is_asc {
                         matched_indices.par_sort_unstable_by_key(|&i| entries[i].date);
                     } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].date.cmp(&entries[a].date));
+                        matched_indices
+                            .par_sort_unstable_by(|&a, &b| entries[b].date.cmp(&entries[a].date));
                     }
                 }
                 "white_elo" => {
                     if is_asc {
                         matched_indices.par_sort_unstable_by_key(|&i| entries[i].white_elo);
                     } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].white_elo.cmp(&entries[a].white_elo));
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            entries[b].white_elo.cmp(&entries[a].white_elo)
+                        });
                     }
                 }
                 "black_elo" => {
                     if is_asc {
                         matched_indices.par_sort_unstable_by_key(|&i| entries[i].black_elo);
                     } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].black_elo.cmp(&entries[a].black_elo));
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            entries[b].black_elo.cmp(&entries[a].black_elo)
+                        });
                     }
                 }
                 "eco" => {
                     if is_asc {
                         matched_indices.par_sort_unstable_by_key(|&i| entries[i].eco_code);
                     } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].eco_code.cmp(&entries[a].eco_code));
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            entries[b].eco_code.cmp(&entries[a].eco_code)
+                        });
                     }
                 }
                 "result" => {
                     if is_asc {
                         matched_indices.par_sort_unstable_by_key(|&i| entries[i].result);
                     } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| entries[b].result.cmp(&entries[a].result));
+                        matched_indices.par_sort_unstable_by(|&a, &b| {
+                            entries[b].result.cmp(&entries[a].result)
+                        });
                     }
                 }
                 "white" => {
                     let ranks = self.get_player_ranks();
                     if is_asc {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].white_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].white_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].white_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].white_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             ra.cmp(&rb)
                         });
                     } else {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].white_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].white_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].white_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].white_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             rb.cmp(&ra)
                         });
                     }
@@ -1213,14 +1276,26 @@ impl ScidDatabaseWrapper {
                     let ranks = self.get_player_ranks();
                     if is_asc {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].black_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].black_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].black_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].black_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             ra.cmp(&rb)
                         });
                     } else {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].black_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].black_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].black_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].black_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             rb.cmp(&ra)
                         });
                     }
@@ -1229,14 +1304,26 @@ impl ScidDatabaseWrapper {
                     let ranks = self.get_event_ranks();
                     if is_asc {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].event_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].event_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].event_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].event_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             ra.cmp(&rb)
                         });
                     } else {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].event_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].event_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].event_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].event_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             rb.cmp(&ra)
                         });
                     }
@@ -1245,14 +1332,26 @@ impl ScidDatabaseWrapper {
                     let ranks = self.get_site_ranks();
                     if is_asc {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].site_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].site_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].site_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].site_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             ra.cmp(&rb)
                         });
                     } else {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].site_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].site_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].site_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].site_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             rb.cmp(&ra)
                         });
                     }
@@ -1261,14 +1360,26 @@ impl ScidDatabaseWrapper {
                     let ranks = self.get_round_ranks();
                     if is_asc {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].round_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].round_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].round_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].round_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             ra.cmp(&rb)
                         });
                     } else {
                         matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks.get(entries[a].round_id as usize).copied().unwrap_or(u32::MAX);
-                            let rb = ranks.get(entries[b].round_id as usize).copied().unwrap_or(u32::MAX);
+                            let ra = ranks
+                                .get(entries[a].round_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
+                            let rb = ranks
+                                .get(entries[b].round_id as usize)
+                                .copied()
+                                .unwrap_or(u32::MAX);
                             rb.cmp(&ra)
                         });
                     }
@@ -1292,7 +1403,8 @@ impl ScidDatabaseWrapper {
 
         let idx_size = self.index_path.metadata().map(|m| m.len()).unwrap_or(0);
         let nb_size = self.namebase_path.metadata().map(|m| m.len()).unwrap_or(0);
-        let g_size = self.games_path.metadata().map(|m| m.len()).unwrap_or(0) + self.pending_games.len() as u64;
+        let g_size = self.games_path.metadata().map(|m| m.len()).unwrap_or(0)
+            + self.pending_games.len() as u64;
 
         DbStats {
             format: self.format,

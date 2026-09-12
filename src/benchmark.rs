@@ -40,7 +40,9 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
         let pgn_db = PgnDatabaseWrapper::open(db_path)?;
         let load_ms = load_start.elapsed().as_secs_f64() * 1000.0;
         let total_games = pgn_db.game_count();
-        let file_size_mb = std::fs::metadata(db_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
+        let file_size_mb = std::fs::metadata(db_path)
+            .map(|m| m.len() as f64 / 1_048_576.0)
+            .unwrap_or(0.0);
 
         results.push(BenchmarkItem {
             category: "Database Open".to_string(),
@@ -75,15 +77,37 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
                 name: label.to_string(),
                 elapsed_ms: ms,
                 count: total,
-                notes: format!("Fetched page 0 ({} items) out of {} games", games.len(), total),
+                notes: format!(
+                    "Fetched page 0 ({} items) out of {} games",
+                    games.len(),
+                    total
+                ),
             });
         }
 
         // 2. Filter benchmarks
         let search_filters = [
-            (GameFilter { player: Some("Carlsen".to_string()), ..Default::default() }, "Player search (Carlsen)"),
-            (GameFilter { eco: Some("B".to_string()), ..Default::default() }, "ECO prefix search (B)"),
-            (GameFilter { result: Some("1-0".to_string()), ..Default::default() }, "Result search (1-0)"),
+            (
+                GameFilter {
+                    player: Some("Carlsen".to_string()),
+                    ..Default::default()
+                },
+                "Player search (Carlsen)",
+            ),
+            (
+                GameFilter {
+                    eco: Some("B".to_string()),
+                    ..Default::default()
+                },
+                "ECO prefix search (B)",
+            ),
+            (
+                GameFilter {
+                    result: Some("1-0".to_string()),
+                    ..Default::default()
+                },
+                "Result search (1-0)",
+            ),
         ];
 
         for (flt, label) in search_filters {
@@ -95,7 +119,11 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
                 name: label.to_string(),
                 elapsed_ms: ms,
                 count: total,
-                notes: format!("Matched {} games (retrieved page of {})", total, games.len()),
+                notes: format!(
+                    "Matched {} games (retrieved page of {})",
+                    total,
+                    games.len()
+                ),
             });
         }
 
@@ -138,7 +166,9 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
         let load_ms = load_start.elapsed().as_secs_f64() * 1000.0;
         let stats = db.stats();
         let total_games = stats.total_games;
-        let file_size_mb = (stats.index_file_size + stats.namebase_file_size + stats.games_file_size) as f64 / 1_048_576.0;
+        let file_size_mb =
+            (stats.index_file_size + stats.namebase_file_size + stats.games_file_size) as f64
+                / 1_048_576.0;
 
         results.push(BenchmarkItem {
             category: "Database Open".to_string(),
@@ -154,7 +184,10 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
         let rank_ms = rank_start.elapsed().as_secs_f64() * 1000.0;
         results.push(BenchmarkItem {
             category: "Indexing".to_string(),
-            name: format!("Alphabetical Name Ranking ({} players)", stats.players_count),
+            name: format!(
+                "Alphabetical Name Ranking ({} players)",
+                stats.players_count
+            ),
             elapsed_ms: rank_ms,
             count: stats.players_count,
             notes: "Parallel radix/quicksort lookup array".to_string(),
@@ -188,16 +221,45 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
                 name: label.to_string(),
                 elapsed_ms: ms,
                 count: total,
-                notes: format!("Sorted {} games in {:.2} ms ({:.0} games/s)", total, ms, (total as f64 / (ms / 1000.0))),
+                notes: format!(
+                    "Sorted {} games in {:.2} ms ({:.0} games/s)",
+                    total,
+                    ms,
+                    (total as f64 / (ms / 1000.0))
+                ),
             });
         }
 
         // 2. Parallel Header Filtering Benchmarks
         let search_filters = [
-            (GameFilter { player: Some("Kasparov".to_string()), ..Default::default() }, "Player Name (Kasparov)"),
-            (GameFilter { eco: Some("B90".to_string()), ..Default::default() }, "Exact ECO (B90 Sicilian)"),
-            (GameFilter { date: Some("2024".to_string()), ..Default::default() }, "Year Filter (2024)"),
-            (GameFilter { result: Some("1-0".to_string()), ..Default::default() }, "Result Filter (1-0 White Win)"),
+            (
+                GameFilter {
+                    player: Some("Kasparov".to_string()),
+                    ..Default::default()
+                },
+                "Player Name (Kasparov)",
+            ),
+            (
+                GameFilter {
+                    eco: Some("B90".to_string()),
+                    ..Default::default()
+                },
+                "Exact ECO (B90 Sicilian)",
+            ),
+            (
+                GameFilter {
+                    date: Some("2024".to_string()),
+                    ..Default::default()
+                },
+                "Year Filter (2024)",
+            ),
+            (
+                GameFilter {
+                    result: Some("1-0".to_string()),
+                    ..Default::default()
+                },
+                "Result Filter (1-0 White Win)",
+            ),
         ];
 
         for (flt, label) in search_filters {
@@ -230,15 +292,28 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
                 name: "Rook Endgame Search (WR=1, BR=1, WQ=0, BQ=0)".to_string(),
                 elapsed_ms: ms,
                 count: matches.len(),
-                notes: format!("Found {} games in {:.2} ms via bitboard index", matches.len(), ms),
+                notes: format!(
+                    "Found {} games in {:.2} ms via bitboard index",
+                    matches.len(),
+                    ms
+                ),
             });
         }
 
         // 4. Comparative Position Search: Approach A (Full DB Scan) vs Approach B (Index-Accelerated Candidates)
         let benchmark_positions = [
-            ("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1", "1.e4 (Large Candidate Set, ~45% of DB)"),
-            ("rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3", "1.e4 e6 2.d4 d5 (French Defense, Moderate Candidate Set)"),
-            ("rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6", "Sicilian Najdorf (Tabiya, Specific Candidate Set)"),
+            (
+                "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+                "1.e4 (Large Candidate Set, ~45% of DB)",
+            ),
+            (
+                "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3",
+                "1.e4 e6 2.d4 d5 (French Defense, Moderate Candidate Set)",
+            ),
+            (
+                "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+                "Sicilian Najdorf (Tabiya, Specific Candidate Set)",
+            ),
         ];
 
         for (fen, desc) in benchmark_positions {
@@ -249,24 +324,32 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
             let count_b = pos_res_b.as_ref().map(|r| r.matches.len()).unwrap_or(0);
 
             results.push(BenchmarkItem {
-                category: "Position Search (Approach B: .pos.idx Candidate Accelerated)".to_string(),
+                category: "Position Search (Approach B: .pos.idx Candidate Accelerated)"
+                    .to_string(),
                 name: desc.to_string(),
                 elapsed_ms: ms_b,
                 count: count_b,
-                notes: format!("Found {} games in {:.3} ms (< 0.05 ms index lookup)", count_b, ms_b),
+                notes: format!(
+                    "Found {} games in {:.3} ms (< 0.05 ms index lookup)",
+                    count_b, ms_b
+                ),
             });
 
             // Approach A: Full Database Move-Stream Scan
             if include_heavy_search || total_games <= 100_000 {
-                if let Ok(matcher) = crate::position_search::parse_position_matcher(fen, None, Some("exact")) {
+                if let Ok(matcher) =
+                    crate::position_search::parse_position_matcher(fen, None, Some("exact"))
+                {
                     let start_a = Instant::now();
-                    let matches_a = crate::position_search::search_position_matcher_mmap_with_progress(
-                        db.entries(),
-                        db.games_path(),
-                        &matcher,
-                        Some(24),
-                        |_, _, _| {},
-                    ).unwrap_or_default();
+                    let matches_a =
+                        crate::position_search::search_position_matcher_mmap_with_progress(
+                            db.entries(),
+                            db.games_path(),
+                            &matcher,
+                            Some(24),
+                            |_, _, _| {},
+                        )
+                        .unwrap_or_default();
                     let ms_a = start_a.elapsed().as_secs_f64() * 1000.0;
                     let speedup = if ms_b > 0.0 { ms_a / ms_b } else { 1.0 };
 
@@ -275,7 +358,12 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
                         name: format!("{} [Full Scan]", desc),
                         elapsed_ms: ms_a,
                         count: matches_a.len(),
-                        notes: format!("Found {} games in {:.2} ms ({:.1}x speedup with Approach B)", matches_a.len(), ms_a, speedup),
+                        notes: format!(
+                            "Found {} games in {:.2} ms ({:.1}x speedup with Approach B)",
+                            matches_a.len(),
+                            ms_a,
+                            speedup
+                        ),
                     });
                 }
             }
@@ -295,7 +383,10 @@ pub fn run_benchmark(db_path: &Path, include_heavy_search: bool) -> Result<Bench
                 name: format!("{} + Header Filter", desc),
                 elapsed_ms: ms_comb,
                 count: total_comb,
-                notes: format!("Filtered to {} matching games in {:.3} ms", total_comb, ms_comb),
+                notes: format!(
+                    "Filtered to {} matching games in {:.3} ms",
+                    total_comb, ms_comb
+                ),
             });
         }
 

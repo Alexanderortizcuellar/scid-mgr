@@ -133,12 +133,8 @@ where
     let format = db.format();
     let index_path = db.index_path().to_path_buf();
 
-    let res = crate::zero_copy_ingest::import_pgn_ultra_fast(
-        &index_path,
-        pgn_path,
-        format,
-        progress_cb,
-    )?;
+    let res =
+        crate::zero_copy_ingest::import_pgn_ultra_fast(&index_path, pgn_path, format, progress_cb)?;
 
     *db = ScidDatabaseWrapper::open(&index_path)?;
     Ok(res)
@@ -203,7 +199,10 @@ exit 0
         .context("Failed to run scid.exe C++ engine")?;
 
     if !status.success() {
-        return Err(anyhow::anyhow!("scid.exe failed with exit status: {:?}", status));
+        return Err(anyhow::anyhow!(
+            "scid.exe failed with exit status: {:?}",
+            status
+        ));
     }
 
     *db = ScidDatabaseWrapper::open(&index_path)?;
@@ -292,17 +291,18 @@ pub fn fast_game_to_pgn(
             continue;
         }
 
-        let (mv, piece_idx, to_sq, is_k, is_q, cap_sq) = match crate::position_search::decode_raw_move(
-            byte,
-            &mut cursor,
-            blob,
-            &pos,
-            &slots,
-            &counts,
-        ) {
-            Some(m) => m,
-            None => break,
-        };
+        let (mv, piece_idx, to_sq, is_k, is_q, cap_sq) =
+            match crate::position_search::decode_raw_move(
+                byte,
+                &mut cursor,
+                blob,
+                &pos,
+                &slots,
+                &counts,
+            ) {
+                Some(m) => m,
+                None => break,
+            };
 
         let is_white = pos.turn() == shakmaty::Color::White;
         let san = shakmaty::san::SanPlus::from_move_and_play_unchecked(&mut pos, &mv);

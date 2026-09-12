@@ -2,6 +2,7 @@ use crate::db::{GameFilter, ScidDatabaseWrapper, ScidFormat};
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::pgn_utils::import_pgn_file_with_progress;
 use crate::position_index::{IndexStatus, PositionIndex};
+use crate::tree_index::TreeIndex;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,12 +42,17 @@ pub fn run_interactive_server(
     let mut stdout = io::stdout();
     let mut reader = stdin.lock();
 
-    let max_system_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let max_system_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let mut current_thread_count = initial_threads.unwrap_or(max_system_threads).max(1);
-    let mut thread_pool = rayon::ThreadPoolBuilder::new().num_threads(current_thread_count).build()?;
+    let mut thread_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(current_thread_count)
+        .build()?;
 
     let mut current_db: Option<DatabaseBackend> = None;
     let mut current_pos_index: Option<PositionIndex> = None;
+    let mut current_tree_index: Option<TreeIndex> = None;
 
     if let Some(path) = initial_db_path {
         if path.exists() {
@@ -114,6 +120,7 @@ pub fn run_interactive_server(
         let resp = handle_command(
             &mut current_db,
             &mut current_pos_index,
+            &mut current_tree_index,
             &mut thread_pool,
             &mut current_thread_count,
             max_system_threads,
@@ -130,6 +137,7 @@ pub fn run_interactive_server(
 fn handle_command(
     current_db: &mut Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,
+    current_tree_index: &mut Option<TreeIndex>,
     thread_pool: &mut rayon::ThreadPool,
     current_thread_count: &mut usize,
     max_system_threads: usize,
@@ -170,19 +178,22 @@ fn handle_command(
             }
         }
 
-        "get_threads" | "get_config" => {
-            ResponseMessage {
-                id,
-                status: "ok".to_string(),
-                data: Some(serde_json::json!({
-                    "threads": *current_thread_count,
-                    "max_threads": max_system_threads,
-                })),
-                error: None,
-            }
-        }
+        "get_threads" | "get_config" => ResponseMessage {
+            id,
+            status: "ok".to_string(),
+            data: Some(serde_json::json!({
+                "threads": *current_thread_count,
+                "max_threads": max_system_threads,
+            })),
+            error: None,
+        },
         "open" | "open_db" => {
-            let path_str = match req.params.get("path").or_else(|| req.params.get("params").and_then(|p| p.get("path"))).and_then(|v| v.as_str()) {
+            let path_str = match req
+                .params
+                .get("path")
+                .or_else(|| req.params.get("params").and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+            {
                 Some(p) => p,
                 None => {
                     return ResponseMessage {
@@ -201,14 +212,30 @@ fn handle_command(
                         let total_games = pgn.game_count();
                         let pgn_path_str = pgn.pgn_path.to_string_lossy().to_string();
 
-                        let (idx_status, header_opt) = PositionIndex::check_status(path, total_games);
+                        let (idx_status, header_opt) =
+                            PositionIndex::check_status(path, total_games);
                         let status_str = match idx_status {
                             IndexStatus::Valid => "valid",
                             IndexStatus::Outdated => "outdated",
                             IndexStatus::Missing => "missing",
                         };
-                        let pos_count = header_opt.as_ref().map(|h| h.unique_positions).unwrap_or(0);
-                        *current_pos_index = None; // Keep index unloaded in RAM until explicitly requested
+                        let pos_count =
+                            header_opt.as_ref().map(|h| h.unique_positions).unwrap_or(0);
+
+                        let (tree_status, tree_header_opt) =
+                            TreeIndex::check_status(path, total_games);
+                        let tree_status_str = match tree_status {
+                            crate::tree_index::IndexStatus::Valid => "valid",
+                            crate::tree_index::IndexStatus::Outdated => "outdated",
+                            crate::tree_index::IndexStatus::Missing => "missing",
+                        };
+                        let tree_pos_count = tree_header_opt
+                            .as_ref()
+                            .map(|h| h.unique_positions)
+                            .unwrap_or(0);
+
+                        *current_pos_index = None;
+                        *current_tree_index = None;
 
                         *current_db = Some(DatabaseBackend::Pgn(pgn));
                         ResponseMessage {
@@ -227,9 +254,13 @@ fn handle_command(
                                     "path": pgn_path_str,
                                     "pos_index_status": status_str,
                                     "pos_index_unique_positions": pos_count,
+                                    "tree_index_status": tree_status_str,
+                                    "tree_index_unique_positions": tree_pos_count,
                                 },
                                 "pos_index_status": status_str,
                                 "pos_index_unique_positions": pos_count,
+                                "tree_index_status": tree_status_str,
+                                "tree_index_unique_positions": tree_pos_count,
                                 "format": "pgn",
                                 "total_games": total_games
                             })),
@@ -249,18 +280,48 @@ fn handle_command(
                         let total_games = db.game_count();
                         let mut stats = serde_json::to_value(db.stats()).unwrap_or_default();
 
-                        let (idx_status, header_opt) = PositionIndex::check_status(path, total_games);
+                        let (idx_status, header_opt) =
+                            PositionIndex::check_status(path, total_games);
                         let status_str = match idx_status {
                             IndexStatus::Valid => "valid",
                             IndexStatus::Outdated => "outdated",
                             IndexStatus::Missing => "missing",
                         };
-                        let pos_count = header_opt.as_ref().map(|h| h.unique_positions).unwrap_or(0);
-                        *current_pos_index = None; // Keep index unloaded in RAM until explicitly requested
+                        let pos_count =
+                            header_opt.as_ref().map(|h| h.unique_positions).unwrap_or(0);
+
+                        let (tree_status, tree_header_opt) =
+                            TreeIndex::check_status(path, total_games);
+                        let tree_status_str = match tree_status {
+                            crate::tree_index::IndexStatus::Valid => "valid",
+                            crate::tree_index::IndexStatus::Outdated => "outdated",
+                            crate::tree_index::IndexStatus::Missing => "missing",
+                        };
+                        let tree_pos_count = tree_header_opt
+                            .as_ref()
+                            .map(|h| h.unique_positions)
+                            .unwrap_or(0);
+
+                        *current_pos_index = None;
+                        *current_tree_index = None;
 
                         if let Some(obj) = stats.as_object_mut() {
-                            obj.insert("pos_index_status".to_string(), serde_json::json!(status_str));
-                            obj.insert("pos_index_unique_positions".to_string(), serde_json::json!(pos_count));
+                            obj.insert(
+                                "pos_index_status".to_string(),
+                                serde_json::json!(status_str),
+                            );
+                            obj.insert(
+                                "pos_index_unique_positions".to_string(),
+                                serde_json::json!(pos_count),
+                            );
+                            obj.insert(
+                                "tree_index_status".to_string(),
+                                serde_json::json!(tree_status_str),
+                            );
+                            obj.insert(
+                                "tree_index_unique_positions".to_string(),
+                                serde_json::json!(tree_pos_count),
+                            );
                         }
 
                         *current_db = Some(DatabaseBackend::Scid(db));
@@ -271,6 +332,8 @@ fn handle_command(
                                 "stats": stats,
                                 "pos_index_status": status_str,
                                 "pos_index_unique_positions": pos_count,
+                                "tree_index_status": tree_status_str,
+                                "tree_index_unique_positions": tree_pos_count,
                                 "format": stats.get("format").and_then(|v| v.as_str()).unwrap_or("si5"),
                                 "total_games": total_games
                             })),
@@ -422,12 +485,17 @@ fn handle_command(
                 .params
                 .get("page_size")
                 .or_else(|| req.params.get("limit"))
-                .or_else(|| req.params.get("params").and_then(|p| p.get("page_size").or_else(|| p.get("limit"))))
+                .or_else(|| {
+                    req.params
+                        .get("params")
+                        .and_then(|p| p.get("page_size").or_else(|| p.get("limit")))
+                })
                 .and_then(|v| v.as_u64())
                 .unwrap_or(100) as usize;
 
             let filter_value = req.params.get("params").unwrap_or(&req.params);
-            let filter: GameFilter = serde_json::from_value(filter_value.clone()).unwrap_or_default();
+            let filter: GameFilter =
+                serde_json::from_value(filter_value.clone()).unwrap_or_default();
             let (games, total) = thread_pool.install(|| match db {
                 DatabaseBackend::Scid(s) => s.query_games_with_progress(&filter, page, page_size, |scanned, total, matches_len| {
                     let event_json = serde_json::json!({
@@ -495,14 +563,20 @@ fn handle_command(
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             let summaries: Vec<crate::db::GameSummary> = match db {
-                DatabaseBackend::Scid(s) => ids.iter().filter_map(|&gid| s.get_game_summary(gid)).collect(),
-                DatabaseBackend::Pgn(p) => ids.iter().filter_map(|&gid| {
-                    if gid < p.entries.len() {
-                        Some(p.get_summary(gid))
-                    } else {
-                        None
-                    }
-                }).collect(),
+                DatabaseBackend::Scid(s) => ids
+                    .iter()
+                    .filter_map(|&gid| s.get_game_summary(gid))
+                    .collect(),
+                DatabaseBackend::Pgn(p) => ids
+                    .iter()
+                    .filter_map(|&gid| {
+                        if gid < p.entries.len() {
+                            Some(p.get_summary(gid))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
             };
             ResponseMessage {
                 id,
@@ -511,7 +585,6 @@ fn handle_command(
                 error: None,
             }
         }
-
 
         "search_position" | "position_search" => {
             let db = match current_db {
@@ -553,13 +626,19 @@ fn handle_command(
                 .params
                 .get("match_mode")
                 .or_else(|| req.params.get("mode"))
-                .or_else(|| req.params.get("params").and_then(|p| p.get("match_mode").or_else(|| p.get("mode"))))
+                .or_else(|| {
+                    req.params
+                        .get("params")
+                        .and_then(|p| p.get("match_mode").or_else(|| p.get("mode")))
+                })
                 .and_then(|v| v.as_str());
 
-            let is_exact = mode_param.map(|m| {
-                let m = m.to_lowercase();
-                m == "exact" || m == "auto" || m.is_empty()
-            }).unwrap_or(true);
+            let is_exact = mode_param
+                .map(|m| {
+                    let m = m.to_lowercase();
+                    m == "exact" || m == "auto" || m.is_empty()
+                })
+                .unwrap_or(true);
 
             // ⚡ Instant Sub-Millisecond candidate lookup if PositionIndex is active
             if is_exact && turn_param.is_none() {
@@ -572,11 +651,16 @@ fn handle_command(
                 }
 
                 if let Some(pos_idx) = current_pos_index.as_ref() {
-                    if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(fen) {
+                    if let Some((_pos, zobrist_hash)) =
+                        crate::position_index::parse_target_position(fen)
+                    {
                         if let Some(game_ids) = pos_idx.get_all_position_games(zobrist_hash) {
                             let matches: Vec<crate::position_search::PositionMatch> = game_ids
                                 .into_iter()
-                                .map(|gid| crate::position_search::PositionMatch { game_id: gid as usize, ply: 0 })
+                                .map(|gid| crate::position_search::PositionMatch {
+                                    game_id: gid as usize,
+                                    ply: 0,
+                                })
                                 .collect();
                             let total_games = match db {
                                 DatabaseBackend::Scid(s) => s.game_count(),
@@ -682,18 +766,26 @@ fn handle_command(
         "opening_tree" | "query_tree" => {
             let fen = req.params.get("fen").and_then(|v| v.as_str()).unwrap_or("");
 
-            let explicit_game_ids: Option<Vec<usize>> = req.params.get("game_ids")
+            let explicit_game_ids: Option<Vec<usize>> = req
+                .params
+                .get("game_ids")
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-            let use_search_results = req.params.get("use_search_results")
+            let use_search_results = req
+                .params
+                .get("use_search_results")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let filter_opt: Option<GameFilter> = req.params.get("filter")
+            let filter_opt: Option<GameFilter> = req
+                .params
+                .get("filter")
                 .or_else(|| req.params.get("params"))
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-            let include_all_game_ids = req.params.get("include_all_game_ids")
+            let include_all_game_ids = req
+                .params
+                .get("include_all_game_ids")
                 .or_else(|| req.params.get("all_game_ids"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
@@ -701,7 +793,8 @@ fn handle_command(
             let max_sample_ids: Option<usize> = if include_all_game_ids {
                 None
             } else {
-                req.params.get("max_sample_games")
+                req.params
+                    .get("max_sample_games")
                     .or_else(|| req.params.get("max_samples"))
                     .or_else(|| req.params.get("sample_games"))
                     .and_then(|v| v.as_u64())
@@ -731,8 +824,12 @@ fn handle_command(
                 if let Some(ref f) = filter_opt {
                     if !f.is_empty() {
                         match db {
-                            DatabaseBackend::Scid(s) => { let _ = s.query_games(f, 0, 0); },
-                            DatabaseBackend::Pgn(p) => { let _ = p.query_games(f, 0, 0); },
+                            DatabaseBackend::Scid(s) => {
+                                let _ = s.query_games(f, 0, 0);
+                            }
+                            DatabaseBackend::Pgn(p) => {
+                                let _ = p.query_games(f, 0, 0);
+                            }
                         };
                         target_game_ids = match db {
                             DatabaseBackend::Scid(s) => s.get_cached_query_indices(),
@@ -744,45 +841,53 @@ fn handle_command(
 
             let mut report = None;
 
-            // 1. Try fast lookup from indexed .pos.idx file (both unfiltered and filtered using inverted index!)
-            if current_pos_index.is_none() {
+            // 1. Try fast lookup from .tree.idx file
+            if current_tree_index.is_none() {
                 let db_path = match db {
                     DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
                     DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
                 };
-                *current_pos_index = PositionIndex::load(&db_path).ok();
+                *current_tree_index = TreeIndex::load(&db_path).ok();
             }
 
-            if let Some(pos_idx) = current_pos_index.as_ref() {
-                report = pos_idx.query_tree_with_options(fen, target_game_ids.as_deref(), max_sample_ids);
+            if let Some(tree_idx) = current_tree_index.as_ref() {
+                report = tree_idx.query_tree_with_options(
+                    fen,
+                    target_game_ids.as_deref(),
+                    max_sample_ids,
+                );
             }
 
-            // 2. Dynamic Fallback: If .pos.idx is missing or position is beyond max depth
+            // 2. Dynamic Fallback: If .tree.idx is missing or position is beyond max depth
             if report.is_none() {
                 report = match db {
-                    DatabaseBackend::Scid(s) => {
-                        PositionIndex::calculate_tree_for_scid(
-                            s.entries(),
-                            s.games_path(),
-                            fen,
-                            target_game_ids.as_deref(),
-                            Some(500),
-                        )
-                    }
-                    DatabaseBackend::Pgn(p) => {
-                        PositionIndex::calculate_tree_for_pgn(
-                            &p.entries,
-                            p.mmap_ref(),
-                            fen,
-                            target_game_ids.as_deref(),
-                            Some(500),
-                        )
-                    }
+                    DatabaseBackend::Scid(s) => TreeIndex::calculate_tree_for_scid(
+                        s.entries(),
+                        s.games_path(),
+                        fen,
+                        target_game_ids.as_deref(),
+                        Some(500),
+                    ),
+                    DatabaseBackend::Pgn(p) => TreeIndex::calculate_tree_for_pgn(
+                        &p.entries,
+                        p.mmap_ref(),
+                        fen,
+                        target_game_ids.as_deref(),
+                        Some(500),
+                    ),
                 };
             }
 
-            let include_last_played = req.params.get("include_last_played").and_then(|v| v.as_bool()).unwrap_or(true);
-            let include_sample_games = req.params.get("include_sample_games").and_then(|v| v.as_bool()).unwrap_or(true);
+            let include_last_played = req
+                .params
+                .get("include_last_played")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let include_sample_games = req
+                .params
+                .get("include_sample_games")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
 
             if let Some(mut rep) = report {
                 if include_last_played {
@@ -801,7 +906,8 @@ fn handle_command(
                                 }
                                 if max_date > 0 {
                                     let d_str = chess_scid_rw::dates::date_to_pgn(max_date);
-                                    let clean_d = d_str.trim_end_matches(".??").trim_end_matches(".?");
+                                    let clean_d =
+                                        d_str.trim_end_matches(".??").trim_end_matches(".?");
                                     if !clean_d.starts_with('?') && !clean_d.is_empty() {
                                         m.last_played = Some(clean_d.to_string());
                                     }
@@ -821,7 +927,8 @@ fn handle_command(
                                     }
                                 }
                                 if let Some(d_str) = max_date_str {
-                                    let clean_d = d_str.trim_end_matches(".??").trim_end_matches(".?");
+                                    let clean_d =
+                                        d_str.trim_end_matches(".??").trim_end_matches(".?");
                                     if !clean_d.starts_with('?') && !clean_d.is_empty() {
                                         m.last_played = Some(clean_d.to_string());
                                     }
@@ -833,14 +940,24 @@ fn handle_command(
 
                 if include_sample_games {
                     rep.sample_games = match db {
-                        DatabaseBackend::Scid(s) => rep.sample_game_ids.iter().take(15).filter_map(|&gid| s.get_game_summary(gid as usize)).collect(),
-                        DatabaseBackend::Pgn(p) => rep.sample_game_ids.iter().take(15).filter_map(|&gid| {
-                            if (gid as usize) < p.entries.len() {
-                                Some(p.get_summary(gid as usize))
-                            } else {
-                                None
-                            }
-                        }).collect(),
+                        DatabaseBackend::Scid(s) => rep
+                            .sample_game_ids
+                            .iter()
+                            .take(15)
+                            .filter_map(|&gid| s.get_game_summary(gid as usize))
+                            .collect(),
+                        DatabaseBackend::Pgn(p) => rep
+                            .sample_game_ids
+                            .iter()
+                            .take(15)
+                            .filter_map(|&gid| {
+                                if (gid as usize) < p.entries.len() {
+                                    Some(p.get_summary(gid as usize))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
                     };
                 }
 
@@ -920,6 +1037,44 @@ fn handle_command(
             }
         }
 
+        "tree_index_status" | "get_tree_index_status" | "tree_status" => {
+            let db = match current_db {
+                Some(db) => db,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    }
+                }
+            };
+
+            let (db_path, game_count) = match db {
+                DatabaseBackend::Scid(s) => (s.index_path().to_path_buf(), s.game_count()),
+                DatabaseBackend::Pgn(p) => (p.pgn_path.clone(), p.game_count()),
+            };
+
+            let (status, header) = TreeIndex::check_status(&db_path, game_count);
+            let status_str = match status {
+                crate::tree_index::IndexStatus::Valid => "valid",
+                crate::tree_index::IndexStatus::Outdated => "outdated",
+                crate::tree_index::IndexStatus::Missing => "missing",
+            };
+
+            ResponseMessage {
+                id,
+                status: "ok".to_string(),
+                data: Some(serde_json::json!({
+                    "status": status_str,
+                    "header": header,
+                    "loaded": current_tree_index.is_some(),
+                    "unique_positions": current_tree_index.as_ref().map(|i| i.header.unique_positions as usize).unwrap_or(0),
+                })),
+                error: None,
+            }
+        }
+
         "pos_index_diagnostics" | "get_pos_index_diagnostics" => {
             let db = match current_db {
                 Some(db) => db,
@@ -966,6 +1121,54 @@ fn handle_command(
             }
         }
 
+        "tree_index_diagnostics" | "get_tree_index_diagnostics" | "tree_diagnostics" => {
+            let db = match current_db {
+                Some(db) => db,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    }
+                }
+            };
+
+            let db_path = match db {
+                DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+            };
+
+            if current_tree_index.is_none() {
+                *current_tree_index = TreeIndex::load(&db_path).ok();
+            }
+
+            match current_tree_index.as_ref() {
+                Some(idx) => match idx.scan_diagnostics() {
+                    Ok(stats) => ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::to_value(&stats).unwrap_or_default()),
+                        error: None,
+                    },
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Failed to scan tree index diagnostics: {}", e)),
+                    },
+                },
+                None => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(
+                        "Opening tree index (.tree.idx) not found or not built".to_string(),
+                    ),
+                },
+            }
+        }
+
         "build_pos_index" | "rebuild_pos_index" => {
             let db = match current_db {
                 Some(db) => db,
@@ -979,10 +1182,28 @@ fn handle_command(
                 }
             };
 
-            let max_ply = req.params.get("max_ply").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
-            let max_games = req.params.get("max_games").or_else(|| req.params.get("max_game_ids")).and_then(|v| v.as_u64()).map(|g| g as usize);
-            let min_games = req.params.get("min_games").and_then(|v| v.as_u64()).map(|g| g as usize);
-            let threads = req.params.get("threads").and_then(|v| v.as_u64()).map(|t| t as usize).or(Some(*current_thread_count));
+            let max_ply = req
+                .params
+                .get("max_ply")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(24) as usize;
+            let max_games = req
+                .params
+                .get("max_games")
+                .or_else(|| req.params.get("max_game_ids"))
+                .and_then(|v| v.as_u64())
+                .map(|g| g as usize);
+            let min_games = req
+                .params
+                .get("min_games")
+                .and_then(|v| v.as_u64())
+                .map(|g| g as usize);
+            let threads = req
+                .params
+                .get("threads")
+                .and_then(|v| v.as_u64())
+                .map(|t| t as usize)
+                .or(Some(*current_thread_count));
             let start = Instant::now();
 
             let res = match db {
@@ -990,43 +1211,61 @@ fn handle_command(
                     let games_path = s.games_path().to_path_buf();
                     let entries = s.entries();
                     let db_path = s.index_path().to_path_buf();
-                    PositionIndex::build_for_scid(&db_path, entries, &games_path, max_ply, max_games, min_games, threads, |scanned, total, positions| {
-                        let event_json = serde_json::json!({
-                            "event": "build_pos_index_progress",
-                            "data": {
-                                "scanned": scanned,
-                                "total": total,
-                                "positions": positions,
-                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                    PositionIndex::build_for_scid(
+                        &db_path,
+                        entries,
+                        &games_path,
+                        max_ply,
+                        max_games,
+                        min_games,
+                        threads,
+                        |scanned, total, positions| {
+                            let event_json = serde_json::json!({
+                                "event": "build_pos_index_progress",
+                                "data": {
+                                    "scanned": scanned,
+                                    "total": total,
+                                    "positions": positions,
+                                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                }
+                            });
+                            if let Ok(line) = serde_json::to_string(&event_json) {
+                                let mut out = io::stdout().lock();
+                                let _ = writeln!(out, "{}", line);
+                                let _ = out.flush();
                             }
-                        });
-                        if let Ok(line) = serde_json::to_string(&event_json) {
-                            let mut out = io::stdout().lock();
-                            let _ = writeln!(out, "{}", line);
-                            let _ = out.flush();
-                        }
-                    })
+                        },
+                    )
                 }
                 DatabaseBackend::Pgn(p) => {
                     let db_path = p.pgn_path.clone();
                     let entries = &p.entries;
                     let mmap = p.mmap_ref();
-                    PositionIndex::build_for_pgn(&db_path, entries, mmap, max_ply, max_games, min_games, threads, |scanned, total, positions| {
-                        let event_json = serde_json::json!({
-                            "event": "build_pos_index_progress",
-                            "data": {
-                                "scanned": scanned,
-                                "total": total,
-                                "positions": positions,
-                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                    PositionIndex::build_for_pgn(
+                        &db_path,
+                        entries,
+                        mmap,
+                        max_ply,
+                        max_games,
+                        min_games,
+                        threads,
+                        |scanned, total, positions| {
+                            let event_json = serde_json::json!({
+                                "event": "build_pos_index_progress",
+                                "data": {
+                                    "scanned": scanned,
+                                    "total": total,
+                                    "positions": positions,
+                                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                }
+                            });
+                            if let Ok(line) = serde_json::to_string(&event_json) {
+                                let mut out = io::stdout().lock();
+                                let _ = writeln!(out, "{}", line);
+                                let _ = out.flush();
                             }
-                        });
-                        if let Ok(line) = serde_json::to_string(&event_json) {
-                            let mut out = io::stdout().lock();
-                            let _ = writeln!(out, "{}", line);
-                            let _ = out.flush();
-                        }
-                    })
+                        },
+                    )
                 }
             };
 
@@ -1055,6 +1294,129 @@ fn handle_command(
                     status: "error".to_string(),
                     data: None,
                     error: Some(format!("Failed to build position index: {}", e)),
+                },
+            }
+        }
+
+        "build_tree" | "build_tree_index" | "rebuild_tree" => {
+            let db = match current_db {
+                Some(db) => db,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("No database currently opened".to_string()),
+                    }
+                }
+            };
+
+            let max_ply = req
+                .params
+                .get("max_ply")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(24) as usize;
+            let min_games = req
+                .params
+                .get("min_games")
+                .and_then(|v| v.as_u64())
+                .map(|g| g as usize);
+            let threads = req
+                .params
+                .get("threads")
+                .and_then(|v| v.as_u64())
+                .map(|t| t as usize)
+                .or(Some(*current_thread_count));
+            let start = Instant::now();
+
+            let res = match db {
+                DatabaseBackend::Scid(s) => {
+                    let games_path = s.games_path().to_path_buf();
+                    let entries = s.entries();
+                    let db_path = s.index_path().to_path_buf();
+                    TreeIndex::build_for_scid(
+                        &db_path,
+                        entries,
+                        &games_path,
+                        max_ply,
+                        None,
+                        min_games,
+                        threads,
+                        |scanned, total, positions| {
+                            let event_json = serde_json::json!({
+                                "event": "build_tree_progress",
+                                "data": {
+                                    "scanned": scanned,
+                                    "total": total,
+                                    "positions": positions,
+                                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                }
+                            });
+                            if let Ok(line) = serde_json::to_string(&event_json) {
+                                let mut out = io::stdout().lock();
+                                let _ = writeln!(out, "{}", line);
+                                let _ = out.flush();
+                            }
+                        },
+                    )
+                }
+                DatabaseBackend::Pgn(p) => {
+                    let db_path = p.pgn_path.clone();
+                    let entries = &p.entries;
+                    let mmap = p.mmap_ref();
+                    TreeIndex::build_for_pgn(
+                        &db_path,
+                        entries,
+                        mmap,
+                        max_ply,
+                        None,
+                        min_games,
+                        threads,
+                        |scanned, total, positions| {
+                            let event_json = serde_json::json!({
+                                "event": "build_tree_progress",
+                                "data": {
+                                    "scanned": scanned,
+                                    "total": total,
+                                    "positions": positions,
+                                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                }
+                            });
+                            if let Ok(line) = serde_json::to_string(&event_json) {
+                                let mut out = io::stdout().lock();
+                                let _ = writeln!(out, "{}", line);
+                                let _ = out.flush();
+                            }
+                        },
+                    )
+                }
+            };
+
+            match res {
+                Ok(idx) => {
+                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let unique_positions = idx.header.unique_positions as usize;
+                    let diagnostics = idx.scan_diagnostics().ok();
+                    let file_size = std::fs::metadata(&idx.path).map(|m| m.len()).unwrap_or(0);
+                    *current_tree_index = Some(idx);
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "status": "valid",
+                            "unique_positions": unique_positions,
+                            "elapsed_ms": elapsed_ms,
+                            "file_size": file_size,
+                            "diagnostics": diagnostics,
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("Failed to build tree index: {}", e)),
                 },
             }
         }
@@ -1321,7 +1683,10 @@ fn handle_command(
                         id,
                         status: "error".to_string(),
                         data: None,
-                        error: Some("Deleting games is only supported on SCID (.si5) databases.".to_string()),
+                        error: Some(
+                            "Deleting games is only supported on SCID (.si5) databases."
+                                .to_string(),
+                        ),
                     }
                 }
                 None => {
@@ -1375,7 +1740,10 @@ fn handle_command(
                         id,
                         status: "error".to_string(),
                         data: None,
-                        error: Some("Undeleting games is only supported on SCID (.si5) databases.".to_string()),
+                        error: Some(
+                            "Undeleting games is only supported on SCID (.si5) databases."
+                                .to_string(),
+                        ),
                     }
                 }
                 None => {
@@ -1429,7 +1797,9 @@ fn handle_command(
                         id,
                         status: "error".to_string(),
                         data: None,
-                        error: Some("Compacting is only supported on SCID (.si5) databases.".to_string()),
+                        error: Some(
+                            "Compacting is only supported on SCID (.si5) databases.".to_string(),
+                        ),
                     }
                 }
                 None => {
@@ -1600,22 +1970,22 @@ fn handle_command(
 
             let out_path = Path::new(out_path_str);
             let export_result = match db {
-                DatabaseBackend::Scid(s) => crate::pgn_utils::export_pgn_ultra_fast(s, out_path, |prog| {
-                    let event_json = serde_json::json!({
-                        "event": "export_progress",
-                        "data": prog
-                    });
-                    if let Ok(line) = serde_json::to_string(&event_json) {
-                        let mut out = io::stdout().lock();
-                        let _ = writeln!(out, "{}", line);
-                        let _ = out.flush();
-                    }
-                }),
-                DatabaseBackend::Pgn(p) => {
-                    std::fs::copy(&p.pgn_path, out_path)
-                        .map(|_| p.game_count())
-                        .map_err(|e| anyhow::anyhow!("Failed to export PGN: {}", e))
+                DatabaseBackend::Scid(s) => {
+                    crate::pgn_utils::export_pgn_ultra_fast(s, out_path, |prog| {
+                        let event_json = serde_json::json!({
+                            "event": "export_progress",
+                            "data": prog
+                        });
+                        if let Ok(line) = serde_json::to_string(&event_json) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", line);
+                            let _ = out.flush();
+                        }
+                    })
                 }
+                DatabaseBackend::Pgn(p) => std::fs::copy(&p.pgn_path, out_path)
+                    .map(|_| p.game_count())
+                    .map_err(|e| anyhow::anyhow!("Failed to export PGN: {}", e)),
             };
 
             match export_result {
@@ -1655,9 +2025,21 @@ fn handle_command(
                 }
             };
 
-            let sort_by = req.params.get("sort_by").and_then(|v| v.as_str()).unwrap_or("date");
-            let sort_asc = req.params.get("sort_asc").and_then(|v| v.as_bool()).unwrap_or(true);
-            let delete_removed = req.params.get("delete_removed").and_then(|v| v.as_bool()).unwrap_or(true);
+            let sort_by = req
+                .params
+                .get("sort_by")
+                .and_then(|v| v.as_str())
+                .unwrap_or("date");
+            let sort_asc = req
+                .params
+                .get("sort_asc")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let delete_removed = req
+                .params
+                .get("delete_removed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             let output_path = req.params.get("output_path").and_then(|v| v.as_str());
 
             let res = if let Some(out_p) = output_path {
@@ -1672,7 +2054,9 @@ fn handle_command(
                     ResponseMessage {
                         id,
                         status: "ok".to_string(),
-                        data: Some(serde_json::json!({ "sorted_games": count, "sort_by": sort_by, "sort_asc": sort_asc })),
+                        data: Some(
+                            serde_json::json!({ "sorted_games": count, "sort_by": sort_by, "sort_asc": sort_asc }),
+                        ),
                         error: None,
                     }
                 }
@@ -1681,15 +2065,23 @@ fn handle_command(
                     status: "error".to_string(),
                     data: None,
                     error: Some(format!("Database sort failed: {}", e)),
-                }
+                },
             }
         }
 
         "sort_pgn" => {
             let input_path = req.params.get("input_path").and_then(|v| v.as_str());
             let output_path = req.params.get("output_path").and_then(|v| v.as_str());
-            let sort_by = req.params.get("sort_by").and_then(|v| v.as_str()).unwrap_or("date");
-            let sort_asc = req.params.get("sort_asc").and_then(|v| v.as_bool()).unwrap_or(true);
+            let sort_by = req
+                .params
+                .get("sort_by")
+                .and_then(|v| v.as_str())
+                .unwrap_or("date");
+            let sort_asc = req
+                .params
+                .get("sort_asc")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
 
             let in_p_buf = match input_path {
                 Some(p) => PathBuf::from(p),
@@ -1701,7 +2093,10 @@ fn handle_command(
                             id,
                             status: "error".to_string(),
                             data: None,
-                            error: Some("Missing 'input_path' parameter and no active PGN database".to_string()),
+                            error: Some(
+                                "Missing 'input_path' parameter and no active PGN database"
+                                    .to_string(),
+                            ),
                         };
                     }
                 }
@@ -1723,7 +2118,9 @@ fn handle_command(
                 Ok(count) => ResponseMessage {
                     id,
                     status: "ok".to_string(),
-                    data: Some(serde_json::json!({ "sorted_games": count, "sort_by": sort_by, "sort_asc": sort_asc })),
+                    data: Some(
+                        serde_json::json!({ "sorted_games": count, "sort_by": sort_by, "sort_asc": sort_asc }),
+                    ),
                     error: None,
                 },
                 Err(e) => ResponseMessage {
@@ -1731,7 +2128,7 @@ fn handle_command(
                     status: "error".to_string(),
                     data: None,
                     error: Some(format!("PGN sort failed: {}", e)),
-                }
+                },
             }
         }
 
@@ -1753,7 +2150,11 @@ fn handle_command(
                 DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
             };
 
-            let heavy = req.params.get("heavy").and_then(|v| v.as_bool()).unwrap_or(false);
+            let heavy = req
+                .params
+                .get("heavy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             match crate::benchmark::run_benchmark(&path, heavy) {
                 Ok(report) => ResponseMessage {

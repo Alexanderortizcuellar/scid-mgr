@@ -1,14 +1,14 @@
+use anyhow::{anyhow, Context, Result};
+use memmap2::Mmap;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use shakmaty::Position;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, UNIX_EPOCH};
-use anyhow::{anyhow, Context, Result};
-use memmap2::Mmap;
-use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use shakmaty::Position;
 
 use crate::db::{GameFilter, GameSummary};
 
@@ -19,18 +19,18 @@ const PGN_INDEX_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct CompactPgnRecord {
-    pub offset: u64,     // 8 bytes: byte offset in .pgn
-    pub length: u32,     // 4 bytes: byte length of game text
-    pub white_id: u32,   // 4 bytes: player name dictionary ID
-    pub black_id: u32,   // 4 bytes: player name dictionary ID
-    pub event_id: u32,   // 4 bytes: event name dictionary ID
-    pub site_id: u32,    // 4 bytes: site name dictionary ID
-    pub date: u32,       // 4 bytes: packed (YYYY << 9) | (MM << 5) | DD
-    pub eco: u16,        // 2 bytes: packed ECO (0..499, or 0xFFFF)
-    pub white_elo: u16,  // 2 bytes: Elo (0 = none)
-    pub black_elo: u16,  // 2 bytes: Elo (0 = none)
-    pub result: u8,      // 1 byte: 0=*, 1=1-0, 2=0-1, 3=1/2-1/2
-    pub _padding: u8,    // 1 byte: alignment padding (total 40 bytes)
+    pub offset: u64,    // 8 bytes: byte offset in .pgn
+    pub length: u32,    // 4 bytes: byte length of game text
+    pub white_id: u32,  // 4 bytes: player name dictionary ID
+    pub black_id: u32,  // 4 bytes: player name dictionary ID
+    pub event_id: u32,  // 4 bytes: event name dictionary ID
+    pub site_id: u32,   // 4 bytes: site name dictionary ID
+    pub date: u32,      // 4 bytes: packed (YYYY << 9) | (MM << 5) | DD
+    pub eco: u16,       // 2 bytes: packed ECO (0..499, or 0xFFFF)
+    pub white_elo: u16, // 2 bytes: Elo (0 = none)
+    pub black_elo: u16, // 2 bytes: Elo (0 = none)
+    pub result: u8,     // 1 byte: 0=*, 1=1-0, 2=0-1, 3=1/2-1/2
+    pub _padding: u8,   // 1 byte: alignment padding (total 40 bytes)
 }
 
 pub type PgnIndexEntry = CompactPgnRecord;
@@ -71,17 +71,26 @@ impl PgnNameTables {
 
     #[inline]
     pub fn player(&self, id: u32) -> &str {
-        self.players.get(id as usize).map(|s| s.as_str()).unwrap_or("?")
+        self.players
+            .get(id as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("?")
     }
 
     #[inline]
     pub fn event(&self, id: u32) -> &str {
-        self.events.get(id as usize).map(|s| s.as_str()).unwrap_or("?")
+        self.events
+            .get(id as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("?")
     }
 
     #[inline]
     pub fn site(&self, id: u32) -> &str {
-        self.sites.get(id as usize).map(|s| s.as_str()).unwrap_or("?")
+        self.sites
+            .get(id as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("?")
     }
 }
 
@@ -175,10 +184,7 @@ impl PgnDatabaseWrapper {
         let mut p = pgn_path.to_path_buf();
         let name = format!(
             "{}.idx",
-            pgn_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
+            pgn_path.file_name().unwrap_or_default().to_string_lossy()
         );
         p.set_file_name(name);
         p
@@ -322,10 +328,8 @@ impl PgnDatabaseWrapper {
         chunk_starts.push(mmap.len());
         chunk_starts.dedup();
 
-        let chunk_ranges: Vec<(usize, usize)> = chunk_starts
-            .windows(2)
-            .map(|w| (w[0], w[1]))
-            .collect();
+        let chunk_ranges: Vec<(usize, usize)> =
+            chunk_starts.windows(2).map(|w| (w[0], w[1])).collect();
 
         let chunk_results: Result<Vec<Vec<RawGameRecord>>> = chunk_ranges
             .into_par_iter()
@@ -390,7 +394,11 @@ impl PgnDatabaseWrapper {
         Ok((names, compact_entries))
     }
 
-    fn scan_chunk<'a>(mmap: &'a [u8], chunk_start: usize, chunk_end: usize) -> Result<Vec<RawGameRecord<'a>>> {
+    fn scan_chunk<'a>(
+        mmap: &'a [u8],
+        chunk_start: usize,
+        chunk_end: usize,
+    ) -> Result<Vec<RawGameRecord<'a>>> {
         let mut entries = Vec::new();
         let mut cursor = chunk_start;
 
@@ -457,7 +465,10 @@ impl PgnDatabaseWrapper {
                 if (cursor == 0 || mmap[cursor - 1] == b'\n') && mmap[cursor] == b'[' {
                     // Check if this is a tag line (start of next game)
                     let mut tag_check = cursor;
-                    while tag_check < mmap.len() && mmap[tag_check] != b'\n' && mmap[tag_check] != b']' {
+                    while tag_check < mmap.len()
+                        && mmap[tag_check] != b'\n'
+                        && mmap[tag_check] != b']'
+                    {
                         tag_check += 1;
                     }
                     if tag_check < mmap.len() && mmap[tag_check] == b']' {
@@ -508,10 +519,13 @@ impl PgnDatabaseWrapper {
 
     /// Returns the exact raw PGN text directly from memory-mapped disk in 0.01 ms
     pub fn get_game_pgn(&self, index: usize) -> Result<String> {
-        let entry = self
-            .entries
-            .get(index)
-            .ok_or_else(|| anyhow!("Game index {} out of range (total: {})", index, self.entries.len()))?;
+        let entry = self.entries.get(index).ok_or_else(|| {
+            anyhow!(
+                "Game index {} out of range (total: {})",
+                index,
+                self.entries.len()
+            )
+        })?;
 
         let start = entry.offset as usize;
         let end = start + entry.length as usize;
@@ -524,7 +538,12 @@ impl PgnDatabaseWrapper {
         Ok(pgn_text.trim().to_string())
     }
 
-    pub fn sort_indices(&self, matched_indices: &mut [usize], sort_by: Option<&str>, sort_asc: Option<bool>) {
+    pub fn sort_indices(
+        &self,
+        matched_indices: &mut [usize],
+        sort_by: Option<&str>,
+        sort_asc: Option<bool>,
+    ) {
         if let Some(sort_field) = sort_by {
             let asc = sort_asc.unwrap_or(true);
             let entries = &self.entries;
@@ -555,12 +574,21 @@ impl PgnDatabaseWrapper {
     }
 
     /// Sorts all games in the PGN file according to specified criteria and writes them to a new PGN file.
-    pub fn sort_and_export<P: AsRef<Path>>(&self, output_path: P, sort_by: Option<&str>, sort_asc: bool) -> Result<usize> {
+    pub fn sort_and_export<P: AsRef<Path>>(
+        &self,
+        output_path: P,
+        sort_by: Option<&str>,
+        sort_asc: bool,
+    ) -> Result<usize> {
         let mut indices: Vec<usize> = (0..self.entries.len()).collect();
         self.sort_indices(&mut indices, sort_by, Some(sort_asc));
 
-        let file = File::create(output_path.as_ref())
-            .with_context(|| format!("Failed to create output PGN file: {}", output_path.as_ref().display()))?;
+        let file = File::create(output_path.as_ref()).with_context(|| {
+            format!(
+                "Failed to create output PGN file: {}",
+                output_path.as_ref().display()
+            )
+        })?;
         let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
 
         for &idx in &indices {
@@ -632,7 +660,11 @@ impl PgnDatabaseWrapper {
                     return (summaries, total_matches);
                 } else if cached_filter.same_search_criteria(filter) {
                     let mut sorted_indices = cached_indices.clone();
-                    self.sort_indices(&mut sorted_indices, filter.sort_by.as_deref(), filter.sort_asc);
+                    self.sort_indices(
+                        &mut sorted_indices,
+                        filter.sort_by.as_deref(),
+                        filter.sort_asc,
+                    );
                     let total_matches = sorted_indices.len();
                     let start = page * page_size;
                     let summaries = if start >= total_matches {
@@ -666,7 +698,13 @@ impl PgnDatabaseWrapper {
             if pat_lower.is_empty() {
                 None
             } else {
-                Some(self.names.players.iter().map(|p| p.to_lowercase().contains(&pat_lower)).collect())
+                Some(
+                    self.names
+                        .players
+                        .iter()
+                        .map(|p| p.to_lowercase().contains(&pat_lower))
+                        .collect(),
+                )
             }
         });
 
@@ -675,7 +713,13 @@ impl PgnDatabaseWrapper {
             if pat_lower.is_empty() {
                 None
             } else {
-                Some(self.names.players.iter().map(|p| p.to_lowercase().contains(&pat_lower)).collect())
+                Some(
+                    self.names
+                        .players
+                        .iter()
+                        .map(|p| p.to_lowercase().contains(&pat_lower))
+                        .collect(),
+                )
             }
         });
 
@@ -684,7 +728,13 @@ impl PgnDatabaseWrapper {
             if pat_lower.is_empty() {
                 None
             } else {
-                Some(self.names.players.iter().map(|p| p.to_lowercase().contains(&pat_lower)).collect())
+                Some(
+                    self.names
+                        .players
+                        .iter()
+                        .map(|p| p.to_lowercase().contains(&pat_lower))
+                        .collect(),
+                )
             }
         });
 
@@ -693,7 +743,13 @@ impl PgnDatabaseWrapper {
             if pat_lower.is_empty() {
                 None
             } else {
-                Some(self.names.events.iter().map(|e| e.to_lowercase().contains(&pat_lower)).collect())
+                Some(
+                    self.names
+                        .events
+                        .iter()
+                        .map(|e| e.to_lowercase().contains(&pat_lower))
+                        .collect(),
+                )
             }
         });
 
@@ -702,7 +758,13 @@ impl PgnDatabaseWrapper {
             if pat_lower.is_empty() {
                 None
             } else {
-                Some(self.names.sites.iter().map(|s| s.to_lowercase().contains(&pat_lower)).collect())
+                Some(
+                    self.names
+                        .sites
+                        .iter()
+                        .map(|s| s.to_lowercase().contains(&pat_lower))
+                        .collect(),
+                )
             }
         });
 
@@ -730,8 +792,11 @@ impl PgnDatabaseWrapper {
         let mat_matches = filter.material.as_ref().and_then(|m| {
             self.search_material(m, |scanned, total, matches| {
                 progress(scanned, total, matches);
-            }).ok().map(|vec| {
-                vec.into_iter().collect::<std::collections::HashSet<usize>>()
+            })
+            .ok()
+            .map(|vec| {
+                vec.into_iter()
+                    .collect::<std::collections::HashSet<usize>>()
             })
         });
 
@@ -766,29 +831,51 @@ impl PgnDatabaseWrapper {
                         }
                     }
                     if let Some(ref p_flags) = matching_players {
-                        let w_ok = p_flags.get(entry.white_id as usize).copied().unwrap_or(false);
-                        let b_ok = p_flags.get(entry.black_id as usize).copied().unwrap_or(false);
+                        let w_ok = p_flags
+                            .get(entry.white_id as usize)
+                            .copied()
+                            .unwrap_or(false);
+                        let b_ok = p_flags
+                            .get(entry.black_id as usize)
+                            .copied()
+                            .unwrap_or(false);
                         if !w_ok && !b_ok {
                             return false;
                         }
                     }
                     if let Some(ref w_flags) = matching_white {
-                        if !w_flags.get(entry.white_id as usize).copied().unwrap_or(false) {
+                        if !w_flags
+                            .get(entry.white_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
                     if let Some(ref b_flags) = matching_black {
-                        if !b_flags.get(entry.black_id as usize).copied().unwrap_or(false) {
+                        if !b_flags
+                            .get(entry.black_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
                     if let Some(ref ev_flags) = matching_events {
-                        if !ev_flags.get(entry.event_id as usize).copied().unwrap_or(false) {
+                        if !ev_flags
+                            .get(entry.event_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
                     if let Some(ref st_flags) = matching_sites {
-                        if !st_flags.get(entry.site_id as usize).copied().unwrap_or(false) {
+                        if !st_flags
+                            .get(entry.site_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
@@ -825,29 +912,51 @@ impl PgnDatabaseWrapper {
                         }
                     }
                     if let Some(ref p_flags) = matching_players {
-                        let w_ok = p_flags.get(entry.white_id as usize).copied().unwrap_or(false);
-                        let b_ok = p_flags.get(entry.black_id as usize).copied().unwrap_or(false);
+                        let w_ok = p_flags
+                            .get(entry.white_id as usize)
+                            .copied()
+                            .unwrap_or(false);
+                        let b_ok = p_flags
+                            .get(entry.black_id as usize)
+                            .copied()
+                            .unwrap_or(false);
                         if !w_ok && !b_ok {
                             return false;
                         }
                     }
                     if let Some(ref w_flags) = matching_white {
-                        if !w_flags.get(entry.white_id as usize).copied().unwrap_or(false) {
+                        if !w_flags
+                            .get(entry.white_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
                     if let Some(ref b_flags) = matching_black {
-                        if !b_flags.get(entry.black_id as usize).copied().unwrap_or(false) {
+                        if !b_flags
+                            .get(entry.black_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
                     if let Some(ref ev_flags) = matching_events {
-                        if !ev_flags.get(entry.event_id as usize).copied().unwrap_or(false) {
+                        if !ev_flags
+                            .get(entry.event_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
                     if let Some(ref st_flags) = matching_sites {
-                        if !st_flags.get(entry.site_id as usize).copied().unwrap_or(false) {
+                        if !st_flags
+                            .get(entry.site_id as usize)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             return false;
                         }
                     }
@@ -859,7 +968,11 @@ impl PgnDatabaseWrapper {
 
         let total_count = matching_indices.len();
 
-        self.sort_indices(&mut matching_indices, filter.sort_by.as_deref(), filter.sort_asc);
+        self.sort_indices(
+            &mut matching_indices,
+            filter.sort_by.as_deref(),
+            filter.sort_asc,
+        );
 
         if let Ok(mut guard) = self.query_cache.lock() {
             *guard = Some((filter.clone(), matching_indices.clone()));
@@ -911,13 +1024,17 @@ impl PgnDatabaseWrapper {
     {
         let start = Instant::now();
         let target_fen = fen_str.trim();
-        let is_exact_mode = mode_param.map(|m| {
-            let m = m.to_lowercase();
-            m == "exact" || m == "auto" || m.is_empty()
-        }).unwrap_or(true);
+        let is_exact_mode = mode_param
+            .map(|m| {
+                let m = m.to_lowercase();
+                m == "exact" || m == "auto" || m.is_empty()
+            })
+            .unwrap_or(true);
 
         if is_exact_mode && turn_param.is_none() {
-            if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(target_fen) {
+            if let Some((_pos, zobrist_hash)) =
+                crate::position_index::parse_target_position(target_fen)
+            {
                 if let Ok(pos_idx) = crate::position_index::PositionIndex::load(&self.pgn_path) {
                     if let Some(gids) = pos_idx.get_all_position_games(zobrist_hash) {
                         let matches: Vec<crate::position_search::PositionMatch> = gids
@@ -943,7 +1060,8 @@ impl PgnDatabaseWrapper {
 
         let max_ply_val = max_ply.unwrap_or(500);
 
-        let matcher = crate::position_search::parse_position_matcher(target_fen, turn_param, mode_param)?;
+        let matcher =
+            crate::position_search::parse_position_matcher(target_fen, turn_param, mode_param)?;
 
         let total = self.entries.len();
         let chunk_size = 1000;
@@ -958,7 +1076,8 @@ impl PgnDatabaseWrapper {
                 .enumerate()
                 .filter_map(|(sub_idx, entry)| {
                     let game_id = chunk_idx + sub_idx;
-                    let slice = &self.mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
+                    let slice = &self.mmap
+                        [entry.offset as usize..(entry.offset as usize + entry.length as usize)];
                     let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
                     let mut finder = PositionFinder::new(matcher.clone(), max_ply_val);
                     if let Ok(Some(Some(ply))) = reader.read_game(&mut finder) {
@@ -1005,7 +1124,8 @@ impl PgnDatabaseWrapper {
                 .enumerate()
                 .filter_map(|(sub_idx, entry)| {
                     let game_id = chunk_idx + sub_idx;
-                    let slice = &self.mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
+                    let slice = &self.mmap
+                        [entry.offset as usize..(entry.offset as usize + entry.length as usize)];
                     let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
                     let mut finder = MaterialFinder::new(filter.clone());
                     if let Ok(Some(true)) = reader.read_game(&mut finder) {
@@ -1040,7 +1160,10 @@ struct RawGameRecord<'a> {
 
 pub fn pack_date(s: &str) -> u32 {
     let mut parts = s.split('.');
-    let year = parts.next().and_then(|y| y.parse::<u16>().ok()).unwrap_or(0);
+    let year = parts
+        .next()
+        .and_then(|y| y.parse::<u16>().ok())
+        .unwrap_or(0);
     let month = parts.next().and_then(|m| m.parse::<u8>().ok()).unwrap_or(0);
     let day = parts.next().and_then(|d| d.parse::<u8>().ok()).unwrap_or(0);
     ((year as u32) << 9) | (((month & 0x0F) as u32) << 5) | ((day & 0x1F) as u32)
@@ -1050,9 +1173,21 @@ pub fn unpack_date(d: u32) -> String {
     let year = (d >> 9) as u16;
     let month = ((d >> 5) & 0x0F) as u8;
     let day = (d & 0x1F) as u8;
-    let y_str = if year == 0 { "????".to_string() } else { format!("{:04}", year) };
-    let m_str = if month == 0 { "??".to_string() } else { format!("{:02}", month) };
-    let d_str = if day == 0 { "??".to_string() } else { format!("{:02}", day) };
+    let y_str = if year == 0 {
+        "????".to_string()
+    } else {
+        format!("{:04}", year)
+    };
+    let m_str = if month == 0 {
+        "??".to_string()
+    } else {
+        format!("{:02}", month)
+    };
+    let d_str = if day == 0 {
+        "??".to_string()
+    } else {
+        format!("{:02}", day)
+    };
     format!("{}.{}.{}", y_str, m_str, d_str)
 }
 
@@ -1063,7 +1198,10 @@ pub fn pack_eco(s: &str) -> u16 {
         let l = bytes[0].to_ascii_uppercase();
         if (b'A'..=b'E').contains(&l) {
             let letter_val = (l - b'A') as u16;
-            if let Ok(digits) = std::str::from_utf8(&bytes[1..3]).unwrap_or("").parse::<u16>() {
+            if let Ok(digits) = std::str::from_utf8(&bytes[1..3])
+                .unwrap_or("")
+                .parse::<u16>()
+            {
                 if digits < 100 {
                     return letter_val * 100 + digits;
                 }
@@ -1110,10 +1248,7 @@ struct PositionFinder {
 }
 
 impl PositionFinder {
-    fn new(
-        matcher: crate::position_search::PositionTargetMatcher,
-        max_ply: usize,
-    ) -> Self {
+    fn new(matcher: crate::position_search::PositionTargetMatcher, max_ply: usize) -> Self {
         let mut s = Self {
             matcher,
             found_ply: None,
@@ -1213,10 +1348,9 @@ impl pgn_reader::Visitor for MaterialFinder {
         if let Ok(m) = san_plus.san.to_move(&self.pos) {
             self.pos.play_unchecked(&m);
             self.ply += 1;
-            if self.match_any_ply && !self.matched
-                && self.check_material() {
-                    self.matched = true;
-                }
+            if self.match_any_ply && !self.matched && self.check_material() {
+                self.matched = true;
+            }
         }
     }
 

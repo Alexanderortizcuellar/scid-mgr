@@ -9,11 +9,11 @@ from PyQt5.QtGui import QColor, QFont
 from ..backend_client import BackendClient
 
 class PosIdxDiagnosticsDialog(QDialog):
-    """Dialog displaying the comprehensive Benchmark & Comparison Table (Delta-Varint vs Roaring Bitmap vs Adaptive)."""
+    """Dialog displaying the Position Index (.pos.idx) Inlined Singletons and Postings Diagnostics Report."""
     def __init__(self, client: BackendClient, initial_data: dict = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("📊 Position Index Encoding & Benchmark Comparison Report")
-        self.resize(880, 680)
+        self.setWindowTitle("📊 Position Search Booster (.pos.idx) Diagnostics Report")
+        self.resize(840, 620)
         self.client = client
 
         layout = QVBoxLayout(self)
@@ -21,64 +21,60 @@ class PosIdxDiagnosticsDialog(QDialog):
 
         # Header Title
         title = QLabel(
-            "<h3 style='margin:0; color:#1565c0;'>⚡ SCID Position Index: Adaptive Encoding & Space Savings Benchmark</h3>"
-            "<span style='color:#555; font-size:11px;'>Compares pure Delta-Varint vs pure Roaring Bitmap vs the active Adaptive SCIDPOS5 hybrid engine.</span>"
+            "<h3 style='margin:0; color:#1565c0;'>⚡ Position Search Booster: Inlined Singletons & Inverted Index Report</h3>"
+            "<span style='color:#555; font-size:11px;'>Analyzes 64-bit Zobrist keys, zero-byte inlined singletons, and Delta-Varint compressed postings.</span>"
         )
         title.setWordWrap(True)
         layout.addWidget(title)
 
-        # 1. Comparison Benchmark Table (4 Columns)
-        comp_group = QGroupBox("Encoding Benchmark Comparison Table")
+        # 1. Summary Overview Table
+        comp_group = QGroupBox("Index Architecture & Storage Overview")
         comp_layout = QVBoxLayout(comp_group)
 
-        self.table_comp = QTableWidget(6, 4)
-        self.table_comp.setHorizontalHeaderLabels([
-            "Evaluation Metric", "Pure Delta-Varint", "Pure Roaring Bitmap", "Adaptive SCIDPOS5 (Active)"
-        ])
-        self.table_comp.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_comp = QTableWidget(5, 2)
+        self.table_comp.setHorizontalHeaderLabels(["Metric", "Value / Performance"])
+        self.table_comp.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table_comp.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table_comp.verticalHeader().setVisible(False)
         self.table_comp.setEditTriggers(QTableWidget.NoEditTriggers)
 
         metrics = [
-            ("GameSets Selected", "100% (9,993,967)", "0% (0)", "99.99% Delta / 0.01% Roar"),
-            ("Move ID Payload Size", "— MB", "— MB", "— MB"),
-            ("Net Space Saved", "Baseline", "—", "—% smaller"),
-            ("Density Adaptivity", "Optimal for sparse IDs", "Optimal for dense root runs", "Dynamic per-move selection"),
-            ("Query Latency (RAM)", "0.05 ms", "0.04 ms", "< 0.05 ms (Sub-millisecond)"),
-            ("Filtered Tree Intersection", "Fast (HashSet in RAM)", "Native SIMD Bitmap", "Optimal SIMD / HashSet hybrid"),
+            ("Total Unique Positions", "—"),
+            ("Inlined Singletons (0 Bytes Payload)", "—"),
+            ("Multi-Game Delta-Varint Postings", "—"),
+            ("Compressed Data Payload Size", "—"),
+            ("Search Candidate Filter Speed", "< 0.01 ms (Direct Mmap Binary Search)"),
         ]
-        for r, (m, d, ro, ad) in enumerate(metrics):
+        for r, (m, v) in enumerate(metrics):
             self.table_comp.setItem(r, 0, QTableWidgetItem(m))
-            self.table_comp.setItem(r, 1, QTableWidgetItem(d))
-            self.table_comp.setItem(r, 2, QTableWidgetItem(ro))
-            self.table_comp.setItem(r, 3, QTableWidgetItem(ad))
-            # Highlight adaptive column
-            item_ad = self.table_comp.item(r, 3)
-            item_ad.setBackground(QColor("#e8f5e9"))
-            font = item_ad.font()
-            font.setBold(True)
-            item_ad.setFont(font)
+            self.table_comp.setItem(r, 1, QTableWidgetItem(v))
+            if r == 1:
+                item_v = self.table_comp.item(r, 1)
+                item_v.setBackground(QColor("#e8f5e9"))
+                font = item_v.font()
+                font.setBold(True)
+                item_v.setFont(font)
 
         comp_layout.addWidget(self.table_comp)
         layout.addWidget(comp_group)
 
         # 2. Size Distribution Table
-        dist_group = QGroupBox("Move GameSet Size Distribution Across Database")
+        dist_group = QGroupBox("Position Frequency Distribution Across Database")
         dist_layout = QVBoxLayout(dist_group)
 
         self.table_dist = QTableWidget(6, 3)
-        self.table_dist.setHorizontalHeaderLabels(["GameSet ID Range", "Move Sets Count", "Optimal Backend Chosen"])
+        self.table_dist.setHorizontalHeaderLabels(["Game Occurrence Range", "Positions Count", "Storage Strategy"])
         self.table_dist.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_dist.verticalHeader().setVisible(False)
         self.table_dist.setEditTriggers(QTableWidget.NoEditTriggers)
 
         ranges = [
-            ("1 – 10 games", "—", "Delta-Varint (1 byte/ID)"),
-            ("11 – 100 games", "—", "Delta-Varint (1.1 bytes/ID)"),
-            ("101 – 1,000 games", "—", "Delta-Varint (1.2 bytes/ID)"),
-            ("1,001 – 10,000 games", "—", "Delta-Varint (~1.3 bytes/ID)"),
-            ("10,001 – 100,000 games", "—", "Adaptive Hybrid"),
-            ("100,001+ games (Root Moves)", "—", "Roaring Bitmap (SIMD Run-Length)"),
+            ("1 game (Singletons)", "—", "Inlined into Directory Table (0 bytes payload)"),
+            ("2 – 10 games", "—", "Delta-Varint Compressed"),
+            ("11 – 100 games", "—", "Delta-Varint Compressed"),
+            ("101 – 1,000 games", "—", "Delta-Varint Compressed"),
+            ("1,001 – 10,000 games", "—", "Delta-Varint Compressed"),
+            ("10,001+ games (Main Lines)", "—", "Delta-Varint Compressed"),
         ]
         for r, (label, count, reason) in enumerate(ranges):
             self.table_dist.setItem(r, 0, QTableWidgetItem(label))
@@ -125,59 +121,34 @@ class PosIdxDiagnosticsDialog(QDialog):
         self.populate_data(resp.get("data", {}))
 
     def populate_data(self, data: dict):
-        tot_sets = data.get("total_game_sets", 0)
-        delta_cnt = data.get("delta_varint_count", 0)
-        roar_cnt = data.get("roaring_count", 0)
+        tot_pos = data.get("total_positions", 0)
+        tot_postings = data.get("total_postings", 0)
+        inlined = data.get("inlined_singletons", 0)
+        payload_bytes = data.get("bytes_payload", 0)
+        payload_mb = payload_bytes / 1048576.0
 
-        pct_delta = (delta_cnt / tot_sets * 100.0) if tot_sets > 0 else 0.0
-        pct_roar = (roar_cnt / tot_sets * 100.0) if tot_sets > 0 else 0.0
+        pct_inlined = (inlined / tot_pos * 100.0) if tot_pos > 0 else 0.0
 
-        b_delta = data.get("bytes_if_all_delta", 0)
-        b_roar = data.get("bytes_if_all_roaring", 0)
-        b_adapt = data.get("bytes_adaptive", 0)
-
-        mb_delta = b_delta / 1048576.0
-        mb_roar = b_roar / 1048576.0
-        mb_adapt = b_adapt / 1048576.0
-
-        savings_delta = ((b_delta - b_adapt) / b_delta * 100.0) if b_delta > 0 else 0.0
-        savings_roar = ((b_roar - b_adapt) / b_roar * 100.0) if b_roar > 0 else 0.0
-
-        # Row 0: GameSets Selected
-        self.table_comp.setItem(0, 1, QTableWidgetItem(f"{tot_sets:,} (100%)"))
-        self.table_comp.setItem(0, 2, QTableWidgetItem(f"{tot_sets:,} (100%)"))
-        self.table_comp.setItem(0, 3, QTableWidgetItem(f"Delta: {delta_cnt:,} ({pct_delta:.1f}%) | Roar: {roar_cnt:,} ({pct_roar:.1f}%)"))
-
-        # Row 1: Move ID Payload Size
-        self.table_comp.setItem(1, 1, QTableWidgetItem(f"{mb_delta:.2f} MB ({b_delta:,} B)"))
-        self.table_comp.setItem(1, 2, QTableWidgetItem(f"{mb_roar:.2f} MB ({b_roar:,} B)"))
-        self.table_comp.setItem(1, 3, QTableWidgetItem(f"{mb_adapt:.2f} MB ({b_adapt:,} B)"))
-
-        # Row 2: Net Space Saved
-        self.table_comp.setItem(2, 1, QTableWidgetItem("Baseline"))
-        self.table_comp.setItem(2, 2, QTableWidgetItem(f"{savings_roar:.2f}% larger than adaptive"))
-        self.table_comp.setItem(2, 3, QTableWidgetItem(f"✅ Saved {savings_delta:.2f}% vs pure Delta | {savings_roar:.2f}% vs pure Roar"))
-
-        # Highlight Row 2 item
-        it = self.table_comp.item(2, 3)
-        if it:
-            it.setBackground(QColor("#c8e6c9"))
-            font = it.font()
-            font.setBold(True)
-            it.setFont(font)
+        # Row 0: Total Positions
+        self.table_comp.setItem(0, 1, QTableWidgetItem(f"{tot_pos:,} unique Zobrist keys"))
+        # Row 1: Inlined Singletons
+        self.table_comp.setItem(1, 1, QTableWidgetItem(f"{inlined:,} positions ({pct_inlined:.1f}%) — 0 Bytes Payload!"))
+        # Row 2: Multi-game postings
+        self.table_comp.setItem(2, 1, QTableWidgetItem(f"{tot_postings:,} total occurrences"))
+        # Row 3: Payload size
+        self.table_comp.setItem(3, 1, QTableWidgetItem(f"{payload_mb:.2f} MB ({payload_bytes:,} bytes)"))
 
         # Distribution Table
         buckets = [
-            data.get("bucket_1_10", 0),
+            inlined,
+            data.get("bucket_1_10", 0) - inlined if data.get("bucket_1_10", 0) >= inlined else data.get("bucket_1_10", 0),
             data.get("bucket_11_100", 0),
             data.get("bucket_101_1k", 0),
             data.get("bucket_1k_10k", 0),
-            data.get("bucket_10k_100k", 0),
-            data.get("bucket_100k_plus", 0),
+            data.get("bucket_10k_100k", 0) + data.get("bucket_100k_plus", 0),
         ]
         for r, count in enumerate(buckets):
-            pct = (count / tot_sets * 100.0) if tot_sets > 0 else 0.0
+            pct = (count / tot_pos * 100.0) if tot_pos > 0 else 0.0
             self.table_dist.setItem(r, 1, QTableWidgetItem(f"{count:,} ({pct:.2f}%)"))
 
-        self.lbl_status.setText(f"✅ Analyzed {tot_sets:,} Move GameSets. Adaptive Hybrid saved space over pure single representations.")
-
+        self.lbl_status.setText(f"✅ Analyzed {tot_pos:,} positions ({inlined:,} inlined singletons saved ~{inlined * 5 / 1048576.0:.1f} MB payload).")

@@ -183,13 +183,28 @@ class OpeningTreeWidget(QWidget):
         if self.current_report:
             self._render_tree_table(self.current_report.get("moves", []))
 
-    def on_scope_changed(self, index: int):
-        if index == 1:
-            self.lbl_index_badge.setText("🔍 Filtered Search Results (Live)")
+    def update_tree_index_badge(self, status: str, count: int = 0):
+        self.tree_index_status = status
+        self.tree_index_count = count
+        if hasattr(self, 'combo_scope') and self.combo_scope.currentIndex() == 1:
+            self.lbl_index_badge.setText("🔍 Filtered Search Results (Dynamic)")
             self.lbl_index_badge.setStyleSheet("color: #1565c0; font-weight: bold; font-size: 11px;")
-        else:
-            self.lbl_index_badge.setText("⚡ Entire Database")
+            return
+
+        if status == "valid":
+            self.lbl_index_badge.setText(f"🟢 Fast Tree Index: Active ({count:,} pos)")
             self.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        elif status == "outdated":
+            self.lbl_index_badge.setText("🟠 Fast Tree Index: Outdated [Rebuild Recommended]")
+            self.lbl_index_badge.setStyleSheet("color: #e65100; font-weight: bold; font-size: 11px;")
+        else:
+            self.lbl_index_badge.setText("⚪ Fast Tree Index: Not Built (Dynamic Fallback)")
+            self.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
+
+    def on_scope_changed(self, index: int):
+        status = getattr(self, 'tree_index_status', 'missing')
+        count = getattr(self, 'tree_index_count', 0)
+        self.update_tree_index_badge(status, count)
         self.refresh_current_position()
 
     def refresh_current_position(self):

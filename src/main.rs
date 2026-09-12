@@ -6,6 +6,7 @@ pub mod position_index;
 pub mod position_search;
 mod server;
 mod test_suite;
+pub mod tree_index;
 pub mod zero_copy_ingest;
 
 use anyhow::{Context, Result};
@@ -214,7 +215,7 @@ enum Commands {
         heavy: bool,
     },
 
-    /// Build companion .pos.idx position index for ultra-fast searches and opening tree
+    /// Build companion .pos.idx position index for ultra-fast candidate searches
     BuildPosIdx {
         /// Path to .si5, .si4, or .pgn database
         #[arg(value_name = "DB_PATH")]
@@ -239,6 +240,33 @@ enum Commands {
 
     /// Analyze companion .pos.idx GameSet encoding diagnostics and Delta-Varint metrics
     DiagPosIdx {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+    },
+
+    /// Build companion .tree.idx opening tree statistics index
+    #[command(alias = "build-tree-idx")]
+    BuildTree {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Maximum ply depth to index (default: 24, i.e. 12 full moves)
+        #[arg(long, default_value = "24")]
+        max_ply: usize,
+
+        /// Minimum games reaching a position to include it in the index (default: 1, i.e. all positions)
+        #[arg(long, default_value = "1")]
+        min_games: usize,
+
+        /// Number of worker threads (default: all available CPU cores)
+        #[arg(long)]
+        threads: Option<usize>,
+    },
+
+    /// Analyze companion .tree.idx opening tree statistics index diagnostics
+    DiagTreeIdx {
         /// Path to .si5, .si4, or .pgn database
         #[arg(value_name = "DB_PATH")]
         db_path: PathBuf,
@@ -386,14 +414,19 @@ fn main() -> Result<()> {
                 total
             );
 
-            println!("{:<6} | {:<20} | {:<20} | {:<7} | {:<5} | {:<10} | {:<15}",
-                "ID", "White", "Black", "Result", "ECO", "Date", "Event");
-            println!("{:-<6}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<5}-+-{:-<10}-+-{:-<15}",
-                "", "", "", "", "", "", "");
+            println!(
+                "{:<6} | {:<20} | {:<20} | {:<7} | {:<5} | {:<10} | {:<15}",
+                "ID", "White", "Black", "Result", "ECO", "Date", "Event"
+            );
+            println!(
+                "{:-<6}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<5}-+-{:-<10}-+-{:-<15}",
+                "", "", "", "", "", "", ""
+            );
 
             for g in games {
                 let del_mark = if g.deleted { "[DEL] " } else { "" };
-                println!("{:<6} | {:<20} | {:<20} | {:<7} | {:<5} | {:<10} | {}{:<15}",
+                println!(
+                    "{:<6} | {:<20} | {:<20} | {:<7} | {:<5} | {:<10} | {}{:<15}",
                     g.id,
                     truncate_str(&g.white, 20),
                     truncate_str(&g.black, 20),
@@ -438,14 +471,19 @@ fn main() -> Result<()> {
             );
             println!("Found {} matching games.\n", result.matches.len());
 
-            println!("{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
-                "ID", "Ply", "White", "Black", "Result", "Date");
-            println!("{:-<6}-+-{:-<5}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<10}",
-                "", "", "", "", "", "");
+            println!(
+                "{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
+                "ID", "Ply", "White", "Black", "Result", "Date"
+            );
+            println!(
+                "{:-<6}-+-{:-<5}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<10}",
+                "", "", "", "", "", ""
+            );
 
             for m in result.matches.iter().take(50) {
                 if let Some((w, b, r, d)) = summaries.get(&m.game_id) {
-                    println!("{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
+                    println!(
+                        "{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
                         m.game_id,
                         m.ply,
                         truncate_str(w, 20),
@@ -521,18 +559,27 @@ fn main() -> Result<()> {
                 "Material search completed in {:.2} ms across {} games (mode: {}):",
                 elapsed_ms,
                 total_count,
-                if any_move { "any move" } else { "final position" }
+                if any_move {
+                    "any move"
+                } else {
+                    "final position"
+                }
             );
             println!("Found {} matching games.\n", matches.len());
 
-            println!("{:<6} | {:<20} | {:<20} | {:<7} | {:<10}",
-                "ID", "White", "Black", "Result", "Date");
-            println!("{:-<6}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<10}",
-                "", "", "", "", "");
+            println!(
+                "{:<6} | {:<20} | {:<20} | {:<7} | {:<10}",
+                "ID", "White", "Black", "Result", "Date"
+            );
+            println!(
+                "{:-<6}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<10}",
+                "", "", "", "", ""
+            );
 
             for &game_id in matches.iter().take(50) {
                 if let Some((w, b, r, d)) = summaries.get(&game_id) {
-                    println!("{:<6} | {:<20} | {:<20} | {:<7} | {:<10}",
+                    println!(
+                        "{:<6} | {:<20} | {:<20} | {:<7} | {:<10}",
                         game_id,
                         truncate_str(w, 20),
                         truncate_str(b, 20),
@@ -623,7 +670,11 @@ fn main() -> Result<()> {
         }) => {
             use std::io::Write;
             let db = ScidDatabaseWrapper::open(&db_path)?;
-            println!("Exporting {} games to {}...", db.game_count(), output_pgn.display());
+            println!(
+                "Exporting {} games to {}...",
+                db.game_count(),
+                output_pgn.display()
+            );
             let count = pgn_utils::export_pgn_ultra_fast(&db, &output_pgn, |p| {
                 print!(
                     "\r[Export: {:>5.1}%] | Games: {:>8} / {:>8} | Speed: {:>7.0} games/s | ETA: {:>3}s   ",
@@ -635,7 +686,11 @@ fn main() -> Result<()> {
                 );
                 let _ = std::io::stdout().flush();
             })?;
-            println!("\nSuccessfully exported {} games to {}.", count, output_pgn.display());
+            println!(
+                "\nSuccessfully exported {} games to {}.",
+                count,
+                output_pgn.display()
+            );
         }
         Some(Commands::Create { db_path, format }) => {
             let fmt = if format.eq_ignore_ascii_case("si4") {
@@ -645,7 +700,11 @@ fn main() -> Result<()> {
             };
             let mut db = ScidDatabaseWrapper::create(&db_path, fmt)?;
             db.save().context("Saving empty database")?;
-            println!("Created new empty {} database at {}", fmt, db.index_path().display());
+            println!(
+                "Created new empty {} database at {}",
+                fmt,
+                db.index_path().display()
+            );
         }
         Some(Commands::Bench { db_path, heavy }) => {
             println!("Running performance benchmarks on {}...", db_path.display());
@@ -658,42 +717,96 @@ fn main() -> Result<()> {
             println!("Format:       {}", report.format);
             println!("Total Games:  {}", report.total_games);
             if report.total_players > 0 {
-                println!("Entities:     {} players, {} events, {} sites", report.total_players, report.total_events, report.total_sites);
+                println!(
+                    "Entities:     {} players, {} events, {} sites",
+                    report.total_players, report.total_events, report.total_sites
+                );
             }
             println!("Disk Size:    {:.2} MB", report.file_size_mb);
             println!("------------------------------------------------------------------------------------------");
-            println!("{:<22} | {:<42} | {:>10} | {:<20}", "Category", "Benchmark Operation", "Time (ms)", "Details / Speed");
+            println!(
+                "{:<22} | {:<42} | {:>10} | {:<20}",
+                "Category", "Benchmark Operation", "Time (ms)", "Details / Speed"
+            );
             println!("{:-<22}-+-{:-<42}-+-{:-<10}-+-{:-<20}", "", "", "", "");
 
             for item in &report.results {
-                println!("{:<22} | {:<42} | {:>10.2} | {:<20}", item.category, item.name, item.elapsed_ms, item.notes);
+                println!(
+                    "{:<22} | {:<42} | {:>10.2} | {:<20}",
+                    item.category, item.name, item.elapsed_ms, item.notes
+                );
             }
             println!("==========================================================================================");
-            println!("Overall Benchmark Duration: {:.2} ms ({:.2} s)\n", report.total_time_ms, report.total_time_ms / 1000.0);
+            println!(
+                "Overall Benchmark Duration: {:.2} ms ({:.2} s)\n",
+                report.total_time_ms,
+                report.total_time_ms / 1000.0
+            );
         }
-        Some(Commands::BuildPosIdx { db_path, max_ply, max_games, min_games, threads }) => {
+        Some(Commands::BuildPosIdx {
+            db_path,
+            max_ply,
+            max_games,
+            min_games,
+            threads,
+        }) => {
             let start = std::time::Instant::now();
             let path_str = db_path.to_string_lossy();
             let max_games_opt = if max_games > 0 { Some(max_games) } else { None };
             let min_games_opt = if min_games > 1 { Some(min_games) } else { None };
             let idx = if path_str.ends_with(".pgn") {
                 let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
-                position_index::PositionIndex::build_for_pgn(&db_path, &pgn_db.entries, pgn_db.mmap_ref(), max_ply, max_games_opt, min_games_opt, threads, |scanned, total, positions| {
-                    print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                })?
+                position_index::PositionIndex::build_for_pgn(
+                    &db_path,
+                    &pgn_db.entries,
+                    pgn_db.mmap_ref(),
+                    max_ply,
+                    max_games_opt,
+                    min_games_opt,
+                    threads,
+                    |scanned, total, positions| {
+                        print!(
+                            "\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}",
+                            scanned,
+                            total,
+                            (scanned as f64 / total as f64) * 100.0,
+                            positions
+                        );
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    },
+                )?
             } else {
                 let db = ScidDatabaseWrapper::open(&db_path)?;
                 let games_path = db.games_path().to_path_buf();
                 let entries = db.entries();
                 let db_path_buf = db.index_path().to_path_buf();
-                position_index::PositionIndex::build_for_scid(&db_path_buf, entries, &games_path, max_ply, max_games_opt, min_games_opt, threads, |scanned, total, positions| {
-                    print!("\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}", scanned, total, (scanned as f64 / total as f64) * 100.0, positions);
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                })?
+                position_index::PositionIndex::build_for_scid(
+                    &db_path_buf,
+                    entries,
+                    &games_path,
+                    max_ply,
+                    max_games_opt,
+                    min_games_opt,
+                    threads,
+                    |scanned, total, positions| {
+                        print!(
+                            "\r  Indexing games: {} / {} ({:.1}%) | Unique positions: {}",
+                            scanned,
+                            total,
+                            (scanned as f64 / total as f64) * 100.0,
+                            positions
+                        );
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    },
+                )?
             };
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            println!("\n[OK] Built {} in {:.2} ms ({} unique positions).", idx.path.display(), elapsed_ms, idx.header.unique_positions);
+            println!(
+                "\n[OK] Built {} in {:.2} ms ({} unique positions).",
+                idx.path.display(),
+                elapsed_ms,
+                idx.header.unique_positions
+            );
         }
         Some(Commands::DiagPosIdx { db_path }) => {
             let idx = position_index::PositionIndex::load(&db_path)?;
@@ -701,18 +814,44 @@ fn main() -> Result<()> {
             let stats = idx.scan_diagnostics()?;
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
             println!("==========================================================================================");
-            println!("                  POSITION INDEX GAMESET ENCODING DIAGNOSTICS REPORT                      ");
+            println!("                  POSITION INDEX POSTINGS DIAGNOSTICS REPORT                              ");
             println!("==========================================================================================");
             println!("Index Path:          {}", idx.path.display());
             println!("Unique Positions:    {}", idx.header.unique_positions);
             println!("Database Games:      {}", idx.header.db_game_count);
-            println!("Index File Size:     {:.2} MB", std::fs::metadata(&idx.path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0));
+            println!(
+                "Index File Size:     {:.2} MB",
+                std::fs::metadata(&idx.path)
+                    .map(|m| m.len() as f64 / 1_048_576.0)
+                    .unwrap_or(0.0)
+            );
             println!("------------------------------------------------------------------------------------------");
-            println!("Total Move GameSets: {}", stats.total_game_sets);
-            println!("Delta-Varint Sets:   {} ({:.2}%)", stats.delta_varint_count, if stats.total_game_sets > 0 { (stats.delta_varint_count as f64 / stats.total_game_sets as f64) * 100.0 } else { 0.0 });
-            println!("Payload Data Size:   {} bytes ({:.2} MB)", stats.bytes_adaptive, stats.bytes_adaptive as f64 / 1_048_576.0);
+            println!("Total Postings:      {}", stats.total_postings);
+            println!(
+                "Inlined Singletons:  {} ({:.2}%)",
+                stats.inlined_singletons,
+                if stats.total_positions > 0 {
+                    (stats.inlined_singletons as f64 / stats.total_positions as f64) * 100.0
+                } else {
+                    0.0
+                }
+            );
+            println!(
+                "Delta-Varint Sets:   {} ({:.2}%)",
+                stats.delta_varint_count,
+                if stats.total_game_sets > 0 {
+                    (stats.delta_varint_count as f64 / stats.total_game_sets as f64) * 100.0
+                } else {
+                    0.0
+                }
+            );
+            println!(
+                "Payload Data Size:   {} bytes ({:.2} MB)",
+                stats.bytes_payload,
+                stats.bytes_payload as f64 / 1_048_576.0
+            );
             println!("------------------------------------------------------------------------------------------");
-            println!("Size Distribution:");
+            println!("Posting Size Distribution:");
             println!("  1 - 10 games:       {:>10}", stats.bucket_1_10);
             println!("  11 - 100 games:     {:>10}", stats.bucket_11_100);
             println!("  101 - 1,000 games:  {:>10}", stats.bucket_101_1k);
@@ -722,18 +861,120 @@ fn main() -> Result<()> {
             println!("==========================================================================================");
             println!("Diagnostics scan completed in {:.2} ms\n", elapsed);
         }
-        Some(Commands::Tree { db_path, fen, sample_games, all_game_ids }) => {
+        Some(Commands::BuildTree {
+            db_path,
+            max_ply,
+            min_games,
+            threads,
+        }) => {
+            let start = std::time::Instant::now();
+            let path_str = db_path.to_string_lossy();
+            let min_games_opt = if min_games > 1 { Some(min_games) } else { None };
+            let idx = if path_str.ends_with(".pgn") {
+                let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                tree_index::TreeIndex::build_for_pgn(
+                    &db_path,
+                    &pgn_db.entries,
+                    pgn_db.mmap_ref(),
+                    max_ply,
+                    None,
+                    min_games_opt,
+                    threads,
+                    |scanned, total, positions| {
+                        print!(
+                            "\r  Indexing tree stats: {} / {} ({:.1}%) | Unique positions: {}",
+                            scanned,
+                            total,
+                            (scanned as f64 / total as f64) * 100.0,
+                            positions
+                        );
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    },
+                )?
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                let games_path = db.games_path().to_path_buf();
+                let entries = db.entries();
+                let db_path_buf = db.index_path().to_path_buf();
+                tree_index::TreeIndex::build_for_scid(
+                    &db_path_buf,
+                    entries,
+                    &games_path,
+                    max_ply,
+                    None,
+                    min_games_opt,
+                    threads,
+                    |scanned, total, positions| {
+                        print!(
+                            "\r  Indexing tree stats: {} / {} ({:.1}%) | Unique positions: {}",
+                            scanned,
+                            total,
+                            (scanned as f64 / total as f64) * 100.0,
+                            positions
+                        );
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    },
+                )?
+            };
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "\n[OK] Built Opening Tree Index {} in {:.2} ms ({} unique positions).",
+                idx.path.display(),
+                elapsed_ms,
+                idx.header.unique_positions
+            );
+        }
+        Some(Commands::DiagTreeIdx { db_path }) => {
+            let idx = tree_index::TreeIndex::load(&db_path)?;
+            let start = std::time::Instant::now();
+            let stats = idx.scan_diagnostics()?;
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            println!("==========================================================================================");
+            println!("                  OPENING TREE STATS ENCODING DIAGNOSTICS REPORT                          ");
+            println!("==========================================================================================");
+            println!("Index Path:          {}", idx.path.display());
+            println!("Unique Positions:    {}", idx.header.unique_positions);
+            println!("Database Games:      {}", idx.header.db_game_count);
+            println!(
+                "Index File Size:     {:.2} MB",
+                std::fs::metadata(&idx.path)
+                    .map(|m| m.len() as f64 / 1_048_576.0)
+                    .unwrap_or(0.0)
+            );
+            println!("------------------------------------------------------------------------------------------");
+            println!("Total Moves Stored:  {}", stats.total_tree_moves);
+            println!(
+                "Payload Data Size:   {} bytes ({:.2} MB)",
+                stats.bytes_total,
+                stats.bytes_total as f64 / 1_048_576.0
+            );
+            println!("------------------------------------------------------------------------------------------");
+            println!("Game Frequency Distribution:");
+            println!("  1 - 10 games:       {:>10}", stats.bucket_1_10);
+            println!("  11 - 100 games:     {:>10}", stats.bucket_11_100);
+            println!("  101 - 1,000 games:  {:>10}", stats.bucket_101_1k);
+            println!("  1,001 - 10k games:  {:>10}", stats.bucket_1k_10k);
+            println!("  10k - 100k games:   {:>10}", stats.bucket_10k_100k);
+            println!("  100k+ games:        {:>10}", stats.bucket_100k_plus);
+            println!("==========================================================================================");
+            println!("Diagnostics scan completed in {:.2} ms\n", elapsed);
+        }
+        Some(Commands::Tree {
+            db_path,
+            fen,
+            sample_games: _,
+            all_game_ids: _,
+        }) => {
             let fen_str = fen.as_deref().unwrap_or("");
-            let sample_limit = if all_game_ids { None } else { Some(sample_games) };
-            let mut tree_report = position_index::PositionIndex::load(&db_path)
+            let mut tree_report = tree_index::TreeIndex::load(&db_path)
                 .ok()
-                .and_then(|idx| idx.query_tree_with_options(fen_str, None, sample_limit));
+                .and_then(|idx| idx.query_tree(fen_str));
 
             if tree_report.is_none() {
                 let lower = db_path.to_string_lossy().to_lowercase();
                 if lower.ends_with(".pgn") {
                     if let Ok(pgn_db) = pgn_db::PgnDatabaseWrapper::open(&db_path) {
-                        tree_report = position_index::PositionIndex::calculate_tree_for_pgn(
+                        tree_report = tree_index::TreeIndex::calculate_tree_for_pgn(
                             &pgn_db.entries,
                             pgn_db.mmap_ref(),
                             fen_str,
@@ -741,9 +982,15 @@ fn main() -> Result<()> {
                             Some(500),
                         );
                     }
-                } else if lower.ends_with(".si5") || lower.ends_with(".si4") || lower.ends_with(".sg5") || lower.ends_with(".sg4") || lower.ends_with(".sn5") || lower.ends_with(".sn4") {
+                } else if lower.ends_with(".si5")
+                    || lower.ends_with(".si4")
+                    || lower.ends_with(".sg5")
+                    || lower.ends_with(".sg4")
+                    || lower.ends_with(".sn5")
+                    || lower.ends_with(".sn4")
+                {
                     if let Ok(scid_db) = db::ScidDatabaseWrapper::open(&db_path) {
-                        tree_report = position_index::PositionIndex::calculate_tree_for_scid(
+                        tree_report = tree_index::TreeIndex::calculate_tree_for_scid(
                             scid_db.entries(),
                             scid_db.games_path(),
                             fen_str,
@@ -755,19 +1002,34 @@ fn main() -> Result<()> {
             }
 
             if let Some(tree) = tree_report {
-                println!("Opening Tree for position (Total Games: {} | +{:.1}% / ={:.1}% / -{:.1}%):", tree.total_games, tree.white_pct, tree.draw_pct, tree.black_pct);
-                println!("{:<6} | {:<8} | {:<10} | {:<7} | {:<7} | {:<7} | {:<8}",
-                    "Move", "UCI", "Games", "1-0 %", "1/2 %", "0-1 %", "Avg Elo");
-                println!("{:-<6}-+-{:-<8}-+-{:-<10}-+-{:-<7}-+-{:-<7}-+-{:-<7}-+-{:-<8}",
-                    "", "", "", "", "", "", "");
+                println!(
+                    "Opening Tree for position (Total Games: {} | +{:.1}% / ={:.1}% / -{:.1}%):",
+                    tree.total_games, tree.white_pct, tree.draw_pct, tree.black_pct
+                );
+                println!(
+                    "{:<6} | {:<8} | {:<10} | {:<7} | {:<7} | {:<7} | {:<8}",
+                    "Move", "UCI", "Games", "1-0 %", "1/2 %", "0-1 %", "Avg Elo"
+                );
+                println!(
+                    "{:-<6}-+-{:-<8}-+-{:-<10}-+-{:-<7}-+-{:-<7}-+-{:-<7}-+-{:-<8}",
+                    "", "", "", "", "", "", ""
+                );
                 for m in tree.moves {
                     let avg_elo_str = match (m.avg_white_elo, m.avg_black_elo) {
                         (Some(w), Some(b)) => format!("{}/{}", w, b),
                         (Some(w), None) => format!("{}/-", w),
                         _ => "-".to_string(),
                     };
-                    println!("{:<6} | {:<8} | {:<10} | {:<6.1}% | {:<6.1}% | {:<6.1}% | {:<8}",
-                        m.san, m.uci, m.total_games, m.white_pct, m.draw_pct, m.black_pct, avg_elo_str);
+                    println!(
+                        "{:<6} | {:<8} | {:<10} | {:<6.1}% | {:<6.1}% | {:<6.1}% | {:<8}",
+                        m.san,
+                        m.uci,
+                        m.total_games,
+                        m.white_pct,
+                        m.draw_pct,
+                        m.black_pct,
+                        avg_elo_str
+                    );
                 }
             } else {
                 println!("No games found reaching this position.");
@@ -779,11 +1041,21 @@ fn main() -> Result<()> {
             sort_by,
             desc,
         }) => {
-            println!("Sorting PGN {} by {} ({})...", input_pgn.display(), sort_by, if desc { "descending" } else { "ascending" });
+            println!(
+                "Sorting PGN {} by {} ({})...",
+                input_pgn.display(),
+                sort_by,
+                if desc { "descending" } else { "ascending" }
+            );
             let start = std::time::Instant::now();
             let count = pgn_db::sort_pgn_file(&input_pgn, &output_pgn, Some(&sort_by), !desc)?;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            println!("Successfully sorted {} games into {} in {:.2} ms.", count, output_pgn.display(), elapsed_ms);
+            println!(
+                "Successfully sorted {} games into {} in {:.2} ms.",
+                count,
+                output_pgn.display(),
+                elapsed_ms
+            );
         }
         Some(Commands::SortDb {
             db_path,
@@ -796,14 +1068,26 @@ fn main() -> Result<()> {
             let start = std::time::Instant::now();
             let mut db = ScidDatabaseWrapper::open(&db_path)?;
             let count = if let Some(ref out_p) = output_path {
-                println!("Sorting SCID DB {} by {} to new database {}...", db_path.display(), sort_by, out_p.display());
+                println!(
+                    "Sorting SCID DB {} by {} to new database {}...",
+                    db_path.display(),
+                    sort_by,
+                    out_p.display()
+                );
                 db.sort_database_to(out_p, &sort_by, !desc, delete_removed)?
             } else {
-                println!("Sorting SCID DB {} in-place by {}...", db_path.display(), sort_by);
+                println!(
+                    "Sorting SCID DB {} in-place by {}...",
+                    db_path.display(),
+                    sort_by
+                );
                 db.sort_database(&sort_by, !desc, delete_removed)?
             };
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            println!("Successfully sorted {} games in {:.2} ms.", count, elapsed_ms);
+            println!(
+                "Successfully sorted {} games in {:.2} ms.",
+                count, elapsed_ms
+            );
         }
         None => {
             // Default to interactive mode if a db path was provided, or print help
