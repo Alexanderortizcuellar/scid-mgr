@@ -1,14 +1,21 @@
 import time
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QProgressBar, QHBoxLayout, QPushButton
+    QDialog,
+    QVBoxLayout,
+    QLabel,
+    QProgressBar,
+    QHBoxLayout,
+    QPushButton,
 )
+
 
 class SearchProgressDialog(QDialog):
     """
     Non-blocking / live progress dialog displayed during long searches across millions of games.
     Automatically updates with scanned count, matches found, and scanning speed.
     """
+
     def __init__(self, title: str = "Searching Games...", parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -46,7 +53,9 @@ class SearchProgressDialog(QDialog):
         layout.addWidget(self.lbl_scanned)
 
         self.lbl_matches = QLabel("🎯 Matches found: 0")
-        self.lbl_matches.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        self.lbl_matches.setStyleSheet(
+            "color: #2e7d32; font-weight: bold; font-size: 11px;"
+        )
         layout.addWidget(self.lbl_matches)
 
         self.lbl_speed = QLabel("⚡ Initializing scanner...")
@@ -65,16 +74,22 @@ class SearchProgressDialog(QDialog):
 
     def update_progress(self, scanned: int, total: int, matches: int, percent: float):
         self.progress_bar.setValue(min(100, int(percent)))
-        self.lbl_scanned.setText(f"Scanned: {scanned:,} / {total:,} games ({percent:.1f}%)")
+        self.lbl_scanned.setText(
+            f"Scanned: {scanned:,} / {total:,} games ({percent:.1f}%)"
+        )
         self.lbl_matches.setText(f"🎯 Matches found: {matches:,}")
 
         elapsed = time.time() - self.start_time
         if elapsed > 0.3 and scanned > 0:
             speed = scanned / elapsed
-            self.lbl_speed.setText(f"⚡ Scanning Speed: ~{speed:,.0f} games/sec (Elapsed: {elapsed:.1f}s)")
+            self.lbl_speed.setText(
+                f"⚡ Scanning Speed: ~{speed:,.0f} games/sec (Elapsed: {elapsed:.1f}s)"
+            )
 
     def on_finished(self, total_matches: int = 0):
         self.progress_bar.setValue(100)
         elapsed = time.time() - self.start_time
-        self.lbl_matches.setText(f"✅ Search complete! Found {total_matches:,} matching games in {elapsed:.2f}s")
+        self.lbl_matches.setText(
+            f"✅ Search complete! Found {total_matches:,} matching games in {elapsed:.2f}s"
+        )
         QTimer.singleShot(400, self.accept)

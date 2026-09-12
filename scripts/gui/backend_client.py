@@ -8,11 +8,13 @@ from typing import Optional, Dict, Any
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+
 class BackendClient(QObject):
     """
     Manages long-running Rust scid-mgr process communicating over stdin/stdout
     with a non-blocking asynchronous request queue.
     """
+
     response_received = pyqtSignal(dict)
     process_error = pyqtSignal(str)
     process_stopped = pyqtSignal()
@@ -40,7 +42,12 @@ class BackendClient(QObject):
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def start(self, binary_path: str, db_path: Optional[str] = None, threads: Optional[int] = None):
+    def start(
+        self,
+        binary_path: str,
+        db_path: Optional[str] = None,
+        threads: Optional[int] = None,
+    ):
         if self.is_running():
             self.stop()
 
@@ -59,7 +66,9 @@ class BackendClient(QObject):
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if sys.platform == "win32"
+                else 0,
             )
         except Exception as e:
             raise RuntimeError(f"Failed to spawn backend process: {e}")
@@ -68,11 +77,15 @@ class BackendClient(QObject):
         self.write_queue = queue.Queue()
 
         # Background reader thread
-        self.reader_thread = threading.Thread(target=self._read_stdout_loop, daemon=True)
+        self.reader_thread = threading.Thread(
+            target=self._read_stdout_loop, daemon=True
+        )
         self.reader_thread.start()
 
         # Background writer thread
-        self.writer_thread = threading.Thread(target=self._write_stdin_loop, daemon=True)
+        self.writer_thread = threading.Thread(
+            target=self._write_stdin_loop, daemon=True
+        )
         self.writer_thread.start()
 
         # Monitor stderr
@@ -122,7 +135,12 @@ class BackendClient(QObject):
             if err_str:
                 self.process_error.emit(f"[stderr] {err_str}")
 
-    def send_request(self, command: str, params: Optional[dict] = None, callback: Optional[Any] = None) -> int:
+    def send_request(
+        self,
+        command: str,
+        params: Optional[dict] = None,
+        callback: Optional[Any] = None,
+    ) -> int:
         if not self.is_running():
             return -1
 
@@ -162,5 +180,3 @@ class BackendClient(QObject):
             except subprocess.TimeoutExpired:
                 self.process.kill()
             self.process = None
-
-

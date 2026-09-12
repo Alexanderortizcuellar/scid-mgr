@@ -4,14 +4,27 @@ from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, pyqtSignal
 from PyQt5.QtGui import QColor
 from .backend_client import BackendClient
 
+
 class VirtualScidTableModel(QAbstractTableModel):
     """
     Pure passive virtual scrolling table model for SCID games with LRU cache eviction.
     data() only reads from cache. It NEVER initiates network/pipe calls during rendering.
     Data chunks are fetched strictly when scrolling settles.
     """
+
     HEADERS = [
-        "ID", "White", "W.Elo", "Black", "B.Elo", "Result", "ECO", "Date", "Event", "Site", "Round", "Status"
+        "ID",
+        "White",
+        "W.Elo",
+        "Black",
+        "B.Elo",
+        "Result",
+        "ECO",
+        "Date",
+        "Event",
+        "Site",
+        "Round",
+        "Status",
     ]
     COLUMN_SORT_FIELDS = {
         0: "id",
@@ -48,7 +61,9 @@ class VirtualScidTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()) -> int:
         return len(self.HEADERS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role=Qt.DisplayRole):
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role=Qt.DisplayRole
+    ):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
             title = self.HEADERS[section]
             if self.sort_col == section:
@@ -82,7 +97,9 @@ class VirtualScidTableModel(QAbstractTableModel):
         offset_in_page = row % self.CHUNK_SIZE
 
         chunk = self.cached_chunks.get(page)
-        game_item = chunk[offset_in_page] if (chunk and offset_in_page < len(chunk)) else None
+        game_item = (
+            chunk[offset_in_page] if (chunk and offset_in_page < len(chunk)) else None
+        )
 
         if role == Qt.DisplayRole:
             if game_item:
@@ -146,7 +163,10 @@ class VirtualScidTableModel(QAbstractTableModel):
             return
 
         start_page = max(0, top_row // self.CHUNK_SIZE)
-        end_page = min((self.total_count - 1) // self.CHUNK_SIZE, max(0, bottom_row // self.CHUNK_SIZE))
+        end_page = min(
+            (self.total_count - 1) // self.CHUNK_SIZE,
+            max(0, bottom_row // self.CHUNK_SIZE),
+        )
 
         for page in range(start_page, end_page + 1):
             if page not in self.cached_chunks and page not in self.in_flight_pages:
@@ -220,9 +240,9 @@ class VirtualScidTableModel(QAbstractTableModel):
             if start_row <= end_row:
                 top_left = self.index(start_row, 0)
                 bottom_right = self.index(end_row, len(self.HEADERS) - 1)
-                self.dataChanged.emit(top_left, bottom_right, [Qt.DisplayRole, Qt.ForegroundRole])
+                self.dataChanged.emit(
+                    top_left, bottom_right, [Qt.DisplayRole, Qt.ForegroundRole]
+                )
 
         loaded_count = sum(len(c) for c in self.cached_chunks.values())
         self.stats_updated.emit(self.total_count, loaded_count)
-
-

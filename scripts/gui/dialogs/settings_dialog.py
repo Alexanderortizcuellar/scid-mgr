@@ -1,16 +1,24 @@
 import os
-from typing import Optional
 from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QSlider, QSpinBox, QPushButton, QGroupBox, QMessageBox
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QLabel,
+    QSlider,
+    QSpinBox,
+    QPushButton,
+    QGroupBox,
 )
+
 
 class SettingsDialog(QDialog):
     """
     Settings / Preferences Dialog allowing users to configure CPU thread limits,
     indexing parameters, and backend performance profiles.
     """
+
     def __init__(self, backend_client=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Application & Search Settings")
@@ -33,7 +41,9 @@ class SettingsDialog(QDialog):
         cpu_layout = QGridLayout(cpu_group)
         cpu_layout.setSpacing(10)
 
-        cpu_layout.addWidget(QLabel("<b>Worker Threads for Searches & Indexing:</b>"), 0, 0, 1, 2)
+        cpu_layout.addWidget(
+            QLabel("<b>Worker Threads for Searches & Indexing:</b>"), 0, 0, 1, 2
+        )
 
         slider_row = QHBoxLayout()
         self.slider_threads = QSlider(Qt.Horizontal)
@@ -66,7 +76,9 @@ class SettingsDialog(QDialog):
         btn_box.addWidget(self.btn_cancel)
 
         self.btn_save = QPushButton("Save & Apply")
-        self.btn_save.setStyleSheet("font-weight: bold; background-color: #1976d2; color: white; padding: 6px 14px;")
+        self.btn_save.setStyleSheet(
+            "font-weight: bold; background-color: #1976d2; color: white; padding: 6px 14px;"
+        )
         self.btn_save.clicked.connect(self.save_settings)
         btn_box.addWidget(self.btn_save)
 
@@ -80,14 +92,18 @@ class SettingsDialog(QDialog):
             rec = "⚡ <b>Balanced (Recommended)</b> — Fast searches while leaving CPU headroom for system responsiveness."
         else:
             rec = "🍃 <b>Low CPU Usage</b> — Minimizes system load and background resource consumption."
-        
+
         self.lbl_cpu_info.setText(
             f"Configured: <b>{threads} / {self.max_system_cpus} threads</b> (~{pct:.0f}% CPU capacity)<br>{rec}"
         )
 
     def load_settings(self):
         # Default to max - 1 or at least half of CPUs to avoid 100% saturation spikes
-        recommended_threads = max(1, self.max_system_cpus - 1) if self.max_system_cpus > 2 else self.max_system_cpus
+        recommended_threads = (
+            max(1, self.max_system_cpus - 1)
+            if self.max_system_cpus > 2
+            else self.max_system_cpus
+        )
         saved_threads = int(self.settings.value("worker_threads", recommended_threads))
         saved_threads = max(1, min(self.max_system_cpus, saved_threads))
         self.spin_threads.setValue(saved_threads)

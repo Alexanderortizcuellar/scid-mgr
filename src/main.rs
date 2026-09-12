@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use scid_mgr::db::{GameFilter, ScidDatabaseWrapper, ScidFormat};
 use scid_mgr::pgn_utils::import_pgn_file_with_progress;
-use scid_mgr::{benchmark, db, pgn_db, pgn_utils, position_index, position_search, server, test_suite, tree_index};
+use scid_mgr::{
+    benchmark, db, pgn_db, pgn_utils, position_index, position_search, server, test_suite,
+    tree_index,
+};
 use std::path::PathBuf;
 
 #[derive(Parser)]

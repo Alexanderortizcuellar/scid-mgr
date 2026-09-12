@@ -1,14 +1,24 @@
-import sys
 from typing import Optional
 import chess
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-    QPushButton, QComboBox, QCheckBox, QTabWidget, QWidget, QRadioButton,
-    QButtonGroup, QFrame, QScrollArea, QGroupBox, QSpinBox, QTextEdit
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QComboBox,
+    QCheckBox,
+    QTabWidget,
+    QWidget,
+    QRadioButton,
+    QButtonGroup,
+    QGroupBox,
+    QSpinBox,
 )
 from ..widgets.board_widget import ChessBoardEditorWidget
+
 
 class AdvancedSearchDialog(QDialog):
     """
@@ -18,6 +28,7 @@ class AdvancedSearchDialog(QDialog):
       2. ♟️ Position / Board (Visual Board Editor, FEN string, Depth / Max Ply, Presets)
       3. ⚖️ Material (Piece counts for White & Black, Presets, Scope mode)
     """
+
     def __init__(self, current_filter: Optional[dict] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Advanced Search (ChessBase style)")
@@ -44,17 +55,23 @@ class AdvancedSearchDialog(QDialog):
         cat_layout.setSpacing(15)
 
         self.chk_enable_info = QCheckBox("🏷️ Game Info")
-        self.chk_enable_info.setToolTip("Include Game Info criteria (Players, Result, ECO, Date, Event, Site, Status) in search")
+        self.chk_enable_info.setToolTip(
+            "Include Game Info criteria (Players, Result, ECO, Date, Event, Site, Status) in search"
+        )
         self.chk_enable_info.toggled.connect(self.update_tab_titles)
         cat_layout.addWidget(self.chk_enable_info)
 
         self.chk_enable_pos = QCheckBox("♟️ Position / Board")
-        self.chk_enable_pos.setToolTip("Include Board Position / FEN pattern criteria in search")
+        self.chk_enable_pos.setToolTip(
+            "Include Board Position / FEN pattern criteria in search"
+        )
         self.chk_enable_pos.toggled.connect(self.update_tab_titles)
         cat_layout.addWidget(self.chk_enable_pos)
 
         self.chk_enable_mat = QCheckBox("⚖️ Material")
-        self.chk_enable_mat.setToolTip("Include Piece counts and Material combinations in search")
+        self.chk_enable_mat.setToolTip(
+            "Include Piece counts and Material combinations in search"
+        )
         self.chk_enable_mat.toggled.connect(self.update_tab_titles)
         cat_layout.addWidget(self.chk_enable_mat)
 
@@ -163,7 +180,9 @@ class AdvancedSearchDialog(QDialog):
         board_btn_row.addWidget(btn_init_b)
 
         btn_qd4 = QPushButton("Queen on d4 (Demo)")
-        btn_qd4.clicked.connect(lambda: self.set_single_piece_demo(chess.QUEEN, chess.WHITE, chess.D4))
+        btn_qd4.clicked.connect(
+            lambda: self.set_single_piece_demo(chess.QUEEN, chess.WHITE, chess.D4)
+        )
         board_btn_row.addWidget(btn_qd4)
 
         board_col.addLayout(board_btn_row)
@@ -209,12 +228,16 @@ class AdvancedSearchDialog(QDialog):
         mode_row.addWidget(QLabel("<b>Match Mode:</b>"))
         self.rb_mode_board = QRadioButton("Board Layout")
         self.rb_mode_board.setChecked(True)
-        self.rb_mode_board.setToolTip("Matches all 64 squares piece placement (ignores turn/castling discrepancies)")
+        self.rb_mode_board.setToolTip(
+            "Matches all 64 squares piece placement (ignores turn/castling discrepancies)"
+        )
         self.rb_mode_board.toggled.connect(self.mark_pos_modified)
         self.rb_mode_exact = QRadioButton("Exact (Board+Turn+Castles)")
         self.rb_mode_exact.toggled.connect(self.mark_pos_modified)
         self.rb_mode_partial = QRadioButton("Partial (Placed Pieces)")
-        self.rb_mode_partial.setToolTip("Matches games where the placed pieces appear on their squares")
+        self.rb_mode_partial.setToolTip(
+            "Matches games where the placed pieces appear on their squares"
+        )
         self.rb_mode_partial.toggled.connect(self.mark_pos_modified)
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.rb_mode_board)
@@ -251,23 +274,43 @@ class AdvancedSearchDialog(QDialog):
         preset_grid = QGridLayout(preset_box)
 
         btn_start_pos = QPushButton("Standard Start Pos")
-        btn_start_pos.clicked.connect(lambda: self.board_editor.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"))
+        btn_start_pos.clicked.connect(
+            lambda: self.board_editor.set_fen(
+                "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+            )
+        )
         preset_grid.addWidget(btn_start_pos, 0, 0)
 
         btn_alapin = QPushButton("Sicilian Alapin (2.c3)")
-        btn_alapin.clicked.connect(lambda: self.board_editor.set_fen("rnbqkbnr/pp1ppppp/8/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR b KQkq - 0 2"))
+        btn_alapin.clicked.connect(
+            lambda: self.board_editor.set_fen(
+                "rnbqkbnr/pp1ppppp/8/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR b KQkq - 0 2"
+            )
+        )
         preset_grid.addWidget(btn_alapin, 0, 1)
 
         btn_najdorf = QPushButton("Sicilian Najdorf (6.Be2)")
-        btn_najdorf.clicked.connect(lambda: self.board_editor.set_fen("rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6"))
+        btn_najdorf.clicked.connect(
+            lambda: self.board_editor.set_fen(
+                "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6"
+            )
+        )
         preset_grid.addWidget(btn_najdorf, 1, 0)
 
         btn_alekhine = QPushButton("Alekhine's Defense (1...Nf6)")
-        btn_alekhine.clicked.connect(lambda: self.board_editor.set_fen("rnbqkb1r/pppppppp/5n2/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"))
+        btn_alekhine.clicked.connect(
+            lambda: self.board_editor.set_fen(
+                "rnbqkb1r/pppppppp/5n2/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1"
+            )
+        )
         preset_grid.addWidget(btn_alekhine, 1, 1)
 
         btn_french = QPushButton("French Defense (3.Nc3)")
-        btn_french.clicked.connect(lambda: self.board_editor.set_fen("rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/2N5/PPP2PPP/R1BQKBNR b KQkq - 1 3"))
+        btn_french.clicked.connect(
+            lambda: self.board_editor.set_fen(
+                "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/2N5/PPP2PPP/R1BQKBNR b KQkq - 1 3"
+            )
+        )
         preset_grid.addWidget(btn_french, 2, 0)
 
         btn_clear_fen = QPushButton("Clear FEN")
@@ -290,18 +333,22 @@ class AdvancedSearchDialog(QDialog):
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel("Material Preset:"))
         self.combo_mat_preset = QComboBox()
-        self.combo_mat_preset.addItems([
-            "-- Custom Material --",
-            "Rook Endgame (R+P vs R+P)",
-            "Queen Endgame (Q+P vs Q+P)",
-            "Minor Piece Endgame (B vs N)",
-            "Queen vs Rook (Q vs R)",
-            "Opposite-Colored Bishops (WB=1, BB=1)",
-            "Queen Sacrifice / Queenless (WQ=0, BQ=1)",
-            "Pawn Endgame (Pawns only)",
-            "Reset All Pieces to Any",
-        ])
-        self.combo_mat_preset.currentIndexChanged.connect(self.on_material_preset_changed)
+        self.combo_mat_preset.addItems(
+            [
+                "-- Custom Material --",
+                "Rook Endgame (R+P vs R+P)",
+                "Queen Endgame (Q+P vs Q+P)",
+                "Minor Piece Endgame (B vs N)",
+                "Queen vs Rook (Q vs R)",
+                "Opposite-Colored Bishops (WB=1, BB=1)",
+                "Queen Sacrifice / Queenless (WQ=0, BQ=1)",
+                "Pawn Endgame (Pawns only)",
+                "Reset All Pieces to Any",
+            ]
+        )
+        self.combo_mat_preset.currentIndexChanged.connect(
+            self.on_material_preset_changed
+        )
         preset_row.addWidget(self.combo_mat_preset, 1)
         mat_layout.addLayout(preset_row)
 
@@ -326,7 +373,9 @@ class AdvancedSearchDialog(QDialog):
         self.mat_white = {}
         for col_idx, (_, pkey) in enumerate(pieces, start=1):
             cb = QComboBox()
-            cb.addItems(["Any"] + [str(i) for i in (range(9) if pkey == 'p' else range(3))])
+            cb.addItems(
+                ["Any"] + [str(i) for i in (range(9) if pkey == "p" else range(3))]
+            )
             cb.currentIndexChanged.connect(self.mark_mat_modified)
             self.mat_white[pkey] = cb
             grid.addWidget(cb, 1, col_idx)
@@ -335,7 +384,9 @@ class AdvancedSearchDialog(QDialog):
         self.mat_black = {}
         for col_idx, (_, pkey) in enumerate(pieces, start=1):
             cb = QComboBox()
-            cb.addItems(["Any"] + [str(i) for i in (range(9) if pkey == 'p' else range(3))])
+            cb.addItems(
+                ["Any"] + [str(i) for i in (range(9) if pkey == "p" else range(3))]
+            )
             cb.currentIndexChanged.connect(self.mark_mat_modified)
             self.mat_black[pkey] = cb
             grid.addWidget(cb, 2, col_idx)
@@ -345,10 +396,18 @@ class AdvancedSearchDialog(QDialog):
         # Bishop Color Sub-options
         bish_box = QGroupBox("Bishop Color Verification")
         bish_layout = QHBoxLayout(bish_box)
-        self.chk_opposite_bishops = QCheckBox("Opposite-Colored Bishops (White & Black on different color squares)")
-        self.chk_same_bishops = QCheckBox("Same-Colored Bishops (White & Black on same color squares)")
-        self.chk_opposite_bishops.toggled.connect(lambda on: on and self.chk_same_bishops.setChecked(False))
-        self.chk_same_bishops.toggled.connect(lambda on: on and self.chk_opposite_bishops.setChecked(False))
+        self.chk_opposite_bishops = QCheckBox(
+            "Opposite-Colored Bishops (White & Black on different color squares)"
+        )
+        self.chk_same_bishops = QCheckBox(
+            "Same-Colored Bishops (White & Black on same color squares)"
+        )
+        self.chk_opposite_bishops.toggled.connect(
+            lambda on: on and self.chk_same_bishops.setChecked(False)
+        )
+        self.chk_same_bishops.toggled.connect(
+            lambda on: on and self.chk_opposite_bishops.setChecked(False)
+        )
         self.chk_opposite_bishops.toggled.connect(self.mark_mat_modified)
         self.chk_same_bishops.toggled.connect(self.mark_mat_modified)
         bish_layout.addWidget(self.chk_opposite_bishops)
@@ -358,11 +417,15 @@ class AdvancedSearchDialog(QDialog):
         # Match Scope Box
         mode_box = QGroupBox("Search Scope")
         mode_layout = QVBoxLayout(mode_box)
-        self.rb_final_pos = QRadioButton("Final Position only (Endgames - Ultra fast ~20ms)")
+        self.rb_final_pos = QRadioButton(
+            "Final Position only (Endgames - Ultra fast ~20ms)"
+        )
         self.rb_final_pos.setChecked(True)
         self.rb_final_pos.toggled.connect(self.mark_mat_modified)
         mode_layout.addWidget(self.rb_final_pos)
-        self.rb_any_move = QRadioButton("Any Move during game (Middlegame / Sacrifices / Combinations ~150ms)")
+        self.rb_any_move = QRadioButton(
+            "Any Move during game (Middlegame / Sacrifices / Combinations ~150ms)"
+        )
         self.rb_any_move.toggled.connect(self.mark_mat_modified)
         mode_layout.addWidget(self.rb_any_move)
         mat_layout.addWidget(mode_box)
@@ -382,7 +445,9 @@ class AdvancedSearchDialog(QDialog):
         btn_box.addWidget(btn_cancel)
 
         btn_search = QPushButton("🔍 Search Games")
-        btn_search.setStyleSheet("font-weight: bold; background-color: #1976d2; color: white; padding: 6px 20px;")
+        btn_search.setStyleSheet(
+            "font-weight: bold; background-color: #1976d2; color: white; padding: 6px 20px;"
+        )
         btn_search.clicked.connect(self.accept)
         btn_box.addWidget(btn_search)
 
@@ -396,9 +461,11 @@ class AdvancedSearchDialog(QDialog):
     def update_tab_titles(self):
         """Updates tab header text to show [✓] status when active."""
         title_info = "🏷️ Game Info" + ("  ✓" if self.chk_enable_info.isChecked() else "")
-        title_pos = "♟️ Position / Board" + ("  ✓" if self.chk_enable_pos.isChecked() else "")
+        title_pos = "♟️ Position / Board" + (
+            "  ✓" if self.chk_enable_pos.isChecked() else ""
+        )
         title_mat = "⚖️ Material" + ("  ✓" if self.chk_enable_mat.isChecked() else "")
-        
+
         self.tabs.setTabText(0, title_info)
         self.tabs.setTabText(1, title_pos)
         self.tabs.setTabText(2, title_mat)
@@ -428,12 +495,14 @@ class AdvancedSearchDialog(QDialog):
     def on_material_preset_changed(self, idx: int):
         if idx == 0:
             return
-        
+
         self.mark_mat_modified()
 
         # Reset all to Any first
-        for cb in self.mat_white.values(): cb.setCurrentIndex(0)
-        for cb in self.mat_black.values(): cb.setCurrentIndex(0)
+        for cb in self.mat_white.values():
+            cb.setCurrentIndex(0)
+        for cb in self.mat_black.values():
+            cb.setCurrentIndex(0)
         self.chk_opposite_bishops.setChecked(False)
         self.chk_same_bishops.setChecked(False)
         self.rb_final_pos.setChecked(True)
@@ -441,31 +510,68 @@ class AdvancedSearchDialog(QDialog):
         def set_val(side, pkey, val):
             d = self.mat_white if side == "w" else self.mat_black
             idx = d[pkey].findText(str(val))
-            if idx >= 0: d[pkey].setCurrentIndex(idx)
+            if idx >= 0:
+                d[pkey].setCurrentIndex(idx)
 
-        if idx == 1: # Rook Endgame (R+P vs R+P)
-            set_val("w", "q", 0); set_val("w", "r", 1); set_val("w", "b", 0); set_val("w", "n", 0)
-            set_val("b", "q", 0); set_val("b", "r", 1); set_val("b", "b", 0); set_val("b", "n", 0)
-        elif idx == 2: # Queen Endgame (Q+P vs Q+P)
-            set_val("w", "q", 1); set_val("w", "r", 0); set_val("w", "b", 0); set_val("w", "n", 0)
-            set_val("b", "q", 1); set_val("b", "r", 0); set_val("b", "b", 0); set_val("b", "n", 0)
-        elif idx == 3: # Minor Piece Endgame (B vs N)
-            set_val("w", "q", 0); set_val("w", "r", 0); set_val("w", "b", 1); set_val("w", "n", 0)
-            set_val("b", "q", 0); set_val("b", "r", 0); set_val("b", "b", 0); set_val("b", "n", 1)
-        elif idx == 4: # Queen vs Rook
-            set_val("w", "q", 1); set_val("w", "r", 0); set_val("w", "b", 0); set_val("w", "n", 0)
-            set_val("b", "q", 0); set_val("b", "r", 1); set_val("b", "b", 0); set_val("b", "n", 0)
-        elif idx == 5: # Opposite-Colored Bishops
-            set_val("w", "q", 0); set_val("w", "r", 0); set_val("w", "b", 1); set_val("w", "n", 0)
-            set_val("b", "q", 0); set_val("b", "r", 0); set_val("b", "b", 1); set_val("b", "n", 0)
+        if idx == 1:  # Rook Endgame (R+P vs R+P)
+            set_val("w", "q", 0)
+            set_val("w", "r", 1)
+            set_val("w", "b", 0)
+            set_val("w", "n", 0)
+            set_val("b", "q", 0)
+            set_val("b", "r", 1)
+            set_val("b", "b", 0)
+            set_val("b", "n", 0)
+        elif idx == 2:  # Queen Endgame (Q+P vs Q+P)
+            set_val("w", "q", 1)
+            set_val("w", "r", 0)
+            set_val("w", "b", 0)
+            set_val("w", "n", 0)
+            set_val("b", "q", 1)
+            set_val("b", "r", 0)
+            set_val("b", "b", 0)
+            set_val("b", "n", 0)
+        elif idx == 3:  # Minor Piece Endgame (B vs N)
+            set_val("w", "q", 0)
+            set_val("w", "r", 0)
+            set_val("w", "b", 1)
+            set_val("w", "n", 0)
+            set_val("b", "q", 0)
+            set_val("b", "r", 0)
+            set_val("b", "b", 0)
+            set_val("b", "n", 1)
+        elif idx == 4:  # Queen vs Rook
+            set_val("w", "q", 1)
+            set_val("w", "r", 0)
+            set_val("w", "b", 0)
+            set_val("w", "n", 0)
+            set_val("b", "q", 0)
+            set_val("b", "r", 1)
+            set_val("b", "b", 0)
+            set_val("b", "n", 0)
+        elif idx == 5:  # Opposite-Colored Bishops
+            set_val("w", "q", 0)
+            set_val("w", "r", 0)
+            set_val("w", "b", 1)
+            set_val("w", "n", 0)
+            set_val("b", "q", 0)
+            set_val("b", "r", 0)
+            set_val("b", "b", 1)
+            set_val("b", "n", 0)
             self.chk_opposite_bishops.setChecked(True)
-        elif idx == 6: # Queen Sacrifice (WQ=0, BQ=1)
+        elif idx == 6:  # Queen Sacrifice (WQ=0, BQ=1)
             set_val("w", "q", 0)
             set_val("b", "q", 1)
             self.rb_any_move.setChecked(True)
-        elif idx == 7: # Pawn Endgame
-            set_val("w", "q", 0); set_val("w", "r", 0); set_val("w", "b", 0); set_val("w", "n", 0)
-            set_val("b", "q", 0); set_val("b", "r", 0); set_val("b", "b", 0); set_val("b", "n", 0)
+        elif idx == 7:  # Pawn Endgame
+            set_val("w", "q", 0)
+            set_val("w", "r", 0)
+            set_val("w", "b", 0)
+            set_val("w", "n", 0)
+            set_val("b", "q", 0)
+            set_val("b", "r", 0)
+            set_val("b", "b", 0)
+            set_val("b", "n", 0)
 
     def on_board_fen_changed(self, fen: str):
         self.mark_pos_modified()
@@ -504,8 +610,10 @@ class AdvancedSearchDialog(QDialog):
             self.board_editor.reset_to_initial()
             self.spin_max_ply.setValue(250)
             self.combo_mat_preset.setCurrentIndex(0)
-            for cb in self.mat_white.values(): cb.setCurrentIndex(0)
-            for cb in self.mat_black.values(): cb.setCurrentIndex(0)
+            for cb in self.mat_white.values():
+                cb.setCurrentIndex(0)
+            for cb in self.mat_black.values():
+                cb.setCurrentIndex(0)
             self.chk_opposite_bishops.setChecked(False)
             self.chk_same_bishops.setChecked(False)
             self.rb_final_pos.setChecked(True)
@@ -521,72 +629,90 @@ class AdvancedSearchDialog(QDialog):
         self._loading = True
         try:
             has_info = False
-            if "player" in f and f["player"]: 
+            if "player" in f and f["player"]:
                 self.in_player.setText(f["player"])
                 has_info = True
-            if "white" in f and f["white"]: 
+            if "white" in f and f["white"]:
                 self.in_white.setText(f["white"])
                 has_info = True
-            if "black" in f and f["black"]: 
+            if "black" in f and f["black"]:
                 self.in_black.setText(f["black"])
                 has_info = True
             if "result" in f and f["result"] and f["result"] != "All":
                 idx = self.in_result.findText(f["result"])
-                if idx >= 0: 
+                if idx >= 0:
                     self.in_result.setCurrentIndex(idx)
                     has_info = True
-            if "eco" in f and f["eco"]: 
+            if "eco" in f and f["eco"]:
                 self.in_eco.setText(f["eco"])
                 has_info = True
-            if "date" in f and f["date"]: 
+            if "date" in f and f["date"]:
                 self.in_date.setText(f["date"])
                 has_info = True
-            if "event" in f and f["event"]: 
+            if "event" in f and f["event"]:
                 self.in_event.setText(f["event"])
                 has_info = True
-            if "site" in f and f["site"]: 
+            if "site" in f and f["site"]:
                 self.in_site.setText(f["site"])
                 has_info = True
-            if "include_deleted" in f: 
+            if "include_deleted" in f:
                 self.chk_include_del.setChecked(f["include_deleted"])
                 if not f["include_deleted"]:
                     has_info = True
-            if "only_deleted" in f and f["only_deleted"]: 
+            if "only_deleted" in f and f["only_deleted"]:
                 self.chk_only_del.setChecked(f["only_deleted"])
                 has_info = True
-            
+
             has_pos = False
-            if "fen" in f and f["fen"]: 
+            if "fen" in f and f["fen"]:
                 self.in_fen.setText(f["fen"])
                 has_pos = True
             if "turn" in f and f["turn"]:
                 t = f["turn"].lower()
-                if t in ("w", "white"): self.rb_turn_w.setChecked(True)
-                elif t in ("b", "black"): self.rb_turn_b.setChecked(True)
-                else: self.rb_turn_any.setChecked(True)
+                if t in ("w", "white"):
+                    self.rb_turn_w.setChecked(True)
+                elif t in ("b", "black"):
+                    self.rb_turn_b.setChecked(True)
+                else:
+                    self.rb_turn_any.setChecked(True)
             if "match_mode" in f and f["match_mode"]:
                 m = f["match_mode"].lower()
-                if m == "exact": self.rb_mode_exact.setChecked(True)
-                elif m == "partial": self.rb_mode_partial.setChecked(True)
-                else: self.rb_mode_board.setChecked(True)
+                if m == "exact":
+                    self.rb_mode_exact.setChecked(True)
+                elif m == "partial":
+                    self.rb_mode_partial.setChecked(True)
+                else:
+                    self.rb_mode_board.setChecked(True)
             if "max_ply" in f and f["max_ply"]:
                 self.spin_max_ply.setValue(int(f["max_ply"]))
-            
+
             has_mat = False
             mat = f.get("material")
             if mat:
-                mapping_w = {'white_queens': 'q', 'white_rooks': 'r', 'white_bishops': 'b', 'white_knights': 'n', 'white_pawns': 'p'}
+                mapping_w = {
+                    "white_queens": "q",
+                    "white_rooks": "r",
+                    "white_bishops": "b",
+                    "white_knights": "n",
+                    "white_pawns": "p",
+                }
                 for f_key, pkey in mapping_w.items():
                     if f_key in mat and mat[f_key] is not None:
                         idx = self.mat_white[pkey].findText(str(mat[f_key]))
-                        if idx >= 0: 
+                        if idx >= 0:
                             self.mat_white[pkey].setCurrentIndex(idx)
                             has_mat = True
-                mapping_b = {'black_queens': 'q', 'black_rooks': 'r', 'black_bishops': 'b', 'black_knights': 'n', 'black_pawns': 'p'}
+                mapping_b = {
+                    "black_queens": "q",
+                    "black_rooks": "r",
+                    "black_bishops": "b",
+                    "black_knights": "n",
+                    "black_pawns": "p",
+                }
                 for f_key, pkey in mapping_b.items():
                     if f_key in mat and mat[f_key] is not None:
                         idx = self.mat_black[pkey].findText(str(mat[f_key]))
-                        if idx >= 0: 
+                        if idx >= 0:
                             self.mat_black[pkey].setCurrentIndex(idx)
                             has_mat = True
                 if mat.get("opposite_bishops"):
@@ -614,21 +740,29 @@ class AdvancedSearchDialog(QDialog):
         # 1. Game Info Tab
         if self.chk_enable_info.isChecked():
             p = self.in_player.text().strip()
-            if p: f["player"] = p
+            if p:
+                f["player"] = p
             w = self.in_white.text().strip()
-            if w: f["white"] = w
+            if w:
+                f["white"] = w
             b = self.in_black.text().strip()
-            if b: f["black"] = b
+            if b:
+                f["black"] = b
             res = self.in_result.currentText()
-            if res != "All": f["result"] = res
+            if res != "All":
+                f["result"] = res
             eco = self.in_eco.text().strip()
-            if eco: f["eco"] = eco
+            if eco:
+                f["eco"] = eco
             dt = self.in_date.text().strip()
-            if dt: f["date"] = dt
+            if dt:
+                f["date"] = dt
             ev = self.in_event.text().strip()
-            if ev: f["event"] = ev
+            if ev:
+                f["event"] = ev
             st = self.in_site.text().strip()
-            if st: f["site"] = st
+            if st:
+                f["site"] = st
             f["include_deleted"] = self.chk_include_del.isChecked()
             f["only_deleted"] = self.chk_only_del.isChecked()
         else:
@@ -640,26 +774,51 @@ class AdvancedSearchDialog(QDialog):
             fen = self.in_fen.text().strip()
             if fen:
                 f["fen"] = fen
-                f["turn"] = "w" if self.rb_turn_w.isChecked() else ("b" if self.rb_turn_b.isChecked() else "any")
-                f["match_mode"] = "exact" if self.rb_mode_exact.isChecked() else ("partial" if self.rb_mode_partial.isChecked() else "board_only")
+                f["turn"] = (
+                    "w"
+                    if self.rb_turn_w.isChecked()
+                    else ("b" if self.rb_turn_b.isChecked() else "any")
+                )
+                f["match_mode"] = (
+                    "exact"
+                    if self.rb_mode_exact.isChecked()
+                    else (
+                        "partial" if self.rb_mode_partial.isChecked() else "board_only"
+                    )
+                )
                 f["max_ply"] = self.spin_max_ply.value()
 
         # 3. Material Tab
         if self.chk_enable_mat.isChecked():
             mat = {}
+
             def parse_val(cb):
                 t = cb.currentText()
                 return None if t == "Any" else int(t)
 
-            mapping_w = {'q': 'white_queens', 'r': 'white_rooks', 'b': 'white_bishops', 'n': 'white_knights', 'p': 'white_pawns'}
+            mapping_w = {
+                "q": "white_queens",
+                "r": "white_rooks",
+                "b": "white_bishops",
+                "n": "white_knights",
+                "p": "white_pawns",
+            }
             for pkey, f_key in mapping_w.items():
                 v = parse_val(self.mat_white[pkey])
-                if v is not None: mat[f_key] = v
+                if v is not None:
+                    mat[f_key] = v
 
-            mapping_b = {'q': 'black_queens', 'r': 'black_rooks', 'b': 'black_bishops', 'n': 'black_knights', 'p': 'black_pawns'}
+            mapping_b = {
+                "q": "black_queens",
+                "r": "black_rooks",
+                "b": "black_bishops",
+                "n": "black_knights",
+                "p": "black_pawns",
+            }
             for pkey, f_key in mapping_b.items():
                 v = parse_val(self.mat_black[pkey])
-                if v is not None: mat[f_key] = v
+                if v is not None:
+                    mat[f_key] = v
 
             if self.chk_opposite_bishops.isChecked():
                 mat["opposite_bishops"] = True
@@ -672,5 +831,3 @@ class AdvancedSearchDialog(QDialog):
                 f["material"] = mat
 
         return f
-
-

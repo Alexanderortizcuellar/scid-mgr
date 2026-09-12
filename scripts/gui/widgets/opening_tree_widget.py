@@ -2,12 +2,23 @@ import chess
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QComboBox, QCheckBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QFrame,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QMessageBox,
+    QComboBox,
+    QCheckBox,
 )
 from ..backend_client import BackendClient
 from .board_widget import ChessBoardEditorWidget
+
 
 class OpeningTreeWidget(QWidget):
     """
@@ -16,6 +27,7 @@ class OpeningTreeWidget(QWidget):
     - Displays win/draw/loss % bars, Last Played (or Average ELO).
     - Displays sample games with 1-click preview and double-click to load.
     """
+
     def __init__(self, client: BackendClient, main_window, parent=None):
         super().__init__(parent)
         self.client = client
@@ -42,21 +54,29 @@ class OpeningTreeWidget(QWidget):
         tb_layout.addWidget(self.btn_back)
 
         self.lbl_moves_seq = QLabel("1. Starting Position")
-        self.lbl_moves_seq.setStyleSheet("font-weight: bold; font-size: 12px; color: #1976d2; margin-left: 8px;")
+        self.lbl_moves_seq.setStyleSheet(
+            "font-weight: bold; font-size: 12px; color: #1976d2; margin-left: 8px;"
+        )
         tb_layout.addWidget(self.lbl_moves_seq)
 
         tb_layout.addStretch()
 
         self.chk_last_played = QCheckBox("Last Played")
         self.chk_last_played.setChecked(True)
-        self.chk_last_played.setToolTip("Toggle displaying 'Last Played' date vs 'Avg Elo (W/B)' in the candidate moves table")
+        self.chk_last_played.setToolTip(
+            "Toggle displaying 'Last Played' date vs 'Avg Elo (W/B)' in the candidate moves table"
+        )
         self.chk_last_played.toggled.connect(self.on_last_played_toggled)
         tb_layout.addWidget(self.chk_last_played)
 
         self.combo_scope = QComboBox()
         self.combo_scope.addItems(["🌐 Entire Database", "🔍 Search Results"])
-        self.combo_scope.setToolTip("Choose whether to calculate tree statistics across the entire database or only for current search results")
-        self.combo_scope.setStyleSheet("padding: 2px 6px; font-size: 11px; font-weight: bold;")
+        self.combo_scope.setToolTip(
+            "Choose whether to calculate tree statistics across the entire database or only for current search results"
+        )
+        self.combo_scope.setStyleSheet(
+            "padding: 2px 6px; font-size: 11px; font-weight: bold;"
+        )
         self.combo_scope.currentIndexChanged.connect(self.on_scope_changed)
         tb_layout.addWidget(self.combo_scope)
 
@@ -67,7 +87,9 @@ class OpeningTreeWidget(QWidget):
         tb_layout.addWidget(self.btn_unload)
 
         self.btn_rebuild = QPushButton("⚡ Rebuild Index")
-        self.btn_rebuild.setStyleSheet("font-weight: bold; padding: 3px 8px; font-size: 11px;")
+        self.btn_rebuild.setStyleSheet(
+            "font-weight: bold; padding: 3px 8px; font-size: 11px;"
+        )
         self.btn_rebuild.clicked.connect(self.main_window.prompt_build_pos_index)
         tb_layout.addWidget(self.btn_rebuild)
 
@@ -76,7 +98,9 @@ class OpeningTreeWidget(QWidget):
         # Summary Bar (Games count, Win/Draw/Loss percentages)
         self.summary_card = QFrame()
         self.summary_card.setFrameShape(QFrame.StyledPanel)
-        self.summary_card.setStyleSheet("background-color: #f1f3f4; border-radius: 4px; padding: 4px;")
+        self.summary_card.setStyleSheet(
+            "background-color: #f1f3f4; border-radius: 4px; padding: 4px;"
+        )
         sum_box = QHBoxLayout(self.summary_card)
         sum_box.setContentsMargins(8, 4, 8, 4)
 
@@ -91,7 +115,9 @@ class OpeningTreeWidget(QWidget):
 
         sum_box.addStretch()
         self.lbl_index_badge = QLabel("⚡ Fast Index Active")
-        self.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        self.lbl_index_badge.setStyleSheet(
+            "color: #2e7d32; font-weight: bold; font-size: 11px;"
+        )
         sum_box.addWidget(self.lbl_index_badge)
 
         main_layout.addWidget(self.summary_card)
@@ -117,7 +143,9 @@ class OpeningTreeWidget(QWidget):
         m_box.setSpacing(4)
 
         lbl_moves_title = QLabel("Candidate Moves")
-        lbl_moves_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #424242;")
+        lbl_moves_title.setStyleSheet(
+            "font-weight: bold; font-size: 11px; color: #424242;"
+        )
         m_box.addWidget(lbl_moves_title)
 
         self.tree_table = QTableWidget()
@@ -139,15 +167,19 @@ class OpeningTreeWidget(QWidget):
         s_box.setContentsMargins(0, 4, 0, 0)
         s_box.setSpacing(4)
 
-        self.lbl_sample_games_title = QLabel("Sample Games in Position (Double-click to load)")
-        self.lbl_sample_games_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #424242;")
+        self.lbl_sample_games_title = QLabel(
+            "Sample Games in Position (Double-click to load)"
+        )
+        self.lbl_sample_games_title.setStyleSheet(
+            "font-weight: bold; font-size: 11px; color: #424242;"
+        )
         s_box.addWidget(self.lbl_sample_games_title)
 
         self.sample_games_table = QTableWidget()
         self.sample_games_table.setColumnCount(7)
-        self.sample_games_table.setHorizontalHeaderLabels([
-            "ID", "White", "Black", "Result", "Date", "ECO", "Event"
-        ])
+        self.sample_games_table.setHorizontalHeaderLabels(
+            ["ID", "White", "Black", "Result", "Date", "ECO", "Event"]
+        )
         s_header = self.sample_games_table.horizontalHeader()
         s_header.setSectionResizeMode(QHeaderView.Interactive)
         s_header.setStretchLastSection(True)
@@ -159,7 +191,9 @@ class OpeningTreeWidget(QWidget):
         self.sample_games_table.setColumnWidth(5, 55)
         self.sample_games_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.sample_games_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.sample_games_table.doubleClicked.connect(self.on_sample_game_double_clicked)
+        self.sample_games_table.doubleClicked.connect(
+            self.on_sample_game_double_clicked
+        )
         s_box.addWidget(self.sample_games_table)
         right_splitter.addWidget(sample_panel)
 
@@ -173,10 +207,12 @@ class OpeningTreeWidget(QWidget):
         main_layout.addWidget(splitter)
 
     def _update_table_headers(self):
-        last_col = "Last Played" if self.chk_last_played.isChecked() else "Avg Elo (W/B)"
-        self.tree_table.setHorizontalHeaderLabels([
-            "Move", "Games", "Score", "1-0 %", "1/2 %", "0-1 %", last_col
-        ])
+        last_col = (
+            "Last Played" if self.chk_last_played.isChecked() else "Avg Elo (W/B)"
+        )
+        self.tree_table.setHorizontalHeaderLabels(
+            ["Move", "Games", "Score", "1-0 %", "1/2 %", "0-1 %", last_col]
+        )
 
     def on_last_played_toggled(self, checked: bool):
         self._update_table_headers()
@@ -186,24 +222,36 @@ class OpeningTreeWidget(QWidget):
     def update_tree_index_badge(self, status: str, count: int = 0):
         self.tree_index_status = status
         self.tree_index_count = count
-        if hasattr(self, 'combo_scope') and self.combo_scope.currentIndex() == 1:
+        if hasattr(self, "combo_scope") and self.combo_scope.currentIndex() == 1:
             self.lbl_index_badge.setText("🔍 Filtered Search Results (Dynamic)")
-            self.lbl_index_badge.setStyleSheet("color: #1565c0; font-weight: bold; font-size: 11px;")
+            self.lbl_index_badge.setStyleSheet(
+                "color: #1565c0; font-weight: bold; font-size: 11px;"
+            )
             return
 
         if status == "valid":
             self.lbl_index_badge.setText(f"🟢 Fast Tree Index: Active ({count:,} pos)")
-            self.lbl_index_badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+            self.lbl_index_badge.setStyleSheet(
+                "color: #2e7d32; font-weight: bold; font-size: 11px;"
+            )
         elif status == "outdated":
-            self.lbl_index_badge.setText("🟠 Fast Tree Index: Outdated [Rebuild Recommended]")
-            self.lbl_index_badge.setStyleSheet("color: #e65100; font-weight: bold; font-size: 11px;")
+            self.lbl_index_badge.setText(
+                "🟠 Fast Tree Index: Outdated [Rebuild Recommended]"
+            )
+            self.lbl_index_badge.setStyleSheet(
+                "color: #e65100; font-weight: bold; font-size: 11px;"
+            )
         else:
-            self.lbl_index_badge.setText("⚪ Fast Tree Index: Not Built (Dynamic Fallback)")
-            self.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
+            self.lbl_index_badge.setText(
+                "⚪ Fast Tree Index: Not Built (Dynamic Fallback)"
+            )
+            self.lbl_index_badge.setStyleSheet(
+                "color: #757575; font-weight: bold; font-size: 11px;"
+            )
 
     def on_scope_changed(self, index: int):
-        status = getattr(self, 'tree_index_status', 'missing')
-        count = getattr(self, 'tree_index_count', 0)
+        status = getattr(self, "tree_index_status", "missing")
+        count = getattr(self, "tree_index_count", 0)
         self.update_tree_index_badge(status, count)
         self.refresh_current_position()
 
@@ -215,7 +263,11 @@ class OpeningTreeWidget(QWidget):
         self.board_editor.update_board_ui()
         self._update_history_label()
 
-        use_search_results = (self.combo_scope.currentIndex() == 1) if hasattr(self, 'combo_scope') else False
+        use_search_results = (
+            (self.combo_scope.currentIndex() == 1)
+            if hasattr(self, "combo_scope")
+            else False
+        )
         params = {"fen": fen}
         if use_search_results:
             params["use_search_results"] = True
@@ -252,7 +304,9 @@ class OpeningTreeWidget(QWidget):
         selected_rows = self.tree_table.selectionModel().selectedRows()
         if not selected_rows:
             if self.current_report:
-                self.lbl_sample_games_title.setText("Sample Games in Position (Double-click to load)")
+                self.lbl_sample_games_title.setText(
+                    "Sample Games in Position (Double-click to load)"
+                )
                 self._populate_sample_games(self.current_report.get("sample_games", []))
             return
 
@@ -264,7 +318,9 @@ class OpeningTreeWidget(QWidget):
         san = move_data.get("san", "")
         sample_ids = move_data.get("sample_game_ids", [])
         if sample_ids:
-            self.lbl_sample_games_title.setText(f"Sample Games for {san} ({len(sample_ids)} games) (Double-click to load)")
+            self.lbl_sample_games_title.setText(
+                f"Sample Games for {san} ({len(sample_ids)} games) (Double-click to load)"
+            )
             self.client.send_request("get_game_summaries", {"game_ids": sample_ids})
         else:
             self.sample_games_table.setRowCount(0)
@@ -333,14 +389,18 @@ class OpeningTreeWidget(QWidget):
         b_pct = report.get("black_pct", 0.0)
 
         self.lbl_summary_games.setText(f"Total Games in Position: {total_games:,}")
-        self.lbl_summary_score.setText(f"⚪ White: {w_pct:.1f}% | 🤝 Draw: {d_pct:.1f}% | ⚫ Black: {b_pct:.1f}%")
+        self.lbl_summary_score.setText(
+            f"⚪ White: {w_pct:.1f}% | 🤝 Draw: {d_pct:.1f}% | ⚫ Black: {b_pct:.1f}%"
+        )
 
         moves = report.get("moves", [])
         self._render_tree_table(moves)
 
         # Populate initial sample games for the position
         sample_games = report.get("sample_games", [])
-        self.lbl_sample_games_title.setText(f"Sample Games in Position ({len(sample_games)} games) (Double-click to load)")
+        self.lbl_sample_games_title.setText(
+            f"Sample Games in Position ({len(sample_games)} games) (Double-click to load)"
+        )
         self._populate_sample_games(sample_games)
 
     def _render_tree_table(self, moves: list):
@@ -394,10 +454,10 @@ class OpeningTreeWidget(QWidget):
     def unload_index(self):
         if self.client.is_running():
             self.client.send_request("unload_pos_index")
-            self.main_window.status_bar.showMessage("Position index unloaded from RAM.", 4000)
+            self.main_window.status_bar.showMessage(
+                "Position index unloaded from RAM.", 4000
+            )
             self.lbl_index_badge.setText("⚪ Fast Index: On Disk (Unloaded)")
-            self.lbl_index_badge.setStyleSheet("color: #757575; font-weight: bold; font-size: 11px;")
-
-
-
-
+            self.lbl_index_badge.setStyleSheet(
+                "color: #757575; font-weight: bold; font-size: 11px;"
+            )

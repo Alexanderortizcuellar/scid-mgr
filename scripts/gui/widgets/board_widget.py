@@ -5,9 +5,16 @@ from PyQt5.QtCore import Qt, pyqtSignal, QByteArray, QSize, QMimeData
 from PyQt5.QtGui import QPixmap, QPainter, QIcon, QDrag
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
-    QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QButtonGroup, QApplication
+    QWidget,
+    QLabel,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QPushButton,
+    QButtonGroup,
+    QApplication,
 )
+
 
 def get_piece_pixmap(piece, size=40):
     """Generates a QPixmap from the python-chess SVG piece."""
@@ -24,6 +31,7 @@ def get_piece_pixmap(piece, size=40):
 
 class SquareWidget(QLabel):
     """A custom label representing a single square on the chessboard."""
+
     def __init__(self, square_index, is_light, editor_parent):
         super().__init__()
         self.square_index = square_index
@@ -37,7 +45,9 @@ class SquareWidget(QLabel):
 
     def update_background(self, selected=False):
         color = "#99CC99" if selected else self.base_color
-        self.setStyleSheet(f"background-color: {color}; border: 1px solid rgba(0,0,0,0.05);")
+        self.setStyleSheet(
+            f"background-color: {color}; border: 1px solid rgba(0,0,0,0.05);"
+        )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -47,7 +57,9 @@ class SquareWidget(QLabel):
     def mouseMoveEvent(self, event):
         if not self.drag_start_pos or not (event.buttons() & Qt.LeftButton):
             return
-        if (event.pos() - self.drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+        if (
+            event.pos() - self.drag_start_pos
+        ).manhattanLength() < QApplication.startDragDistance():
             return
 
         active_btn = self.editor_parent.tool_group.checkedButton()
@@ -82,6 +94,7 @@ class ChessBoardEditorWidget(QWidget):
     Embedded Chess Board Editor with piece palette, click-to-place, drag-and-drop,
     and partial position support (e.g. single Queen on d4).
     """
+
     fen_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -138,7 +151,11 @@ class ChessBoardEditorWidget(QWidget):
 
         # Hand / Move tool
         btn_hand = QPushButton()
-        btn_hand.setIcon(qta.icon("fa5s.hand-pointer", color="#333" if color == chess.BLACK else "#1976d2"))
+        btn_hand.setIcon(
+            qta.icon(
+                "fa5s.hand-pointer", color="#333" if color == chess.BLACK else "#1976d2"
+            )
+        )
         btn_hand.setCheckable(True)
         btn_hand.setFixedSize(38, 38)
         btn_hand.setToolTip("Hand: Click or Drag to move pieces on the board")
@@ -248,5 +265,3 @@ class ChessBoardEditorWidget(QWidget):
 
     def get_board_fen(self) -> str:
         return self.board.fen()
-
-

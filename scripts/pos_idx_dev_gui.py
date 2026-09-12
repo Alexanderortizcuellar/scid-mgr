@@ -11,22 +11,35 @@ Features:
 
 import os
 import sys
-import json
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QLineEdit, QFileDialog, QTableWidget,
-    QTableWidgetItem, QHeaderView, QGroupBox, QFormLayout, QSpinBox,
-    QProgressBar, QTextEdit, QSplitter, QTabWidget, QMessageBox, QFrame
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QLineEdit,
+    QFileDialog,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QGroupBox,
+    QFormLayout,
+    QSpinBox,
+    QTextEdit,
+    QTabWidget,
 )
 from gui.backend_client import BackendClient
 from gui.dialogs.build_pos_index_dialog import BuildPosIndexDialog
+
 
 class PosIdxDevWorkbench(QMainWindow):
     def __init__(self):
@@ -56,7 +69,9 @@ class PosIdxDevWorkbench(QMainWindow):
 
         self.db_input = QLineEdit()
         self.db_input.setPlaceholderText("Path to .si5, .si4, or .pgn database...")
-        default_db = r"C:\Users\ASUS\programming\qt_programs\chess\twchess\data\database.si5"
+        default_db = (
+            r"C:\Users\ASUS\programming\qt_programs\chess\twchess\data\database.si5"
+        )
         if os.path.exists(default_db):
             self.db_input.setText(default_db)
         top_layout.addWidget(self.db_input, 4)
@@ -66,12 +81,16 @@ class PosIdxDevWorkbench(QMainWindow):
         top_layout.addWidget(btn_browse, 1)
 
         self.btn_open = QPushButton("⚡ Load / Connect")
-        self.btn_open.setStyleSheet("font-weight: bold; background-color: #0288d1; color: white;")
+        self.btn_open.setStyleSheet(
+            "font-weight: bold; background-color: #0288d1; color: white;"
+        )
         self.btn_open.clicked.connect(self.open_database)
         top_layout.addWidget(self.btn_open, 1)
 
         self.btn_build_idx = QPushButton("🔨 Build .pos.idx...")
-        self.btn_build_idx.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white;")
+        self.btn_build_idx.setStyleSheet(
+            "font-weight: bold; background-color: #2e7d32; color: white;"
+        )
         self.btn_build_idx.clicked.connect(self.open_build_dialog)
         top_layout.addWidget(self.btn_build_idx, 1)
 
@@ -95,9 +114,17 @@ class PosIdxDevWorkbench(QMainWindow):
         tree_layout.addLayout(nav_bar)
 
         self.tree_table = QTableWidget(0, 7)
-        self.tree_table.setHorizontalHeaderLabels([
-            "Move (SAN)", "UCI", "Games", "White Win %", "Draw %", "Black Win %", "Sample Game IDs"
-        ])
+        self.tree_table.setHorizontalHeaderLabels(
+            [
+                "Move (SAN)",
+                "UCI",
+                "Games",
+                "White Win %",
+                "Draw %",
+                "Black Win %",
+                "Sample Game IDs",
+            ]
+        )
         self.tree_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tree_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.tree_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -115,7 +142,9 @@ class PosIdxDevWorkbench(QMainWindow):
         diag_layout = QVBoxLayout(tab_diag)
 
         diag_top = QHBoxLayout()
-        self.lbl_diag_status = QLabel("Diagnostics: Click 'Scan Index' to analyze adaptive GameSet breakdown.")
+        self.lbl_diag_status = QLabel(
+            "Diagnostics: Click 'Scan Index' to analyze adaptive GameSet breakdown."
+        )
         self.lbl_diag_status.setStyleSheet("font-weight: bold;")
         diag_top.addWidget(self.lbl_diag_status, 4)
 
@@ -158,7 +187,16 @@ class PosIdxDevWorkbench(QMainWindow):
         self.table_dist.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_dist.verticalHeader().setVisible(False)
         self.table_dist.setEditTriggers(QTableWidget.NoEditTriggers)
-        for r, name in enumerate(["1 – 10 games", "11 – 100 games", "101 – 1,000 games", "1,001 – 10,000 games", "10,001 – 100,000 games", "100,001+ games"]):
+        for r, name in enumerate(
+            [
+                "1 – 10 games",
+                "11 – 100 games",
+                "101 – 1,000 games",
+                "1,001 – 10,000 games",
+                "10,001 – 100,000 games",
+                "100,001+ games",
+            ]
+        ):
             self.table_dist.setItem(r, 0, QTableWidgetItem(name))
             self.table_dist.setItem(r, 1, QTableWidgetItem("—"))
         dist_layout.addWidget(self.table_dist)
@@ -185,14 +223,18 @@ class PosIdxDevWorkbench(QMainWindow):
         filt_form.addRow("Filter Simulation Size:", self.spin_filter_count)
 
         btn_run_filter_test = QPushButton("⚡ Benchmark Filtered Tree Set Intersection")
-        btn_run_filter_test.setStyleSheet("font-weight: bold; background-color: #6a1b9a; color: white; padding: 6px 14px;")
+        btn_run_filter_test.setStyleSheet(
+            "font-weight: bold; background-color: #6a1b9a; color: white; padding: 6px 14px;"
+        )
         btn_run_filter_test.clicked.connect(self.run_filter_benchmark)
         filt_form.addRow(btn_run_filter_test)
         filter_layout.addLayout(filt_form)
 
         self.txt_filter_log = QTextEdit()
         self.txt_filter_log.setReadOnly(True)
-        self.txt_filter_log.setStyleSheet("font-family: monospace; font-size: 12px; background-color: #1e1e1e; color: #d4d4d4;")
+        self.txt_filter_log.setStyleSheet(
+            "font-family: monospace; font-size: 12px; background-color: #1e1e1e; color: #d4d4d4;"
+        )
         filter_layout.addWidget(self.txt_filter_log)
 
         self.tabs.addTab(tab_filter, "🔬 Filter Set-Intersection Lab")
@@ -205,9 +247,13 @@ class PosIdxDevWorkbench(QMainWindow):
         main_layout.addWidget(self.status_bar)
 
     def start_backend(self):
-        backend_bin = os.path.join(SCRIPT_DIR, "..", "target", "release", "scid-mgr.exe")
+        backend_bin = os.path.join(
+            SCRIPT_DIR, "..", "target", "release", "scid-mgr.exe"
+        )
         if not os.path.exists(backend_bin):
-            backend_bin = os.path.join(SCRIPT_DIR, "..", "target", "debug", "scid-mgr.exe")
+            backend_bin = os.path.join(
+                SCRIPT_DIR, "..", "target", "debug", "scid-mgr.exe"
+            )
         try:
             self.client.start(backend_bin)
             self.status_bar.setText(f"Backend started: {backend_bin}")
@@ -220,8 +266,10 @@ class PosIdxDevWorkbench(QMainWindow):
 
     def browse_db(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Chess Database", "",
-            "Chess Databases (*.si5 *.si4 *.pgn);;All Files (*)"
+            self,
+            "Select Chess Database",
+            "",
+            "Chess Databases (*.si5 *.si4 *.pgn);;All Files (*)",
         )
         if path:
             self.db_input.setText(path)
@@ -265,12 +313,22 @@ class PosIdxDevWorkbench(QMainWindow):
             for r, m in enumerate(moves):
                 self.tree_table.setItem(r, 0, QTableWidgetItem(m.get("san", "")))
                 self.tree_table.setItem(r, 1, QTableWidgetItem(m.get("uci", "")))
-                self.tree_table.setItem(r, 2, QTableWidgetItem(f"{m.get('total_games', 0):,}"))
-                self.tree_table.setItem(r, 3, QTableWidgetItem(f"{m.get('white_pct', 0.0):.1f}%"))
-                self.tree_table.setItem(r, 4, QTableWidgetItem(f"{m.get('draw_pct', 0.0):.1f}%"))
-                self.tree_table.setItem(r, 5, QTableWidgetItem(f"{m.get('black_pct', 0.0):.1f}%"))
+                self.tree_table.setItem(
+                    r, 2, QTableWidgetItem(f"{m.get('total_games', 0):,}")
+                )
+                self.tree_table.setItem(
+                    r, 3, QTableWidgetItem(f"{m.get('white_pct', 0.0):.1f}%")
+                )
+                self.tree_table.setItem(
+                    r, 4, QTableWidgetItem(f"{m.get('draw_pct', 0.0):.1f}%")
+                )
+                self.tree_table.setItem(
+                    r, 5, QTableWidgetItem(f"{m.get('black_pct', 0.0):.1f}%")
+                )
                 samples = m.get("sample_game_ids", [])
-                sample_str = ", ".join(str(gid) for gid in samples[:10]) + ("..." if len(samples) > 10 else "")
+                sample_str = ", ".join(str(gid) for gid in samples[:10]) + (
+                    "..." if len(samples) > 10 else ""
+                )
                 self.tree_table.setItem(r, 6, QTableWidgetItem(sample_str))
 
             self.lbl_query_stats.setText(
@@ -306,20 +364,32 @@ class PosIdxDevWorkbench(QMainWindow):
             roar_cnt = data.get("roaring_count", 0)
 
             self.lbl_diag_total_sets.setText(f"{tot:,}")
-            self.lbl_diag_delta.setText(f"{delta_cnt:,} ({delta_cnt/tot*100:.2f}%)" if tot else "0")
-            self.lbl_diag_roaring.setText(f"{roar_cnt:,} ({roar_cnt/tot*100:.2f}%)" if tot else "0")
+            self.lbl_diag_delta.setText(
+                f"{delta_cnt:,} ({delta_cnt / tot * 100:.2f}%)" if tot else "0"
+            )
+            self.lbl_diag_roaring.setText(
+                f"{roar_cnt:,} ({roar_cnt / tot * 100:.2f}%)" if tot else "0"
+            )
 
             b_delta = data.get("bytes_if_all_delta", 0)
             b_roar = data.get("bytes_if_all_roaring", 0)
             b_adapt = data.get("bytes_adaptive", 0)
 
-            self.lbl_diag_size_delta.setText(f"{b_delta:,} bytes ({b_delta / 1048576:.2f} MB)")
-            self.lbl_diag_size_roaring.setText(f"{b_roar:,} bytes ({b_roar / 1048576:.2f} MB)")
-            self.lbl_diag_size_adaptive.setText(f"{b_adapt:,} bytes ({b_adapt / 1048576:.2f} MB)")
+            self.lbl_diag_size_delta.setText(
+                f"{b_delta:,} bytes ({b_delta / 1048576:.2f} MB)"
+            )
+            self.lbl_diag_size_roaring.setText(
+                f"{b_roar:,} bytes ({b_roar / 1048576:.2f} MB)"
+            )
+            self.lbl_diag_size_adaptive.setText(
+                f"{b_adapt:,} bytes ({b_adapt / 1048576:.2f} MB)"
+            )
 
             sav_delta = ((b_delta - b_adapt) / b_delta * 100.0) if b_delta > 0 else 0.0
             sav_roar = ((b_roar - b_adapt) / b_roar * 100.0) if b_roar > 0 else 0.0
-            self.lbl_diag_savings.setText(f"{sav_delta:.2f}% saved vs all-Delta | {sav_roar:.2f}% saved vs all-Roaring")
+            self.lbl_diag_savings.setText(
+                f"{sav_delta:.2f}% saved vs all-Delta | {sav_roar:.2f}% saved vs all-Roaring"
+            )
 
             buckets = [
                 data.get("bucket_1_10", 0),
@@ -331,9 +401,13 @@ class PosIdxDevWorkbench(QMainWindow):
             ]
             for r, count in enumerate(buckets):
                 pct = (count / tot * 100.0) if tot else 0.0
-                self.table_dist.setItem(r, 1, QTableWidgetItem(f"{count:,} ({pct:.2f}%)"))
+                self.table_dist.setItem(
+                    r, 1, QTableWidgetItem(f"{count:,} ({pct:.2f}%)")
+                )
 
-            self.lbl_diag_status.setText(f"✅ Diagnostics completed in {elapsed_ms:.1f} ms!")
+            self.lbl_diag_status.setText(
+                f"✅ Diagnostics completed in {elapsed_ms:.1f} ms!"
+            )
 
         self.client.send_request("pos_index_diagnostics", {}, callback=on_diag_resp)
 
@@ -341,10 +415,13 @@ class PosIdxDevWorkbench(QMainWindow):
         if not self.client.is_running():
             return
         count = self.spin_filter_count.value()
-        self.txt_filter_log.append(f"--- Running Filter Simulation with {count:,} Game IDs ---")
+        self.txt_filter_log.append(
+            f"--- Running Filter Simulation with {count:,} Game IDs ---"
+        )
         mock_gids = list(range(count))
 
         t0 = time.perf_counter()
+
         def on_bench_resp(resp):
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             if resp.get("status") == "ok":
@@ -361,19 +438,27 @@ class PosIdxDevWorkbench(QMainWindow):
                         f"   - {m.get('san'):<5} | Games: {m.get('total_games'):>6} | "
                         f"+{m.get('white_pct'):.1f}% / ={m.get('draw_pct'):.1f}% / -{m.get('black_pct'):.1f}%"
                     )
-                self.txt_filter_log.append("--------------------------------------------------\n")
+                self.txt_filter_log.append(
+                    "--------------------------------------------------\n"
+                )
             else:
                 self.txt_filter_log.append(f"❌ Query failed: {resp.get('error')}\n")
 
-        self.client.send_request("opening_tree", {"fen": "", "game_ids": mock_gids}, callback=on_bench_resp)
+        self.client.send_request(
+            "opening_tree", {"fen": "", "game_ids": mock_gids}, callback=on_bench_resp
+        )
 
     def on_backend_response(self, resp):
         if not self.client.is_running():
             return
         if resp.get("status") == "ok":
             d = resp.get("data")
-            if isinstance(d, dict) and ("format" in d or "db_type" in d or "total_games" in d):
-                self.status_bar.setText(f"Opened {d.get('path', 'database')} ({d.get('total_games', 0):,} games)")
+            if isinstance(d, dict) and (
+                "format" in d or "db_type" in d or "total_games" in d
+            ):
+                self.status_bar.setText(
+                    f"Opened {d.get('path', 'database')} ({d.get('total_games', 0):,} games)"
+                )
                 self.query_opening_tree("")
                 self.scan_diagnostics()
 
@@ -389,11 +474,13 @@ class PosIdxDevWorkbench(QMainWindow):
         self.client.stop()
         super().closeEvent(event)
 
+
 def main():
     app = QApplication(sys.argv)
     window = PosIdxDevWorkbench()
     window.show()
     sys.exit(app.exec_())
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

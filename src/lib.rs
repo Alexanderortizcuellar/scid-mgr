@@ -82,9 +82,7 @@ pub use position_index::{
     IndexDiagnostics as PositionIndexDiagnostics, IndexStatus, PositionIndex, PositionIndexHeader,
     PositionPostingList,
 };
-pub use position_search::{
-    MaterialFilter, PositionMatch, PositionSearchResult,
-};
+pub use position_search::{MaterialFilter, PositionMatch, PositionSearchResult};
 pub use tree_index::{
     OpeningTreeMoveView, OpeningTreeReport, TreeIndex, TreeIndexDiagnostics, TreeIndexHeader,
     TreeMoveStats, TreePositionNode,

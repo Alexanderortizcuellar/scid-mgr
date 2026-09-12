@@ -1,11 +1,19 @@
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QScrollArea, QWidget,
-    QCheckBox, QHBoxLayout, QPushButton, QTableView
+    QDialog,
+    QVBoxLayout,
+    QLabel,
+    QScrollArea,
+    QWidget,
+    QCheckBox,
+    QHBoxLayout,
+    QPushButton,
+    QTableView,
 )
+
 
 class ColumnsConfigDialog(QDialog):
     """Dialog allowing user to check/uncheck columns to display in the database table."""
+
     def __init__(self, table_view: QTableView, headers: list, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Configure Column Visibility")
@@ -47,7 +55,9 @@ class ColumnsConfigDialog(QDialog):
 
         btn_row2 = QHBoxLayout()
         btn_apply = QPushButton("Apply")
-        btn_apply.setStyleSheet("font-weight: bold; background-color: #0288d1; color: white;")
+        btn_apply.setStyleSheet(
+            "font-weight: bold; background-color: #0288d1; color: white;"
+        )
         btn_apply.clicked.connect(self.apply_changes)
         btn_row2.addWidget(btn_apply)
 
@@ -69,5 +79,3 @@ class ColumnsConfigDialog(QDialog):
             self.table_view.setColumnHidden(col, not cb.isChecked())
         if self.parent() and hasattr(self.parent(), "save_column_settings"):
             self.parent().save_column_settings()
-
-

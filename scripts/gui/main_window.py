@@ -4,12 +4,32 @@ import json
 from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer, QSettings
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
-    QLabel, QLineEdit, QPushButton, QComboBox, QTableView, QHeaderView,
-    QTextEdit, QGroupBox, QFileDialog, QMessageBox, QTabWidget, QStatusBar,
-    QFrame, QCheckBox, QDialog, QMenu, QAction, QApplication
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QSplitter,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QComboBox,
+    QTableView,
+    QHeaderView,
+    QTextEdit,
+    QGroupBox,
+    QFileDialog,
+    QMessageBox,
+    QTabWidget,
+    QStatusBar,
+    QFrame,
+    QCheckBox,
+    QDialog,
+    QMenu,
+    QAction,
+    QApplication,
 )
 
 from .backend_client import BackendClient
@@ -24,6 +44,7 @@ from .dialogs.build_pos_index_dialog import BuildPosIndexDialog
 from .dialogs.pos_idx_diagnostics_dialog import PosIdxDiagnosticsDialog
 from .dialogs.search_progress_dialog import SearchProgressDialog
 from .dialogs.settings_dialog import SettingsDialog
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -88,7 +109,9 @@ class MainWindow(QMainWindow):
         scid_cpp_row = QHBoxLayout()
         self.scid_cpp_input = QLineEdit()
         scid_cpp_row.addWidget(self.scid_cpp_input)
-        self.chk_use_scid_cpp = QCheckBox("Use external SCID C++ binary instead of Native Rust (~1.2s)")
+        self.chk_use_scid_cpp = QCheckBox(
+            "Use external SCID C++ binary instead of Native Rust (~1.2s)"
+        )
         self.chk_use_scid_cpp.setChecked(False)
         self.chk_use_scid_cpp.setStyleSheet("color: #666;")
         scid_cpp_row.addWidget(self.chk_use_scid_cpp)
@@ -100,7 +123,9 @@ class MainWindow(QMainWindow):
         # Database action buttons row
         db_actions_layout = QHBoxLayout()
         self.btn_connect = QPushButton("Start Backend")
-        self.btn_connect.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 12px;")
+        self.btn_connect.setStyleSheet(
+            "font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 12px;"
+        )
         self.btn_connect.clicked.connect(self.toggle_backend)
         db_actions_layout.addWidget(self.btn_connect)
 
@@ -121,7 +146,9 @@ class MainWindow(QMainWindow):
         db_actions_layout.addWidget(self.btn_compact)
 
         self.btn_save = QPushButton("Save DB")
-        self.btn_save.setStyleSheet("font-weight: bold; background-color: #0288d1; color: white; padding: 6px 12px;")
+        self.btn_save.setStyleSheet(
+            "font-weight: bold; background-color: #0288d1; color: white; padding: 6px 12px;"
+        )
         self.btn_save.clicked.connect(self.save_db)
         db_actions_layout.addWidget(self.btn_save)
 
@@ -179,8 +206,12 @@ class MainWindow(QMainWindow):
 
         stats_layout.addSpacing(15)
         self.btn_pos_index = QPushButton("⚡ Build Fast Index")
-        self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
-        self.btn_pos_index.setToolTip("Position Companion Index (.pos.idx) for sub-millisecond opening tree & position search")
+        self.btn_pos_index.setStyleSheet(
+            "font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;"
+        )
+        self.btn_pos_index.setToolTip(
+            "Position Companion Index (.pos.idx) for sub-millisecond opening tree & position search"
+        )
         self.btn_pos_index.clicked.connect(self.prompt_build_pos_index)
         stats_layout.addWidget(self.btn_pos_index)
 
@@ -254,19 +285,25 @@ class MainWindow(QMainWindow):
         # Position (FEN) Search Row
         filters_layout.addWidget(QLabel("Position (FEN):"), 3, 0)
         self.filter_fen = QLineEdit()
-        self.filter_fen.setPlaceholderText("e.g. rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6")
+        self.filter_fen.setPlaceholderText(
+            "e.g. rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6"
+        )
         self.filter_fen.returnPressed.connect(self.on_search_clicked)
         filters_layout.addWidget(self.filter_fen, 3, 1, 1, 3)
 
         # Action buttons
         btn_search_layout = QHBoxLayout()
         self.btn_search = QPushButton("Apply Filters / Search")
-        self.btn_search.setStyleSheet("font-weight: bold; background-color: #1976d2; color: white; padding: 5px 15px;")
+        self.btn_search.setStyleSheet(
+            "font-weight: bold; background-color: #1976d2; color: white; padding: 5px 15px;"
+        )
         self.btn_search.clicked.connect(self.on_search_clicked)
         btn_search_layout.addWidget(self.btn_search)
 
         self.btn_adv_search = QPushButton("🔍 Advanced Search...")
-        self.btn_adv_search.setStyleSheet("font-weight: bold; background-color: #6a1b9a; color: white; padding: 5px 12px;")
+        self.btn_adv_search.setStyleSheet(
+            "font-weight: bold; background-color: #6a1b9a; color: white; padding: 5px 12px;"
+        )
         self.btn_adv_search.clicked.connect(self.open_advanced_search)
         btn_search_layout.addWidget(self.btn_adv_search)
 
@@ -299,7 +336,9 @@ class MainWindow(QMainWindow):
         header.customContextMenuRequested.connect(self.show_header_context_menu)
 
         self.table_view.verticalHeader().setDefaultSectionSize(26)
-        self.table_view.selectionModel().selectionChanged.connect(self.on_table_selection_changed)
+        self.table_view.selectionModel().selectionChanged.connect(
+            self.on_table_selection_changed
+        )
         sb = self.table_view.verticalScrollBar()
         sb.valueChanged.connect(self.on_scroll_changed)
         sb.sliderReleased.connect(self.on_scroll_settled)
@@ -310,8 +349,12 @@ class MainWindow(QMainWindow):
 
         # Virtual Scroll Status Bar
         vscroll_bar = QHBoxLayout()
-        self.lbl_vscroll_info = QLabel("Matching Games: 0 | Cached: 0 | ⚡ Virtual Scrolling Active")
-        self.lbl_vscroll_info.setStyleSheet("color: #444; font-size: 11px; padding: 2px;")
+        self.lbl_vscroll_info = QLabel(
+            "Matching Games: 0 | Cached: 0 | ⚡ Virtual Scrolling Active"
+        )
+        self.lbl_vscroll_info.setStyleSheet(
+            "color: #444; font-size: 11px; padding: 2px;"
+        )
         vscroll_bar.addWidget(self.lbl_vscroll_info)
         vscroll_bar.addStretch()
 
@@ -420,7 +463,9 @@ class MainWindow(QMainWindow):
             act = QAction(f"{col + 1}. {name}", menu, checkable=True)
             act.setChecked(not self.table_view.isColumnHidden(col))
             act.setData(col)
-            act.triggered.connect(lambda checked, c=col: self.toggle_column_visibility(c, checked))
+            act.triggered.connect(
+                lambda checked, c=col: self.toggle_column_visibility(c, checked)
+            )
             menu.addAction(act)
 
         menu.addSeparator()
@@ -450,7 +495,11 @@ class MainWindow(QMainWindow):
 
     def save_column_settings(self):
         settings = QSettings("ChessScidMgr", "ScidGui")
-        hidden_cols = [col for col in range(len(VirtualScidTableModel.HEADERS)) if self.table_view.isColumnHidden(col)]
+        hidden_cols = [
+            col
+            for col in range(len(VirtualScidTableModel.HEADERS))
+            if self.table_view.isColumnHidden(col)
+        ]
         settings.setValue("columns_hidden", hidden_cols)
 
     def load_column_settings(self):
@@ -472,7 +521,9 @@ class MainWindow(QMainWindow):
             self.binary_input.setText(saved_bin)
 
         if not self.binary_input.text():
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            project_root = os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
             bin_names = ["scid-mgr.exe", "scid-mgr"]
             target_dirs = [
                 os.path.join(project_root, "target", "release"),
@@ -504,7 +555,10 @@ class MainWindow(QMainWindow):
 
     def browse_scid_cpp(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Official SCID scid.exe Binary", "", "Executables (*.exe);;All Files (*)"
+            self,
+            "Select Official SCID scid.exe Binary",
+            "",
+            "Executables (*.exe);;All Files (*)",
         )
         if path:
             self.scid_cpp_input.setText(path)
@@ -552,7 +606,9 @@ class MainWindow(QMainWindow):
             bin_path = self.binary_input.text().strip()
             db_path = self.db_input.text().strip()
             if not bin_path or not os.path.exists(bin_path):
-                QMessageBox.warning(self, "Invalid Binary", f"Cannot find binary at:\n{bin_path}")
+                QMessageBox.warning(
+                    self, "Invalid Binary", f"Cannot find binary at:\n{bin_path}"
+                )
                 return
 
             settings = QSettings("chess-scid-rw", "ScidDatabaseManager")
@@ -565,7 +621,9 @@ class MainWindow(QMainWindow):
                     threads=threads if threads > 0 else None,
                 )
                 self.update_ui_connected()
-                self.log_viewer.append(f"[GUI] Spawned backend (Threads: {threads or 'auto'}): {bin_path}")
+                self.log_viewer.append(
+                    f"[GUI] Spawned backend (Threads: {threads or 'auto'}): {bin_path}"
+                )
                 if db_path:
                     self.client.send_request("open", {"path": db_path})
                 else:
@@ -582,7 +640,9 @@ class MainWindow(QMainWindow):
         self.client.start(bin_path, threads=threads if threads > 0 else None)
         self.update_ui_connected()
         if create_format:
-            self.client.send_request("create", {"path": db_path, "format": create_format})
+            self.client.send_request(
+                "create", {"path": db_path, "format": create_format}
+            )
         else:
             self.client.send_request("open", {"path": db_path})
 
@@ -592,7 +652,9 @@ class MainWindow(QMainWindow):
 
     def open_pos_idx_diagnostics_dialog(self):
         if not self.client.is_running():
-            QMessageBox.warning(self, "Offline", "Backend is not running. Please open a database first.")
+            QMessageBox.warning(
+                self, "Offline", "Backend is not running. Please open a database first."
+            )
             return
         dlg = PosIdxDiagnosticsDialog(self.client, self)
         dlg.exec_()
@@ -601,13 +663,17 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText("Status: Connected")
         self.lbl_status.setStyleSheet("font-weight: bold; color: #2e7d32;")
         self.btn_connect.setText("Stop Backend")
-        self.btn_connect.setStyleSheet("font-weight: bold; background-color: #d32f2f; color: white; padding: 6px 12px;")
+        self.btn_connect.setStyleSheet(
+            "font-weight: bold; background-color: #d32f2f; color: white; padding: 6px 12px;"
+        )
 
     def update_ui_disconnected(self):
         self.lbl_status.setText("Status: Disconnected")
         self.lbl_status.setStyleSheet("font-weight: bold; color: #d32f2f;")
         self.btn_connect.setText("Start Backend")
-        self.btn_connect.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 12px;")
+        self.btn_connect.setStyleSheet(
+            "font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 12px;"
+        )
         self.table_model.clear()
         self.lbl_format.setText("Format: -")
         self.lbl_games_count.setText("Total Games: -")
@@ -677,8 +743,13 @@ class MainWindow(QMainWindow):
             self.current_material_filter = f.get("material")
             self.current_cql_filter = f.get("cql")
 
-            if self.table_model.sort_col is not None and self.table_model.sort_col in self.table_model.COLUMN_SORT_FIELDS:
-                f["sort_by"] = self.table_model.COLUMN_SORT_FIELDS[self.table_model.sort_col]
+            if (
+                self.table_model.sort_col is not None
+                and self.table_model.sort_col in self.table_model.COLUMN_SORT_FIELDS
+            ):
+                f["sort_by"] = self.table_model.COLUMN_SORT_FIELDS[
+                    self.table_model.sort_col
+                ]
                 f["sort_asc"] = self.table_model.sort_asc
             self.table_model.set_filters(f)
 
@@ -701,8 +772,13 @@ class MainWindow(QMainWindow):
         if self.current_cql_filter:
             filters["cql"] = self.current_cql_filter
 
-        if self.table_model.sort_col is not None and self.table_model.sort_col in self.table_model.COLUMN_SORT_FIELDS:
-            filters["sort_by"] = self.table_model.COLUMN_SORT_FIELDS[self.table_model.sort_col]
+        if (
+            self.table_model.sort_col is not None
+            and self.table_model.sort_col in self.table_model.COLUMN_SORT_FIELDS
+        ):
+            filters["sort_by"] = self.table_model.COLUMN_SORT_FIELDS[
+                self.table_model.sort_col
+            ]
             filters["sort_asc"] = self.table_model.sort_asc
         self.table_model.set_filters(filters)
 
@@ -759,11 +835,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Selection", "Please select a game to edit.")
             return
         current_pgn = self.pgn_viewer.toPlainText()
-        dialog = AddEditGameDialog(f"Edit Game #{self.selected_game_id}", initial_pgn=current_pgn, parent=self)
+        dialog = AddEditGameDialog(
+            f"Edit Game #{self.selected_game_id}", initial_pgn=current_pgn, parent=self
+        )
         if dialog.exec_() == QDialog.Accepted:
             pgn = dialog.get_pgn()
             if pgn:
-                self.client.send_request("update_game", {"index": self.selected_game_id, "pgn": pgn})
+                self.client.send_request(
+                    "update_game", {"index": self.selected_game_id, "pgn": pgn}
+                )
 
     def delete_selected_game(self):
         if self.selected_game_id is None or not self.client.is_running():
@@ -787,22 +867,35 @@ class MainWindow(QMainWindow):
 
     def import_pgn(self):
         if not self.client.is_running():
-            QMessageBox.warning(self, "Backend Offline", "Start backend and open a database first.")
+            QMessageBox.warning(
+                self, "Backend Offline", "Start backend and open a database first."
+            )
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Select PGN File to Import", "", "PGN Files (*.pgn);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select PGN File to Import", "", "PGN Files (*.pgn);;All Files (*)"
+        )
         if path:
             file_size_mb = os.path.getsize(path) / (1024 * 1024)
-            
+
             params = {"pgn_path": path}
             scid_exe = self.scid_cpp_input.text().strip()
-            if self.chk_use_scid_cpp.isChecked() and scid_exe and os.path.exists(scid_exe):
+            if (
+                self.chk_use_scid_cpp.isChecked()
+                and scid_exe
+                and os.path.exists(scid_exe)
+            ):
                 params["scid_exe"] = scid_exe
-                self.status_bar.showMessage(f"Importing {os.path.basename(path)} with SCID C++ engine (~5s)...")
+                self.status_bar.showMessage(
+                    f"Importing {os.path.basename(path)} with SCID C++ engine (~5s)..."
+                )
             else:
-                self.status_bar.showMessage(f"Importing {os.path.basename(path)} ({file_size_mb:.1f} MB)...")
-            
+                self.status_bar.showMessage(
+                    f"Importing {os.path.basename(path)} ({file_size_mb:.1f} MB)..."
+                )
+
             # Setup Progress Dialog
             from PyQt5.QtWidgets import QProgressDialog
+
             self.import_progress_dialog = QProgressDialog(
                 f"Importing {os.path.basename(path)}...\nStarting ingest engine...",
                 "Cancel",
@@ -820,12 +913,20 @@ class MainWindow(QMainWindow):
 
     def export_pgn(self):
         if not self.client.is_running():
-            QMessageBox.warning(self, "Backend Offline", "Start backend and open a database first.")
+            QMessageBox.warning(
+                self, "Backend Offline", "Start backend and open a database first."
+            )
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export Database to PGN", "export.pgn", "PGN Files (*.pgn);;All Files (*)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Database to PGN",
+            "export.pgn",
+            "PGN Files (*.pgn);;All Files (*)",
+        )
         if path:
             self.status_bar.showMessage(f"Exporting to {path}...")
             from PyQt5.QtWidgets import QProgressDialog
+
             self.export_progress_dialog = QProgressDialog(
                 f"Exporting {os.path.basename(path)}...\nFormatting PGN streams...",
                 "Cancel",
@@ -877,7 +978,9 @@ class MainWindow(QMainWindow):
                 self.import_progress_dialog.setLabelText(msg)
                 self.import_progress_dialog.setValue(percent)
 
-            self.status_bar.showMessage(f"Importing: {percent}% | {imported:,} games ({speed:,.0f} g/s, ETA: {eta}s)")
+            self.status_bar.showMessage(
+                f"Importing: {percent}% | {imported:,} games ({speed:,.0f} g/s, ETA: {eta}s)"
+            )
             return
 
         if data.get("event") == "export_progress":
@@ -898,7 +1001,9 @@ class MainWindow(QMainWindow):
                 self.export_progress_dialog.setLabelText(msg)
                 self.export_progress_dialog.setValue(percent)
 
-            self.status_bar.showMessage(f"Exporting: {percent}% | {exported:,} games ({speed:,.0f} g/s, ETA: {eta}s)")
+            self.status_bar.showMessage(
+                f"Exporting: {percent}% | {exported:,} games ({speed:,.0f} g/s, ETA: {eta}s)"
+            )
             return
 
         if data.get("event") == "search_progress":
@@ -908,16 +1013,25 @@ class MainWindow(QMainWindow):
             matches = prog.get("matches", 0)
             pct = prog.get("percent", 0.0)
 
-            if not hasattr(self, "search_progress_dialog") or self.search_progress_dialog is None:
-                self.search_progress_dialog = SearchProgressDialog("Searching Database Games...", self)
+            if (
+                not hasattr(self, "search_progress_dialog")
+                or self.search_progress_dialog is None
+            ):
+                self.search_progress_dialog = SearchProgressDialog(
+                    "Searching Database Games...", self
+                )
 
             if not self.search_progress_dialog.isVisible() and pct < 98.0:
                 self.search_progress_dialog.show()
 
             if self.search_progress_dialog.isVisible():
-                self.search_progress_dialog.update_progress(scanned, total, matches, pct)
+                self.search_progress_dialog.update_progress(
+                    scanned, total, matches, pct
+                )
 
-            self.status_bar.showMessage(f"🔍 Searching: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
+            self.status_bar.showMessage(
+                f"🔍 Searching: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches..."
+            )
             return
 
         if data.get("event") in ("build_pos_index_progress", "build_tree_progress"):
@@ -927,10 +1041,22 @@ class MainWindow(QMainWindow):
             total = prog.get("total", 0)
             positions = prog.get("positions", 0)
             pct = prog.get("percent", 0.0)
-            task_name = "Tree Index (.tree.idx)" if event == "build_tree_progress" else "Position Booster (.pos.idx)"
-            if hasattr(self, "build_pos_dialog") and self.build_pos_dialog and self.build_pos_dialog.isVisible():
-                self.build_pos_dialog.update_progress(scanned, total, positions, pct, task_name)
-            self.status_bar.showMessage(f"⚡ Indexing [{task_name}]: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}")
+            task_name = (
+                "Tree Index (.tree.idx)"
+                if event == "build_tree_progress"
+                else "Position Booster (.pos.idx)"
+            )
+            if (
+                hasattr(self, "build_pos_dialog")
+                and self.build_pos_dialog
+                and self.build_pos_dialog.isVisible()
+            ):
+                self.build_pos_dialog.update_progress(
+                    scanned, total, positions, pct, task_name
+                )
+            self.status_bar.showMessage(
+                f"⚡ Indexing [{task_name}]: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}"
+            )
             return
 
         # Log to tab
@@ -953,9 +1079,15 @@ class MainWindow(QMainWindow):
         # Handle games query response
         if "games" in resp_data:
             total_matches = resp_data.get("total", 0)
-            if hasattr(self, "search_progress_dialog") and self.search_progress_dialog and self.search_progress_dialog.isVisible():
+            if (
+                hasattr(self, "search_progress_dialog")
+                and self.search_progress_dialog
+                and self.search_progress_dialog.isVisible()
+            ):
                 self.search_progress_dialog.on_finished(total_matches)
-            self.status_bar.showMessage(f"Search complete: {total_matches:,} matching games found.", 5000)
+            self.status_bar.showMessage(
+                f"Search complete: {total_matches:,} matching games found.", 5000
+            )
 
         # Handle stats updates
         if "stats" in resp_data:
@@ -963,17 +1095,33 @@ class MainWindow(QMainWindow):
             self.current_db_stats = stats
             fmt = stats.get("format", "").upper()
             self.lbl_format.setText(f"Format: {fmt}")
-            self.lbl_games_count.setText(f"Total Games: {stats.get('total_games', 0):,}")
+            self.lbl_games_count.setText(
+                f"Total Games: {stats.get('total_games', 0):,}"
+            )
             self.lbl_active_count.setText(f"Active: {stats.get('active_games', 0):,}")
-            self.lbl_deleted_count.setText(f"Deleted: {stats.get('deleted_games', 0):,}")
-            self.lbl_players_count.setText(f"Players: {stats.get('players_count', 0):,}")
+            self.lbl_deleted_count.setText(
+                f"Deleted: {stats.get('deleted_games', 0):,}"
+            )
+            self.lbl_players_count.setText(
+                f"Players: {stats.get('players_count', 0):,}"
+            )
             self.lbl_events_count.setText(f"Events: {stats.get('events_count', 0):,}")
 
             # Fast Indexes status update
-            pos_status = stats.get("pos_index_status", resp_data.get("pos_index_status", "missing"))
-            pos_count = stats.get("pos_index_unique_positions", resp_data.get("pos_index_unique_positions", 0))
-            tree_status = stats.get("tree_index_status", resp_data.get("tree_index_status", "missing"))
-            tree_count = stats.get("tree_index_unique_positions", resp_data.get("tree_index_unique_positions", 0))
+            pos_status = stats.get(
+                "pos_index_status", resp_data.get("pos_index_status", "missing")
+            )
+            pos_count = stats.get(
+                "pos_index_unique_positions",
+                resp_data.get("pos_index_unique_positions", 0),
+            )
+            tree_status = stats.get(
+                "tree_index_status", resp_data.get("tree_index_status", "missing")
+            )
+            tree_count = stats.get(
+                "tree_index_unique_positions",
+                resp_data.get("tree_index_unique_positions", 0),
+            )
             self.update_indexes_badge(pos_status, pos_count, tree_status, tree_count)
 
             # Reload model
@@ -981,13 +1129,27 @@ class MainWindow(QMainWindow):
 
         # Handle Position Index / Tree Index Status
         if "pos_index_status" in resp_data or "tree_index_status" in resp_data:
-            p_st = resp_data.get("pos_index_status", getattr(self, "pos_index_status", "missing"))
-            p_cnt = resp_data.get("pos_index_unique_positions", getattr(self, "pos_index_unique_positions", 0))
-            t_st = resp_data.get("tree_index_status", getattr(self, "tree_index_status", "missing"))
-            t_cnt = resp_data.get("tree_index_unique_positions", getattr(self, "tree_index_unique_positions", 0))
+            p_st = resp_data.get(
+                "pos_index_status", getattr(self, "pos_index_status", "missing")
+            )
+            p_cnt = resp_data.get(
+                "pos_index_unique_positions",
+                getattr(self, "pos_index_unique_positions", 0),
+            )
+            t_st = resp_data.get(
+                "tree_index_status", getattr(self, "tree_index_status", "missing")
+            )
+            t_cnt = resp_data.get(
+                "tree_index_unique_positions",
+                getattr(self, "tree_index_unique_positions", 0),
+            )
             self.update_indexes_badge(p_st, p_cnt, t_st, t_cnt)
 
-        if "unique_positions" in resp_data and "elapsed_ms" in resp_data and "moves" not in resp_data:
+        if (
+            "unique_positions" in resp_data
+            and "elapsed_ms" in resp_data
+            and "moves" not in resp_data
+        ):
             unique_pos = resp_data.get("unique_positions", 0)
             self.refresh_database_info()
             if "Opening Tree" in self.tabs.tabText(self.tabs.currentIndex()):
@@ -999,7 +1161,9 @@ class MainWindow(QMainWindow):
 
         # Handle Game Summaries response
         if "game_summaries" in resp_data:
-            self.opening_tree_widget.on_game_summaries_received(resp_data["game_summaries"])
+            self.opening_tree_widget.on_game_summaries_received(
+                resp_data["game_summaries"]
+            )
 
         # Handle PGN response
         if "pgn" in resp_data:
@@ -1008,7 +1172,9 @@ class MainWindow(QMainWindow):
         # Handle mutations
         if "reclaimed_bytes" in resp_data:
             reclaimed = resp_data["reclaimed_bytes"]
-            self.status_bar.showMessage(f"Compaction completed. Reclaimed {reclaimed} bytes.", 4000)
+            self.status_bar.showMessage(
+                f"Compaction completed. Reclaimed {reclaimed} bytes.", 4000
+            )
             self.refresh_database_info()
 
         if "imported" in resp_data:
@@ -1019,7 +1185,9 @@ class MainWindow(QMainWindow):
             imp = resp_data["imported"]
             err_count = resp_data.get("errors", 0)
             QMessageBox.information(
-                self, "Import Complete", f"Imported {imp:,} games successfully ({err_count} errors)."
+                self,
+                "Import Complete",
+                f"Imported {imp:,} games successfully ({err_count} errors).",
             )
             self.refresh_database_info()
 
@@ -1028,7 +1196,9 @@ class MainWindow(QMainWindow):
                 self.export_progress_dialog.setValue(100)
                 self.export_progress_dialog.close()
             exp = resp_data["exported"]
-            QMessageBox.information(self, "Export Complete", f"Exported {exp:,} games to PGN successfully.")
+            QMessageBox.information(
+                self, "Export Complete", f"Exported {exp:,} games to PGN successfully."
+            )
 
         if "deleted" in resp_data or "index" in resp_data and "pgn" not in resp_data:
             self.refresh_database_info()
@@ -1044,12 +1214,22 @@ class MainWindow(QMainWindow):
 
     def prompt_build_pos_index(self):
         if not self.client.is_running():
-            QMessageBox.warning(self, "Backend Offline", "Please start backend and open a database first.")
+            QMessageBox.warning(
+                self,
+                "Backend Offline",
+                "Please start backend and open a database first.",
+            )
             return
         self.build_pos_dialog = BuildPosIndexDialog(self.client, parent=self)
         self.build_pos_dialog.show()
 
-    def update_indexes_badge(self, pos_status: str, pos_count: int = 0, tree_status: str = "missing", tree_count: int = 0):
+    def update_indexes_badge(
+        self,
+        pos_status: str,
+        pos_count: int = 0,
+        tree_status: str = "missing",
+        tree_count: int = 0,
+    ):
         self.pos_index_status = pos_status
         self.pos_index_unique_positions = pos_count
         self.tree_index_status = tree_status
@@ -1060,20 +1240,36 @@ class MainWindow(QMainWindow):
 
         # Update Main Window badge
         if pos_status == "valid" and tree_status == "valid":
-            self.btn_pos_index.setText(f"🟢 Fast Indexes: Active (Tree: {tree_count:,} | Pos: {pos_count:,})")
-            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
+            self.btn_pos_index.setText(
+                f"🟢 Fast Indexes: Active (Tree: {tree_count:,} | Pos: {pos_count:,})"
+            )
+            self.btn_pos_index.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;"
+            )
         elif tree_status == "valid":
-            self.btn_pos_index.setText(f"🟢 Tree Idx: Active ({tree_count:,}) | ⚪ Pos Idx")
-            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
+            self.btn_pos_index.setText(
+                f"🟢 Tree Idx: Active ({tree_count:,}) | ⚪ Pos Idx"
+            )
+            self.btn_pos_index.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;"
+            )
         elif pos_status == "valid":
-            self.btn_pos_index.setText(f"🟢 Pos Idx: Active ({pos_count:,}) | ⚪ Tree Idx")
-            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
+            self.btn_pos_index.setText(
+                f"🟢 Pos Idx: Active ({pos_count:,}) | ⚪ Tree Idx"
+            )
+            self.btn_pos_index.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;"
+            )
         elif pos_status == "outdated" or tree_status == "outdated":
             self.btn_pos_index.setText("🟠 Fast Indexes: Outdated [Rebuild]")
-            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #fff3e0; color: #e65100; border: 1px solid #ffb74d; border-radius: 3px;")
+            self.btn_pos_index.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #fff3e0; color: #e65100; border: 1px solid #ffb74d; border-radius: 3px;"
+            )
         else:
             self.btn_pos_index.setText("⚡ Build Fast Indexes")
-            self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
+            self.btn_pos_index.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;"
+            )
 
     def update_pos_index_badge(self, status: str, count: int = 0):
         t_st = getattr(self, "tree_index_status", "missing")
@@ -1082,9 +1278,15 @@ class MainWindow(QMainWindow):
 
     def open_benchmark_dialog(self):
         if not self.client.is_running():
-            QMessageBox.warning(self, "Backend Offline", "Please start backend and open a database first.")
+            QMessageBox.warning(
+                self,
+                "Backend Offline",
+                "Please start backend and open a database first.",
+            )
             return
-        self.benchmark_dialog = BenchmarkDialog(self.client, current_stats=self.current_db_stats, parent=self)
+        self.benchmark_dialog = BenchmarkDialog(
+            self.client, current_stats=self.current_db_stats, parent=self
+        )
         self.benchmark_dialog.show()
 
     def on_process_error(self, err_msg: str):
@@ -1098,5 +1300,3 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.client.stop()
         event.accept()
-
-

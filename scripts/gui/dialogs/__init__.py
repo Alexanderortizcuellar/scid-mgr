@@ -8,12 +8,12 @@ from .search_progress_dialog import SearchProgressDialog
 from .settings_dialog import SettingsDialog
 
 __all__ = [
-    'NewDatabaseDialog',
-    'AddEditGameDialog',
-    'AdvancedSearchDialog',
-    'BenchmarkDialog',
-    'ColumnsConfigDialog',
-    'BuildPosIndexDialog',
-    'SearchProgressDialog',
-    'SettingsDialog',
+    "NewDatabaseDialog",
+    "AddEditGameDialog",
+    "AdvancedSearchDialog",
+    "BenchmarkDialog",
+    "ColumnsConfigDialog",
+    "BuildPosIndexDialog",
+    "SearchProgressDialog",
+    "SettingsDialog",
 ]

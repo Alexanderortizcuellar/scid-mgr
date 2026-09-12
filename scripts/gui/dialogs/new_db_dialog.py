@@ -1,8 +1,16 @@
-from typing import Optional
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
-    QHBoxLayout, QRadioButton, QButtonGroup, QDialogButtonBox, QFileDialog
+    QDialog,
+    QVBoxLayout,
+    QFormLayout,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QRadioButton,
+    QButtonGroup,
+    QDialogButtonBox,
+    QFileDialog,
 )
+
 
 class NewDatabaseDialog(QDialog):
     def __init__(self, parent=None):
@@ -21,7 +29,9 @@ class NewDatabaseDialog(QDialog):
         path_row.addWidget(btn_browse)
         form.addRow("Database Path:", path_row)
 
-        self.rb_si5 = QRadioButton("SCID 5 format (.si5) - Modern 64-bit / 140 TB capacity (Recommended)")
+        self.rb_si5 = QRadioButton(
+            "SCID 5 format (.si5) - Modern 64-bit / 140 TB capacity (Recommended)"
+        )
         self.rb_si5.setChecked(True)
         self.rb_si4 = QRadioButton("SCID 4 format (.si4) - Legacy 32-bit format")
 
@@ -57,5 +67,3 @@ class NewDatabaseDialog(QDialog):
             self.path_input.text().strip(),
             "si5" if self.rb_si5.isChecked() else "si4",
         )
-
-
