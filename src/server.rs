@@ -658,7 +658,7 @@ fn handle_command(
                             let matches: Vec<crate::position_search::PositionMatch> = game_ids
                                 .into_iter()
                                 .map(|gid| crate::position_search::PositionMatch {
-                                    game_id: gid as usize,
+                                    game_id: gid,
                                     ply: 0,
                                 })
                                 .collect();
@@ -919,10 +919,9 @@ fn handle_command(
                                     let idx = gid as usize;
                                     if idx < p.entries.len() {
                                         let d = p.entries[idx].date_str();
-                                        if !d.is_empty() && !d.starts_with('?') {
-                                            if max_date_str.as_ref().map_or(true, |cur| d > *cur) {
-                                                max_date_str = Some(d);
-                                            }
+                                        if !d.is_empty() && !d.starts_with('?')
+                                            && max_date_str.as_ref().is_none_or(|cur| d > *cur) {
+                                            max_date_str = Some(d);
                                         }
                                     }
                                 }

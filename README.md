@@ -50,6 +50,54 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
 
 ---
 
+## 📦 Using as a Rust Library (`scid_mgr`)
+
+`scid-mgr` is distributed both as a standalone CLI / JSON-RPC executable (`scid-mgr`) and as a reusable Rust library crate (`scid_mgr`).
+
+Add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+scid_mgr = { path = "path/to/scid-mgr" }
+```
+
+### Library Code Example
+
+```rust
+use scid_mgr::db::{ScidDatabaseWrapper, GameFilter};
+use scid_mgr::tree_index::TreeIndex;
+use std::path::Path;
+
+fn main() -> anyhow::Result<()> {
+    // 1. Open database
+    let db = ScidDatabaseWrapper::open(Path::new("games/sample.si5"))?;
+    println!("Total games: {}", db.game_count());
+
+    // 2. Query games with metadata filtering
+    let filter = GameFilter {
+        player: Some("Kasparov".to_string()),
+        ..Default::default()
+    };
+    let (games, total) = db.query_games(&filter, 0, 10);
+    for g in games {
+        println!("Game #{}: {} vs {} ({})", g.id, g.white, g.black, g.result);
+    }
+
+    // 3. Instant Opening Tree lookup
+    if let Ok(tree_idx) = TreeIndex::load(Path::new("games/sample.si5")) {
+        if let Some(tree) = tree_idx.query_tree("") {
+            for m in tree.moves {
+                println!("Move {}: {} games ({:.1}% win)", m.san, m.total_games, m.white_pct);
+            }
+        }
+    }
+
+    Ok(())
+}
+```
+
+---
+
 ## 🚀 Quick Start & CLI Reference
 
 ### 1. Build and Run the Test Suite

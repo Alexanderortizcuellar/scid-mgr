@@ -1,18 +1,8 @@
-pub mod benchmark;
-mod db;
-pub mod pgn_db;
-pub mod pgn_utils;
-pub mod position_index;
-pub mod position_search;
-mod server;
-mod test_suite;
-pub mod tree_index;
-pub mod zero_copy_ingest;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use db::{GameFilter, ScidDatabaseWrapper, ScidFormat};
-use pgn_utils::import_pgn_file_with_progress;
+use scid_mgr::db::{GameFilter, ScidDatabaseWrapper, ScidFormat};
+use scid_mgr::pgn_utils::import_pgn_file_with_progress;
+use scid_mgr::{benchmark, db, pgn_db, pgn_utils, position_index, position_search, server, test_suite, tree_index};
 use std::path::PathBuf;
 
 #[derive(Parser)]

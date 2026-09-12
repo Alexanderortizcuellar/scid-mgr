@@ -310,13 +310,15 @@ impl PositionIndex {
     /// Scans diagnostics and distribution metrics of encoded postings
     pub fn scan_diagnostics(&self) -> Result<IndexDiagnostics> {
         let entries = self.index_entries();
-        let mut diag = IndexDiagnostics::default();
-        diag.total_positions = entries.len();
-        diag.total_game_sets = entries.len();
-        diag.bytes_payload = if self.mmap.len() > self.header.data_offset as usize {
-            self.mmap.len() - self.header.data_offset as usize
-        } else {
-            0
+        let mut diag = IndexDiagnostics {
+            total_positions: entries.len(),
+            total_game_sets: entries.len(),
+            bytes_payload: if self.mmap.len() > self.header.data_offset as usize {
+                self.mmap.len() - self.header.data_offset as usize
+            } else {
+                0
+            },
+            ..Default::default()
         };
 
         for entry in entries {
@@ -350,10 +352,11 @@ impl PositionIndex {
 
     /// Build static, disk-backed .pos.idx inverted search index for SCID databases in parallel
     #[allow(clippy::too_many_arguments)]
-    pub fn build_for_scid<P: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
-        db_path: P,
+    #[allow(clippy::needless_range_loop)]
+    pub fn build_for_scid<P1: AsRef<Path>, P2: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
+        db_path: P1,
         entries: &[chess_scid_rw::entry::IndexEntry],
-        games_path: P,
+        games_path: P2,
         max_ply: usize,
         _max_games: Option<usize>,
         min_games: Option<usize>,
@@ -505,6 +508,7 @@ impl PositionIndex {
 
     /// Build static, disk-backed .pos.idx search index for PGN databases in parallel
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::needless_range_loop)]
     pub fn build_for_pgn<P: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
         db_path: P,
         entries: &[crate::pgn_db::PgnIndexEntry],

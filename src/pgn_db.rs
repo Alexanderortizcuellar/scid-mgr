@@ -1040,7 +1040,7 @@ impl PgnDatabaseWrapper {
                         let matches: Vec<crate::position_search::PositionMatch> = gids
                             .into_iter()
                             .map(|gid| crate::position_search::PositionMatch {
-                                game_id: gid as usize,
+                                game_id: gid,
                                 ply: 0,
                             })
                             .collect();

@@ -521,8 +521,10 @@ impl TreeIndex {
     /// Scans diagnostics and distribution metrics of opening tree index
     pub fn scan_diagnostics(&self) -> Result<TreeIndexDiagnostics> {
         let entries = self.index_entries();
-        let mut diag = TreeIndexDiagnostics::default();
-        diag.total_positions = entries.len();
+        let mut diag = TreeIndexDiagnostics {
+            total_positions: entries.len(),
+            ..Default::default()
+        };
 
         for i in 0..entries.len() {
             let start = (self.header.data_offset + entries[i].data_offset as u64) as usize;
@@ -732,6 +734,7 @@ impl TreeIndex {
 
     /// Build static, disk-backed .tree.idx file for SCID databases in parallel across CPU cores
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::needless_range_loop)]
     pub fn build_for_scid<P: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
         db_path: P,
         entries: &[chess_scid_rw::entry::IndexEntry],
@@ -915,6 +918,7 @@ impl TreeIndex {
 
     /// Build static, disk-backed .tree.idx file for PGN databases in parallel
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::needless_range_loop)]
     pub fn build_for_pgn<P: AsRef<Path>, F: Fn(usize, usize, usize) + Sync>(
         db_path: P,
         entries: &[crate::pgn_db::PgnIndexEntry],
@@ -1133,6 +1137,7 @@ impl StripedTreePositionMap {
         (hash as usize) % NUM_STRIPES
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
         hash: u64,
