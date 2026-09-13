@@ -97,6 +97,7 @@ impl GameFilter {
             && self.date.as_deref().unwrap_or("").trim().is_empty()
             && self.event.as_deref().unwrap_or("").trim().is_empty()
             && self.site.as_deref().unwrap_or("").trim().is_empty()
+            && self.fen.as_deref().unwrap_or("").trim().is_empty()
             && !self.only_deleted.unwrap_or(false)
             && self.material.is_none()
     }

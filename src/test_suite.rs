@@ -247,6 +247,18 @@ fn test_alapin_sicilian_piece_placement_search() {
         1,
         "Explicit black turn should match!"
     );
+
+    // 4. Verify GameFilter::is_empty() and query_games with ONLY fen filter
+    let fen_filter = crate::db::GameFilter {
+        fen: Some(alapin_piece_placement.to_string()),
+        ..Default::default()
+    };
+    assert!(!fen_filter.is_empty(), "GameFilter with fen must not be empty!");
+
+    let (summaries, total) = pgn_db.query_games(&fen_filter, 0, 10);
+    assert_eq!(total, 1, "query_games with FEN should return matching game count");
+    assert_eq!(summaries.len(), 1, "query_games with FEN should return matching game summary");
+    assert_eq!(summaries[0].white, "Player A");
 }
 
 #[test]
