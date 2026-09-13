@@ -6,6 +6,9 @@ use crate::tree_index::TreeIndex;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use shakmaty::uci::UciMove;
+use shakmaty::zobrist::{Zobrist64, ZobristHash};
+use shakmaty::Position;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -890,8 +893,75 @@ fn handle_command(
                 .unwrap_or(true);
 
             if let Some(mut rep) = report {
-                if include_last_played {
+                // 1. Resolve sample game IDs from PositionIndex (.pos.idx) for the position
+                if (include_sample_games || include_last_played) && rep.sample_game_ids.is_empty() {
+                    let db_path = match db {
+                        DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+                        DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+                    };
+                    if current_pos_index.is_none() {
+                        *current_pos_index = PositionIndex::load(&db_path).ok();
+                    }
+                    if let Some(pos_idx) = current_pos_index.as_ref() {
+                        if let Some(matching_ids) = pos_idx.get_matching_game_ids(rep.zobrist_hash) {
+                            let mut filtered_ids: Vec<u32> = if let Some(ref t_ids) = target_game_ids {
+                                let t_set: std::collections::HashSet<usize> =
+                                    t_ids.iter().copied().collect();
+                                matching_ids
+                                    .iter()
+                                    .filter(|id| t_set.contains(id))
+                                    .map(|&id| id as u32)
+                                    .collect()
+                            } else {
+                                matching_ids.iter().map(|&id| id as u32).collect()
+                            };
+                            if let Some(limit) = max_sample_ids {
+                                filtered_ids.truncate(limit);
+                            }
+                            rep.sample_game_ids = filtered_ids;
+                        }
+                    }
+                }
+
+                if let Some(limit) = max_sample_ids {
+                    rep.sample_game_ids.truncate(limit);
                     for m in &mut rep.moves {
+                        m.sample_game_ids.truncate(limit);
+                    }
+                }
+
+                if include_last_played {
+                    let target_pos_opt = crate::tree_index::parse_target_position(fen);
+                    for m in &mut rep.moves {
+                        if m.sample_game_ids.is_empty() {
+                            if let Some((ref pos, _)) = target_pos_opt {
+                                if let Ok(uci_move) = m.uci.parse::<UciMove>() {
+                                    if let Ok(shak_move) = uci_move.to_move(pos) {
+                                        let mut child_pos = pos.clone();
+                                        child_pos.play_unchecked(&shak_move);
+                                        let child_hash: Zobrist64 =
+                                            child_pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
+                                        if let Some(pos_idx) = current_pos_index.as_ref() {
+                                            if let Some(child_gids) =
+                                                pos_idx.get_matching_game_ids(child_hash.0)
+                                            {
+                                                let mut gids: Vec<u32> = child_gids
+                                                    .into_iter()
+                                                    .map(|id| id as u32)
+                                                    .collect();
+                                                if let Some(limit) = max_sample_ids {
+                                                    gids.truncate(limit.min(5));
+                                                } else {
+                                                    gids.truncate(5);
+                                                }
+                                                m.sample_game_ids = gids;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         match db {
                             DatabaseBackend::Scid(s) => {
                                 let mut max_date: u32 = 0;

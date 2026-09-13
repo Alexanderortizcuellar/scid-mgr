@@ -8,9 +8,11 @@ use chess_scid_rw::{Si4Paths, Si5Paths};
 use memmap2::Mmap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,6 +133,7 @@ pub struct ScidDatabaseWrapper {
     site_ranks: std::sync::OnceLock<Vec<u32>>,
     round_ranks: std::sync::OnceLock<Vec<u32>>,
     query_cache: std::sync::Mutex<Option<(GameFilter, Vec<usize>)>>,
+    column_sort_cache: std::sync::Mutex<HashMap<String, Arc<Vec<usize>>>>,
 }
 
 pub fn result_code_to_str(res: u8) -> &'static str {
@@ -223,6 +226,7 @@ impl ScidDatabaseWrapper {
             site_ranks: std::sync::OnceLock::new(),
             round_ranks: std::sync::OnceLock::new(),
             query_cache: std::sync::Mutex::new(None),
+            column_sort_cache: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -257,7 +261,17 @@ impl ScidDatabaseWrapper {
             site_ranks: std::sync::OnceLock::new(),
             round_ranks: std::sync::OnceLock::new(),
             query_cache: std::sync::Mutex::new(None),
+            column_sort_cache: std::sync::Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn clear_query_caches(&self) {
+        if let Ok(mut g) = self.query_cache.lock() {
+            *g = None;
+        }
+        if let Ok(mut g) = self.column_sort_cache.lock() {
+            g.clear();
+        }
     }
 
     pub fn get_player_ranks(&self) -> &[u32] {
@@ -406,9 +420,7 @@ impl ScidDatabaseWrapper {
 
         self.pending_games.extend_from_slice(&encoded_blob);
         self.dirty = true;
-        if let Ok(mut g) = self.query_cache.lock() {
-            *g = None;
-        }
+        self.clear_query_caches();
         Ok(new_idx)
     }
 
@@ -453,9 +465,7 @@ impl ScidDatabaseWrapper {
 
         self.pending_games.extend_from_slice(&encoded_blob);
         self.dirty = true;
-        if let Ok(mut g) = self.query_cache.lock() {
-            *g = None;
-        }
+        self.clear_query_caches();
         Ok(())
     }
 
@@ -465,9 +475,7 @@ impl ScidDatabaseWrapper {
         }
         self.entries[index].deleted = true;
         self.dirty = true;
-        if let Ok(mut g) = self.query_cache.lock() {
-            *g = None;
-        }
+        self.clear_query_caches();
         Ok(())
     }
 
@@ -477,9 +485,7 @@ impl ScidDatabaseWrapper {
         }
         self.entries[index].deleted = false;
         self.dirty = true;
-        if let Ok(mut g) = self.query_cache.lock() {
-            *g = None;
-        }
+        self.clear_query_caches();
         Ok(())
     }
 
@@ -515,9 +521,7 @@ impl ScidDatabaseWrapper {
         self.pending_games = compacted_games;
         self.games_mmap = None;
         self.dirty = true;
-        if let Ok(mut g) = self.query_cache.lock() {
-            *g = None;
-        }
+        self.clear_query_caches();
 
         self.save()?;
         Ok(reclaimed)
@@ -598,9 +602,7 @@ impl ScidDatabaseWrapper {
         self.pending_games = sorted_games;
         self.games_mmap = None;
         self.dirty = true;
-        if let Ok(mut g) = self.query_cache.lock() {
-            *g = None;
-        }
+        self.clear_query_caches();
 
         // Save rewritten index, namebase, and games
         self.save()?;
@@ -821,6 +823,39 @@ impl ScidDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
+        // 0. Fast Column Sort Cache for Unfiltered Views (0.00ms lookup across whole table)
+        let is_unfiltered = filter.is_empty()
+            && filter.include_deleted.unwrap_or(true)
+            && !filter.only_deleted.unwrap_or(false);
+
+        if is_unfiltered {
+            let col = filter.sort_by.as_deref().unwrap_or("id").to_lowercase();
+            let is_asc = filter.sort_asc.unwrap_or(true);
+            let total_matches = self.entries.len();
+
+            if let Ok(guard) = self.column_sort_cache.lock() {
+                if let Some(cached_asc) = guard.get(&col) {
+                    let start = page * page_size;
+                    if start >= total_matches {
+                        return (Vec::new(), total_matches);
+                    }
+                    let end = usize::min(start + page_size, total_matches);
+                    let summaries = if is_asc {
+                        cached_asc[start..end]
+                            .iter()
+                            .filter_map(|&idx| self.get_game_summary(idx))
+                            .collect()
+                    } else {
+                        (start..end)
+                            .map(|i| cached_asc[total_matches - 1 - i])
+                            .filter_map(|idx| self.get_game_summary(idx))
+                            .collect()
+                    };
+                    return (summaries, total_matches);
+                }
+            }
+        }
+
         // 1. Fast Query Cache: If identical filter is queried for subsequent pages, return instantly (0.00ms)
         // If search criteria match but sort changed, sort in-memory instantly without rescanning disk!
         if let Ok(mut guard) = self.query_cache.lock() {
@@ -839,11 +874,17 @@ impl ScidDatabaseWrapper {
                     return (summaries, total_matches);
                 } else if cached_filter.same_search_criteria(filter) {
                     let mut sorted_indices = cached_indices.clone();
-                    self.sort_indices(
-                        &mut sorted_indices,
-                        filter.sort_by.as_deref(),
-                        filter.sort_asc,
-                    );
+                    if cached_filter.sort_by == filter.sort_by
+                        && cached_filter.sort_asc != filter.sort_asc
+                    {
+                        sorted_indices.reverse();
+                    } else {
+                        self.sort_indices(
+                            &mut sorted_indices,
+                            filter.sort_by.as_deref(),
+                            filter.sort_asc,
+                        );
+                    }
                     let total_matches = sorted_indices.len();
                     let start = page * page_size;
                     let summaries = if start >= total_matches {
@@ -1159,6 +1200,22 @@ impl ScidDatabaseWrapper {
             *guard = Some((filter.clone(), matched_indices.clone()));
         }
 
+        // Cache full column permutation if unfiltered
+        if is_unfiltered {
+            let col = filter.sort_by.as_deref().unwrap_or("id").to_lowercase();
+            let is_asc = filter.sort_asc.unwrap_or(true);
+            let asc_indices = if is_asc {
+                matched_indices.clone()
+            } else {
+                let mut rev = matched_indices.clone();
+                rev.reverse();
+                rev
+            };
+            if let Ok(mut c_guard) = self.column_sort_cache.lock() {
+                c_guard.insert(col, Arc::new(asc_indices));
+            }
+        }
+
         if start >= total_matches {
             return (Vec::new(), total_matches);
         }
@@ -1199,190 +1256,85 @@ impl ScidDatabaseWrapper {
             let is_asc = sort_asc.unwrap_or(true);
             let entries = &self.entries;
 
+            macro_rules! sort_by_u64 {
+                ($key_fn:expr) => {{
+                    let mut pairs: Vec<u64> = matched_indices
+                        .par_iter()
+                        .map(|&idx| {
+                            let key = ($key_fn(idx)) as u64;
+                            (key << 32) | (idx as u64)
+                        })
+                        .collect();
+                    pairs.par_sort_unstable();
+                    if !is_asc {
+                        pairs.reverse();
+                    }
+                    for (slot, pair) in matched_indices.iter_mut().zip(pairs.into_iter()) {
+                        *slot = (pair & 0xFFFF_FFFF) as usize;
+                    }
+                }};
+            }
+
             match sort_field.to_lowercase().as_str() {
                 "date" => {
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].date);
-                    } else {
-                        matched_indices
-                            .par_sort_unstable_by(|&a, &b| entries[b].date.cmp(&entries[a].date));
-                    }
+                    sort_by_u64!(|idx: usize| entries[idx].date);
                 }
                 "white_elo" => {
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].white_elo);
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            entries[b].white_elo.cmp(&entries[a].white_elo)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| entries[idx].white_elo);
                 }
                 "black_elo" => {
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].black_elo);
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            entries[b].black_elo.cmp(&entries[a].black_elo)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| entries[idx].black_elo);
                 }
                 "eco" => {
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].eco_code);
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            entries[b].eco_code.cmp(&entries[a].eco_code)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| entries[idx].eco_code);
                 }
                 "result" => {
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by_key(|&i| entries[i].result);
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            entries[b].result.cmp(&entries[a].result)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| entries[idx].result);
                 }
                 "white" => {
                     let ranks = self.get_player_ranks();
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].white_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].white_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            ra.cmp(&rb)
-                        });
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].white_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].white_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            rb.cmp(&ra)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].white_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
                 }
                 "black" => {
                     let ranks = self.get_player_ranks();
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].black_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].black_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            ra.cmp(&rb)
-                        });
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].black_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].black_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            rb.cmp(&ra)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].black_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
                 }
                 "event" => {
                     let ranks = self.get_event_ranks();
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].event_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].event_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            ra.cmp(&rb)
-                        });
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].event_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].event_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            rb.cmp(&ra)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].event_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
                 }
                 "site" => {
                     let ranks = self.get_site_ranks();
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].site_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].site_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            ra.cmp(&rb)
-                        });
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].site_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].site_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            rb.cmp(&ra)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].site_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
                 }
                 "round" => {
                     let ranks = self.get_round_ranks();
-                    if is_asc {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].round_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].round_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            ra.cmp(&rb)
-                        });
-                    } else {
-                        matched_indices.par_sort_unstable_by(|&a, &b| {
-                            let ra = ranks
-                                .get(entries[a].round_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            let rb = ranks
-                                .get(entries[b].round_id as usize)
-                                .copied()
-                                .unwrap_or(u32::MAX);
-                            rb.cmp(&ra)
-                        });
-                    }
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].round_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
                 }
                 "id" | "index" => {
                     if !is_asc {

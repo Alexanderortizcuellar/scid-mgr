@@ -106,3 +106,25 @@ When the user selects a game row:
    - `chess-scid-rw::pgn_build` decodes the binary move tokens into Standard Algebraic Notation (SAN), reconstructing comments, variations, NAGs, and header tags.
 3. **Instant Display**:
    - The full PGN text is rendered in the `PGN Game Text` viewer with zero perceptible latency (< 0.5 ms).
+
+---
+
+### Step 6: Instant & Dynamic Opening Tree Architecture
+1. **Static Index Fast-Path (`.tree.idx`)**:
+   - For indexed databases, queries look up the position node directly in `< 0.05 ms`.
+2. **Parallel Dynamic Fallback**:
+   - When `.tree.idx` is missing, `calculate_tree_for_scid` and `calculate_tree_for_pgn` use `PgnSinglePositionVisitor` across Rayon chunks, halting move replay as soon as the target position matches.
+3. **Payload Capping & Protection**:
+   - Both root position and move candidate lists enforce strict `max_sample_ids` limits (default 20), avoiding JSON bloat when analyzing popular opening positions with millions of matching games.
+
+---
+
+### Step 7: Modular GUI Component Architecture
+The PyQt5 desktop client is decoupled into dedicated, testable modules:
+- `DatabaseControlWidget`: Backend process management, file selection, database statistics.
+- `FilterPanelWidget`: Multi-criteria header filters and position FEN input.
+- `GameTablePanelWidget`: Virtual table view, column configuration, debounced scrolling.
+- `GamePreviewPanelWidget`: Reconstructed PGN display and game mutations.
+- `OpeningTreeWidget`: Interactive opening explorer, move table, sample games preview.
+- `ProtocolLogPanelWidget`: Protocol log viewer with payload sanitization to avoid UI thread starvation.
+

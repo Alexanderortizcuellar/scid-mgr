@@ -690,9 +690,8 @@ impl TreeIndex {
     ) -> Option<OpeningTreeReport> {
         let (target_pos, target_hash) = parse_target_position(fen_str)?;
         let max_ply = 50;
-        let accumulator = StripedTreePositionMap::new();
 
-        let process_game = |game_id: usize| {
+        let process_single_game = |game_id: usize, node: &mut TreePositionNode| {
             if game_id >= entries.len() {
                 return;
             }
@@ -706,29 +705,80 @@ impl TreeIndex {
             let w_elo = entry.white_elo;
             let b_elo = entry.black_elo;
 
-            let slice =
-                &mmap[entry.offset as usize..(entry.offset as usize + entry.length as usize)];
+            let start = entry.offset as usize;
+            let end = start + entry.length as usize;
+            if end > mmap.len() || start >= end {
+                return;
+            }
+
+            let slice = &mmap[start..end];
             let mut reader = pgn_reader::BufferedReader::new_cursor(slice);
-            let mut visitor =
-                PgnTreeStatsVisitor::new(max_ply, w_win, draw, b_win, w_elo, b_elo, &accumulator);
+            let mut visitor = PgnSinglePositionVisitor::new(
+                target_hash,
+                max_ply,
+                w_win,
+                draw,
+                b_win,
+                w_elo,
+                b_elo,
+                node,
+            );
             let _ = reader.read_game(&mut visitor);
         };
 
-        if let Some(ids) = target_game_ids {
-            for &gid in ids {
-                process_game(gid);
+        let node = if let Some(ids) = target_game_ids {
+            if ids.len() > 500 {
+                ids.par_chunks(250)
+                    .map(|chunk| {
+                        let mut local_node = TreePositionNode::new(target_hash);
+                        for &gid in chunk {
+                            process_single_game(gid, &mut local_node);
+                        }
+                        local_node
+                    })
+                    .reduce(
+                        || TreePositionNode::new(target_hash),
+                        |mut acc, n| {
+                            acc.merge(n);
+                            acc
+                        },
+                    )
+            } else {
+                let mut local_node = TreePositionNode::new(target_hash);
+                for &gid in ids {
+                    process_single_game(gid, &mut local_node);
+                }
+                local_node
             }
         } else {
-            for gid in 0..entries.len() {
-                process_game(gid);
+            let total = entries.len();
+            if total > 500 {
+                (0..total)
+                    .into_par_iter()
+                    .chunks(250)
+                    .map(|chunk| {
+                        let mut local_node = TreePositionNode::new(target_hash);
+                        for gid in chunk {
+                            process_single_game(gid, &mut local_node);
+                        }
+                        local_node
+                    })
+                    .reduce(
+                        || TreePositionNode::new(target_hash),
+                        |mut acc, n| {
+                            acc.merge(n);
+                            acc
+                        },
+                    )
+            } else {
+                let mut local_node = TreePositionNode::new(target_hash);
+                for gid in 0..total {
+                    process_single_game(gid, &mut local_node);
+                }
+                local_node
             }
-        }
+        };
 
-        let map = accumulator.into_map();
-        let node = map
-            .get(&target_hash)
-            .cloned()
-            .unwrap_or_else(|| TreePositionNode::new(target_hash));
         Some(generate_tree_report(&node, &target_pos, target_hash))
     }
 
@@ -1121,6 +1171,7 @@ impl TreeIndex {
 
 struct StripedTreePositionMap {
     stripes: Vec<Mutex<HashMap<u64, TreePositionNode>>>,
+    unique_counter: AtomicUsize,
 }
 
 impl StripedTreePositionMap {
@@ -1129,7 +1180,10 @@ impl StripedTreePositionMap {
         for _ in 0..NUM_STRIPES {
             stripes.push(Mutex::new(HashMap::with_capacity(1024)));
         }
-        Self { stripes }
+        Self {
+            stripes,
+            unique_counter: AtomicUsize::new(0),
+        }
     }
 
     #[inline]
@@ -1150,14 +1204,23 @@ impl StripedTreePositionMap {
     ) {
         let idx = Self::stripe_index(hash);
         let mut guard = self.stripes[idx].lock().unwrap();
-        let node = guard
-            .entry(hash)
-            .or_insert_with(|| TreePositionNode::new(hash));
-        node.record_game(next_move, w_win, draw, b_win, w_elo, b_elo);
+        use std::collections::hash_map::Entry;
+        match guard.entry(hash) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut().record_game(next_move, w_win, draw, b_win, w_elo, b_elo);
+            }
+            Entry::Vacant(vac) => {
+                let mut node = TreePositionNode::new(hash);
+                node.record_game(next_move, w_win, draw, b_win, w_elo, b_elo);
+                vac.insert(node);
+                self.unique_counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
-    fn total_positions(&self) -> usize {
-        self.stripes.iter().map(|s| s.lock().unwrap().len()).sum()
+    #[inline]
+    pub fn total_positions(&self) -> usize {
+        self.unique_counter.load(Ordering::Relaxed)
     }
 
     fn into_map(self) -> HashMap<u64, TreePositionNode> {
@@ -1267,6 +1330,106 @@ impl<'a> pgn_reader::Visitor for PgnTreeStatsVisitor<'a> {
     }
 
     fn end_game(&mut self) -> Self::Result {}
+}
+
+struct PgnSinglePositionVisitor<'a> {
+    target_hash: u64,
+    max_ply: usize,
+    w_win: u32,
+    draw: u32,
+    b_win: u32,
+    w_elo: u16,
+    b_elo: u16,
+    node: &'a mut TreePositionNode,
+    pos: Chess,
+    ply: usize,
+    matched: bool,
+}
+
+impl<'a> PgnSinglePositionVisitor<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        target_hash: u64,
+        max_ply: usize,
+        w_win: u32,
+        draw: u32,
+        b_win: u32,
+        w_elo: u16,
+        b_elo: u16,
+        node: &'a mut TreePositionNode,
+    ) -> Self {
+        Self {
+            target_hash,
+            max_ply,
+            w_win,
+            draw,
+            b_win,
+            w_elo,
+            b_elo,
+            node,
+            pos: Chess::default(),
+            ply: 0,
+            matched: false,
+        }
+    }
+}
+
+impl<'a> pgn_reader::Visitor for PgnSinglePositionVisitor<'a> {
+    type Result = ();
+
+    fn begin_game(&mut self) {
+        self.pos = Chess::default();
+        self.ply = 0;
+        self.matched = false;
+    }
+
+    fn begin_variation(&mut self) -> pgn_reader::Skip {
+        pgn_reader::Skip(true)
+    }
+
+    fn san(&mut self, san_plus: SanPlus) {
+        if self.matched || self.ply >= self.max_ply {
+            return;
+        }
+
+        let pre_hash: Zobrist64 = self.pos.zobrist_hash(EnPassantMode::Legal);
+        let is_match = pre_hash.0 == self.target_hash;
+
+        if let Ok(m) = san_plus.san.to_move(&self.pos) {
+            if is_match {
+                let packed = PackedMove::from(&m).0;
+                self.node.record_game(
+                    Some(packed),
+                    self.w_win,
+                    self.draw,
+                    self.b_win,
+                    self.w_elo,
+                    self.b_elo,
+                );
+                self.matched = true;
+                return;
+            }
+
+            self.pos.play_unchecked(&m);
+            self.ply += 1;
+        }
+    }
+
+    fn end_game(&mut self) {
+        if !self.matched && self.ply < self.max_ply {
+            let curr_hash: Zobrist64 = self.pos.zobrist_hash(EnPassantMode::Legal);
+            if curr_hash.0 == self.target_hash {
+                self.node.record_game(
+                    None,
+                    self.w_win,
+                    self.draw,
+                    self.b_win,
+                    self.w_elo,
+                    self.b_elo,
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -721,6 +721,7 @@ pub fn parse_target_position(fen_str: &str) -> Option<(Chess, u64)> {
 
 struct StripedPositionPostingMap {
     stripes: Vec<Mutex<HashMap<u64, PositionPostingList>>>,
+    unique_counter: AtomicUsize,
 }
 
 impl StripedPositionPostingMap {
@@ -729,7 +730,10 @@ impl StripedPositionPostingMap {
         for _ in 0..NUM_STRIPES {
             stripes.push(Mutex::new(HashMap::with_capacity(1024)));
         }
-        Self { stripes }
+        Self {
+            stripes,
+            unique_counter: AtomicUsize::new(0),
+        }
     }
 
     #[inline]
@@ -740,14 +744,23 @@ impl StripedPositionPostingMap {
     fn record(&self, hash: u64, game_id: u32) {
         let idx = Self::stripe_index(hash);
         let mut guard = self.stripes[idx].lock().unwrap();
-        let posting = guard
-            .entry(hash)
-            .or_insert_with(|| PositionPostingList::new(hash));
-        posting.add(game_id);
+        use std::collections::hash_map::Entry;
+        match guard.entry(hash) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut().add(game_id);
+            }
+            Entry::Vacant(vac) => {
+                let mut posting = PositionPostingList::new(hash);
+                posting.add(game_id);
+                vac.insert(posting);
+                self.unique_counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
-    fn total_positions(&self) -> usize {
-        self.stripes.iter().map(|s| s.lock().unwrap().len()).sum()
+    #[inline]
+    pub fn total_positions(&self) -> usize {
+        self.unique_counter.load(Ordering::Relaxed)
     }
 
     fn into_map(self) -> HashMap<u64, PositionPostingList> {

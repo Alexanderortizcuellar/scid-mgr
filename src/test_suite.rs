@@ -680,15 +680,13 @@ fn test_scid_pos_idx_multithreaded_build_and_query() {
     // Add multiple games with different moves and results
     for i in 0..100 {
         let pgn = if i % 3 == 0 {
-            format!("[Event \"Test\"]\n[Result \"1-0\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0")
+            "[Event \"Test\"]\n[Result \"1-0\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0"
         } else if i % 3 == 1 {
-            format!("[Event \"Test\"]\n[Result \"0-1\"]\n\n1. e4 c5 2. Nf3 d6 3. d4 cxd4 0-1")
+            "[Event \"Test\"]\n[Result \"0-1\"]\n\n1. e4 c5 2. Nf3 d6 3. d4 cxd4 0-1"
         } else {
-            format!(
-                "[Event \"Test\"]\n[Result \"1/2-1/2\"]\n\n1. d4 Nf6 2. c4 e6 3. Nf3 d5 1/2-1/2"
-            )
+            "[Event \"Test\"]\n[Result \"1/2-1/2\"]\n\n1. d4 Nf6 2. c4 e6 3. Nf3 d5 1/2-1/2"
         };
-        scid_db.add_game(&pgn).unwrap();
+        scid_db.add_game(pgn).unwrap();
     }
     scid_db.save().unwrap();
 
@@ -1181,3 +1179,72 @@ fn test_position_index_and_tree_index_separation() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_multi_column_caching_and_fast_desc() {
+    let dir = tempdir().unwrap();
+    let scid_path = dir.path().join("sort_cache_test.si5");
+    let mut scid_db = crate::db::ScidDatabaseWrapper::create(&scid_path, ScidFormat::Si5).unwrap();
+
+    let games = [
+        "[Event \"Event C\"]\n[White \"Carlsen, Magnus\"]\n[Black \"Anand, Viswanathan\"]\n[Result \"1-0\"]\n[ECO \"C50\"]\n[Date \"2015.01.10\"]\n[WhiteElo \"2850\"]\n[BlackElo \"2790\"]\n\n1. e4 e5 1-0",
+        "[Event \"Event A\"]\n[White \"Kasparov, Garry\"]\n[Black \"Karpov, Anatoly\"]\n[Result \"0-1\"]\n[ECO \"B90\"]\n[Date \"1985.10.15\"]\n[WhiteElo \"2800\"]\n[BlackElo \"2750\"]\n\n1. e4 c5 0-1",
+        "[Event \"Event B\"]\n[White \"Fischer, Robert\"]\n[Black \"Spassky, Boris\"]\n[Result \"1/2-1/2\"]\n[ECO \"E60\"]\n[Date \"1972.07.11\"]\n[WhiteElo \"2785\"]\n[BlackElo \"2660\"]\n\n1. d4 Nf6 1/2-1/2",
+    ];
+
+    for g in &games {
+        scid_db.add_game(g).unwrap();
+    }
+    scid_db.save().unwrap();
+
+    // 1. Sort by White ASC
+    let filter_white_asc = GameFilter {
+        sort_by: Some("white".to_string()),
+        sort_asc: Some(true),
+        ..Default::default()
+    };
+    let (summaries_asc, total) = scid_db.query_games(&filter_white_asc, 0, 10);
+    assert_eq!(total, 3);
+    assert_eq!(summaries_asc[0].white, "Carlsen, Magnus");
+    assert_eq!(summaries_asc[1].white, "Fischer, Robert");
+    assert_eq!(summaries_asc[2].white, "Kasparov, Garry");
+
+    // 2. Sort by White DESC (Should use instant reverse lookup)
+    let filter_white_desc = GameFilter {
+        sort_by: Some("white".to_string()),
+        sort_asc: Some(false),
+        ..Default::default()
+    };
+    let (summaries_desc, _) = scid_db.query_games(&filter_white_desc, 0, 10);
+    assert_eq!(summaries_desc[0].white, "Kasparov, Garry");
+    assert_eq!(summaries_desc[1].white, "Fischer, Robert");
+    assert_eq!(summaries_desc[2].white, "Carlsen, Magnus");
+
+    // 3. Sort by Date ASC (Should sort and cache Date column separately without losing White cache)
+    let filter_date_asc = GameFilter {
+        sort_by: Some("date".to_string()),
+        sort_asc: Some(true),
+        ..Default::default()
+    };
+    let (summaries_date, _) = scid_db.query_games(&filter_date_asc, 0, 10);
+    assert_eq!(summaries_date[0].date, "1972.07.11");
+    assert_eq!(summaries_date[1].date, "1985.10.15");
+    assert_eq!(summaries_date[2].date, "2015.01.10");
+
+    // 4. Query White ASC again -> Should hit column_sort_cache directly
+    let (cached_white_asc, _) = scid_db.query_games(&filter_white_asc, 0, 10);
+    assert_eq!(cached_white_asc[0].white, "Carlsen, Magnus");
+    assert_eq!(cached_white_asc[2].white, "Kasparov, Garry");
+
+    // 5. Query White Elo DESC
+    let filter_elo_desc = GameFilter {
+        sort_by: Some("white_elo".to_string()),
+        sort_asc: Some(false),
+        ..Default::default()
+    };
+    let (summaries_elo, _) = scid_db.query_games(&filter_elo_desc, 0, 10);
+    assert_eq!(summaries_elo[0].white_elo, 2850);
+    assert_eq!(summaries_elo[1].white_elo, 2800);
+    assert_eq!(summaries_elo[2].white_elo, 2785);
+}
+

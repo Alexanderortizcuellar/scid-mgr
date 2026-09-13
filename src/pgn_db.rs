@@ -114,7 +114,11 @@ pub struct PgnDatabaseWrapper {
     pub entries: Vec<CompactPgnRecord>,
     pub names: PgnNameTables,
     mmap: Arc<Mmap>,
+    player_ranks: std::sync::OnceLock<Vec<u32>>,
+    event_ranks: std::sync::OnceLock<Vec<u32>>,
+    site_ranks: std::sync::OnceLock<Vec<u32>>,
     query_cache: std::sync::Mutex<Option<(GameFilter, Vec<usize>)>>,
+    column_sort_cache: std::sync::Mutex<HashMap<String, Arc<Vec<usize>>>>,
 }
 
 pub type PgnDatabase = PgnDatabaseWrapper;
@@ -176,7 +180,11 @@ impl PgnDatabaseWrapper {
             entries,
             names,
             mmap: mmap_arc,
+            player_ranks: std::sync::OnceLock::new(),
+            event_ranks: std::sync::OnceLock::new(),
+            site_ranks: std::sync::OnceLock::new(),
             query_cache: std::sync::Mutex::new(None),
+            column_sort_cache: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -538,6 +546,45 @@ impl PgnDatabaseWrapper {
         Ok(pgn_text.trim().to_string())
     }
 
+    pub fn get_player_ranks(&self) -> &[u32] {
+        self.player_ranks.get_or_init(|| {
+            let names = &self.names.players;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
+        })
+    }
+
+    pub fn get_event_ranks(&self) -> &[u32] {
+        self.event_ranks.get_or_init(|| {
+            let names = &self.names.events;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
+        })
+    }
+
+    pub fn get_site_ranks(&self) -> &[u32] {
+        self.site_ranks.get_or_init(|| {
+            let names = &self.names.sites;
+            let mut ranks = vec![0u32; names.len()];
+            let mut ids: Vec<u32> = (0..names.len() as u32).collect();
+            ids.par_sort_unstable_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+            for (rank, &id) in ids.iter().enumerate() {
+                ranks[id as usize] = rank as u32;
+            }
+            ranks
+        })
+    }
+
     pub fn sort_indices(
         &self,
         matched_indices: &mut [usize],
@@ -545,31 +592,89 @@ impl PgnDatabaseWrapper {
         sort_asc: Option<bool>,
     ) {
         if let Some(sort_field) = sort_by {
-            let asc = sort_asc.unwrap_or(true);
+            let is_asc = sort_asc.unwrap_or(true);
             let entries = &self.entries;
-            let names = &self.names;
-            matched_indices.par_sort_unstable_by(|&a, &b| {
-                let ea = &entries[a];
-                let eb = &entries[b];
-                let ord = match sort_field.to_lowercase().as_str() {
-                    "id" => a.cmp(&b),
-                    "white" => names.player(ea.white_id).cmp(names.player(eb.white_id)),
-                    "black" => names.player(ea.black_id).cmp(names.player(eb.black_id)),
-                    "white_elo" => ea.white_elo.cmp(&eb.white_elo),
-                    "black_elo" => ea.black_elo.cmp(&eb.black_elo),
-                    "result" => ea.result.cmp(&eb.result),
-                    "eco" => ea.eco.cmp(&eb.eco),
-                    "date" => ea.date.cmp(&eb.date),
-                    "event" => names.event(ea.event_id).cmp(names.event(eb.event_id)),
-                    "site" => names.site(ea.site_id).cmp(names.site(eb.site_id)),
-                    _ => a.cmp(&b),
-                };
-                if asc {
-                    ord
-                } else {
-                    ord.reverse()
+
+            macro_rules! sort_by_u64 {
+                ($key_fn:expr) => {{
+                    let mut pairs: Vec<u64> = matched_indices
+                        .par_iter()
+                        .map(|&idx| {
+                            let key = ($key_fn(idx)) as u64;
+                            (key << 32) | (idx as u64)
+                        })
+                        .collect();
+                    pairs.par_sort_unstable();
+                    if !is_asc {
+                        pairs.reverse();
+                    }
+                    for (slot, pair) in matched_indices.iter_mut().zip(pairs.into_iter()) {
+                        *slot = (pair & 0xFFFF_FFFF) as usize;
+                    }
+                }};
+            }
+
+            match sort_field.to_lowercase().as_str() {
+                "date" => {
+                    sort_by_u64!(|idx: usize| entries[idx].date);
                 }
-            });
+                "white_elo" => {
+                    sort_by_u64!(|idx: usize| entries[idx].white_elo);
+                }
+                "black_elo" => {
+                    sort_by_u64!(|idx: usize| entries[idx].black_elo);
+                }
+                "eco" => {
+                    sort_by_u64!(|idx: usize| entries[idx].eco);
+                }
+                "result" => {
+                    sort_by_u64!(|idx: usize| entries[idx].result);
+                }
+                "white" => {
+                    let ranks = self.get_player_ranks();
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].white_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
+                }
+                "black" => {
+                    let ranks = self.get_player_ranks();
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].black_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
+                }
+                "event" => {
+                    let ranks = self.get_event_ranks();
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].event_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
+                }
+                "site" => {
+                    let ranks = self.get_site_ranks();
+                    sort_by_u64!(|idx: usize| {
+                        ranks
+                            .get(entries[idx].site_id as usize)
+                            .copied()
+                            .unwrap_or(u32::MAX)
+                    });
+                }
+                "id" | "index" => {
+                    if !is_asc {
+                        matched_indices.par_sort_unstable_by(|a, b| b.cmp(a));
+                    } else {
+                        matched_indices.par_sort_unstable();
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -643,6 +748,37 @@ impl PgnDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
+        // 0. Fast Column Sort Cache for Unfiltered Views (0.00ms lookup across whole table)
+        let is_unfiltered = filter.is_empty();
+
+        if is_unfiltered {
+            let col = filter.sort_by.as_deref().unwrap_or("id").to_lowercase();
+            let is_asc = filter.sort_asc.unwrap_or(true);
+            let total_matches = self.entries.len();
+
+            if let Ok(guard) = self.column_sort_cache.lock() {
+                if let Some(cached_asc) = guard.get(&col) {
+                    let start = page * page_size;
+                    if start >= total_matches {
+                        return (Vec::new(), total_matches);
+                    }
+                    let end = usize::min(start + page_size, total_matches);
+                    let summaries = if is_asc {
+                        cached_asc[start..end]
+                            .iter()
+                            .map(|&idx| self.get_summary(idx))
+                            .collect()
+                    } else {
+                        (start..end)
+                            .map(|i| cached_asc[total_matches - 1 - i])
+                            .map(|idx| self.get_summary(idx))
+                            .collect()
+                    };
+                    return (summaries, total_matches);
+                }
+            }
+        }
+
         // 1. Fast Query Cache: If identical filter is queried for subsequent pages, return instantly (0.00ms)
         if let Ok(mut guard) = self.query_cache.lock() {
             if let Some((ref cached_filter, ref cached_indices)) = *guard {
@@ -660,11 +796,17 @@ impl PgnDatabaseWrapper {
                     return (summaries, total_matches);
                 } else if cached_filter.same_search_criteria(filter) {
                     let mut sorted_indices = cached_indices.clone();
-                    self.sort_indices(
-                        &mut sorted_indices,
-                        filter.sort_by.as_deref(),
-                        filter.sort_asc,
-                    );
+                    if cached_filter.sort_by == filter.sort_by
+                        && cached_filter.sort_asc != filter.sort_asc
+                    {
+                        sorted_indices.reverse();
+                    } else {
+                        self.sort_indices(
+                            &mut sorted_indices,
+                            filter.sort_by.as_deref(),
+                            filter.sort_asc,
+                        );
+                    }
                     let total_matches = sorted_indices.len();
                     let start = page * page_size;
                     let summaries = if start >= total_matches {
@@ -976,6 +1118,22 @@ impl PgnDatabaseWrapper {
 
         if let Ok(mut guard) = self.query_cache.lock() {
             *guard = Some((filter.clone(), matching_indices.clone()));
+        }
+
+        // Cache full column permutation if unfiltered
+        if is_unfiltered {
+            let col = filter.sort_by.as_deref().unwrap_or("id").to_lowercase();
+            let is_asc = filter.sort_asc.unwrap_or(true);
+            let asc_indices = if is_asc {
+                matching_indices.clone()
+            } else {
+                let mut rev = matching_indices.clone();
+                rev.reverse();
+                rev
+            };
+            if let Ok(mut c_guard) = self.column_sort_cache.lock() {
+                c_guard.insert(col, Arc::new(asc_indices));
+            }
         }
 
         let start_idx = page * page_size;
