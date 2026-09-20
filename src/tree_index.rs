@@ -1207,7 +1207,8 @@ impl StripedTreePositionMap {
         use std::collections::hash_map::Entry;
         match guard.entry(hash) {
             Entry::Occupied(mut occ) => {
-                occ.get_mut().record_game(next_move, w_win, draw, b_win, w_elo, b_elo);
+                occ.get_mut()
+                    .record_game(next_move, w_win, draw, b_win, w_elo, b_elo);
             }
             Entry::Vacant(vac) => {
                 let mut node = TreePositionNode::new(hash);
@@ -1420,12 +1421,7 @@ impl<'a> pgn_reader::Visitor for PgnSinglePositionVisitor<'a> {
             let curr_hash: Zobrist64 = self.pos.zobrist_hash(EnPassantMode::Legal);
             if curr_hash.0 == self.target_hash {
                 self.node.record_game(
-                    None,
-                    self.w_win,
-                    self.draw,
-                    self.b_win,
-                    self.w_elo,
-                    self.b_elo,
+                    None, self.w_win, self.draw, self.b_win, self.w_elo, self.b_elo,
                 );
             }
         }

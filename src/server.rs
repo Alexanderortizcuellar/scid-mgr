@@ -903,18 +903,20 @@ fn handle_command(
                         *current_pos_index = PositionIndex::load(&db_path).ok();
                     }
                     if let Some(pos_idx) = current_pos_index.as_ref() {
-                        if let Some(matching_ids) = pos_idx.get_matching_game_ids(rep.zobrist_hash) {
-                            let mut filtered_ids: Vec<u32> = if let Some(ref t_ids) = target_game_ids {
-                                let t_set: std::collections::HashSet<usize> =
-                                    t_ids.iter().copied().collect();
-                                matching_ids
-                                    .iter()
-                                    .filter(|id| t_set.contains(id))
-                                    .map(|&id| id as u32)
-                                    .collect()
-                            } else {
-                                matching_ids.iter().map(|&id| id as u32).collect()
-                            };
+                        if let Some(matching_ids) = pos_idx.get_matching_game_ids(rep.zobrist_hash)
+                        {
+                            let mut filtered_ids: Vec<u32> =
+                                if let Some(ref t_ids) = target_game_ids {
+                                    let t_set: std::collections::HashSet<usize> =
+                                        t_ids.iter().copied().collect();
+                                    matching_ids
+                                        .iter()
+                                        .filter(|id| t_set.contains(id))
+                                        .map(|&id| id as u32)
+                                        .collect()
+                                } else {
+                                    matching_ids.iter().map(|&id| id as u32).collect()
+                                };
                             if let Some(limit) = max_sample_ids {
                                 filtered_ids.truncate(limit);
                             }
@@ -2240,6 +2242,304 @@ fn handle_command(
                     data: None,
                     error: Some(format!("Benchmark failed: {}", e)),
                 },
+            }
+        }
+
+        "validate_dsl" | "validate_cql" => {
+            let query_str = req
+                .params
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::search::parser::QueryParser::parse_str(query_str) {
+                Ok(_) => ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::json!({ "valid": true })),
+                    error: None,
+                },
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: Some(serde_json::json!({
+                        "valid": false,
+                        "position": e.position,
+                        "line": e.line,
+                        "column": e.column,
+                        "snippet": e.snippet,
+                        "help": e.help,
+                    })),
+                    error: Some(format!("{}", e)),
+                },
+            }
+        }
+
+        "search" | "search_query" | "query_search" | "dsl_search" | "cql_search" => {
+            let query_str = match req
+                .params
+                .get("query")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                Some(q) => q,
+                None => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some("Missing 'query' parameter".to_string()),
+                    };
+                }
+            };
+
+            let parsed_query = match crate::search::parser::QueryParser::parse_str(query_str) {
+                Ok(q) => q,
+                Err(e) => {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: Some(serde_json::json!({
+                            "position": e.position,
+                            "line": e.line,
+                            "column": e.column,
+                            "snippet": e.snippet,
+                            "help": e.help,
+                        })),
+                        error: Some(format!("{}", e)),
+                    };
+                }
+            };
+
+            let custom_pgn_path = req
+                .params
+                .get("pgn_path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty());
+
+            let limit = req
+                .params
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(500) as usize;
+
+            let start_time = Instant::now();
+
+            if let Some(pgn_path) = custom_pgn_path {
+                let path = Path::new(pgn_path);
+                if !path.exists() {
+                    return ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("PGN file does not exist: {}", pgn_path)),
+                    };
+                }
+                match PgnDatabaseWrapper::open(path) {
+                    Ok(pgn_wrapper) => {
+                        let total_games = pgn_wrapper.game_count();
+                        let match_results = thread_pool.install(|| {
+                            pgn_wrapper.search_query_with_progress(&parsed_query, |scanned, total, matches_len| {
+                                let event_json = serde_json::json!({
+                                    "event": "search_progress",
+                                    "data": {
+                                        "scanned": scanned,
+                                        "total": total,
+                                        "matches": matches_len,
+                                        "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                    }
+                                });
+                                if let Ok(line) = serde_json::to_string(&event_json) {
+                                    let mut out = io::stdout().lock();
+                                    let _ = writeln!(out, "{}", line);
+                                    let _ = out.flush();
+                                }
+                            })
+                        });
+
+                        let matches: Vec<serde_json::Value> = match_results
+                            .iter()
+                            .take(limit)
+                            .map(|m| {
+                                let idx = m.game_id;
+                                let summ = pgn_wrapper.get_summary(idx);
+                                let pgn_text = pgn_wrapper.get_game_pgn(idx).unwrap_or_default();
+                                serde_json::json!({
+                                    "game_id": idx,
+                                    "white": summ.white,
+                                    "black": summ.black,
+                                    "date": summ.date,
+                                    "result": summ.result,
+                                    "event": summ.event,
+                                    "site": summ.site,
+                                    "round": summ.round,
+                                    "match_count": m.match_details.match_count,
+                                    "matching_plies": m.match_details.matching_plies,
+                                    "matching_fen": null,
+                                    "pgn": pgn_text,
+                                })
+                            })
+                            .collect();
+
+                        let duration_ms = start_time.elapsed().as_millis() as u64;
+                        let matched_count = match_results.len();
+
+                        ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "total_searched": total_games,
+                                "matched_count": matched_count,
+                                "duration_ms": duration_ms,
+                                "matches": matches,
+                            })),
+                            error: None,
+                        }
+                    }
+                    Err(e) => ResponseMessage {
+                        id,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Failed to open PGN database: {}", e)),
+                    },
+                }
+            } else {
+                let db = match current_db.as_ref() {
+                    Some(d) => d,
+                    None => {
+                        return ResponseMessage {
+                            id,
+                            status: "error".to_string(),
+                            data: None,
+                            error: Some(
+                                "No database currently opened and no 'pgn_path' provided"
+                                    .to_string(),
+                            ),
+                        };
+                    }
+                };
+
+                match db {
+                    DatabaseBackend::Scid(s) => {
+                        let total_games = s.game_count();
+                        let match_results = thread_pool.install(|| {
+                            s.search_query_with_progress(&parsed_query, |scanned, total, matches_len| {
+                                let event_json = serde_json::json!({
+                                    "event": "search_progress",
+                                    "data": {
+                                        "scanned": scanned,
+                                        "total": total,
+                                        "matches": matches_len,
+                                        "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                    }
+                                });
+                                if let Ok(line) = serde_json::to_string(&event_json) {
+                                    let mut out = io::stdout().lock();
+                                    let _ = writeln!(out, "{}", line);
+                                    let _ = out.flush();
+                                }
+                            })
+                        });
+
+                        let matches: Vec<serde_json::Value> = match_results
+                            .iter()
+                            .take(limit)
+                            .filter_map(|m| {
+                                let idx = m.game_id;
+                                let summ = s.get_game_summary(idx)?;
+                                let pgn_text = s.game_pgn(idx).unwrap_or_default();
+                                Some(serde_json::json!({
+                                    "game_id": idx,
+                                    "white": summ.white,
+                                    "black": summ.black,
+                                    "date": summ.date,
+                                    "result": summ.result,
+                                    "event": summ.event,
+                                    "site": summ.site,
+                                    "round": summ.round,
+                                    "match_count": m.match_details.match_count,
+                                    "matching_plies": m.match_details.matching_plies,
+                                    "matching_fen": null,
+                                    "pgn": pgn_text,
+                                }))
+                            })
+                            .collect();
+
+                        let duration_ms = start_time.elapsed().as_millis() as u64;
+                        let matched_count = match_results.len();
+
+                        ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "total_searched": total_games,
+                                "matched_count": matched_count,
+                                "duration_ms": duration_ms,
+                                "matches": matches,
+                            })),
+                            error: None,
+                        }
+                    }
+                    DatabaseBackend::Pgn(p) => {
+                        let total_games = p.game_count();
+                        let match_results = thread_pool.install(|| {
+                            p.search_query_with_progress(&parsed_query, |scanned, total, matches_len| {
+                                let event_json = serde_json::json!({
+                                    "event": "search_progress",
+                                    "data": {
+                                        "scanned": scanned,
+                                        "total": total,
+                                        "matches": matches_len,
+                                        "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                                    }
+                                });
+                                if let Ok(line) = serde_json::to_string(&event_json) {
+                                    let mut out = io::stdout().lock();
+                                    let _ = writeln!(out, "{}", line);
+                                    let _ = out.flush();
+                                }
+                            })
+                        });
+
+                        let matches: Vec<serde_json::Value> = match_results
+                            .iter()
+                            .take(limit)
+                            .map(|m| {
+                                let idx = m.game_id;
+                                let summ = p.get_summary(idx);
+                                let pgn_text = p.get_game_pgn(idx).unwrap_or_default();
+                                serde_json::json!({
+                                    "game_id": idx,
+                                    "white": summ.white,
+                                    "black": summ.black,
+                                    "date": summ.date,
+                                    "result": summ.result,
+                                    "event": summ.event,
+                                    "site": summ.site,
+                                    "round": summ.round,
+                                    "match_count": m.match_details.match_count,
+                                    "matching_plies": m.match_details.matching_plies,
+                                    "matching_fen": null,
+                                    "pgn": pgn_text,
+                                })
+                            })
+                            .collect();
+
+                        let duration_ms = start_time.elapsed().as_millis() as u64;
+                        let matched_count = match_results.len();
+
+                        ResponseMessage {
+                            id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "total_searched": total_games,
+                                "matched_count": matched_count,
+                                "duration_ms": duration_ms,
+                                "matches": matches,
+                            })),
+                            error: None,
+                        }
+                    }
+                }
             }
         }
 

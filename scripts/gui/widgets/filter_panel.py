@@ -29,10 +29,10 @@ class FilterPanelWidget(QWidget):
 
         filters_group = QGroupBox("Search & Filters")
         filters_layout = QGridLayout(filters_group)
-        filters_layout.setContentsMargins(10, 8, 10, 8)
-        filters_layout.setSpacing(6)
+        filters_layout.setContentsMargins(8, 4, 8, 4)
+        filters_layout.setSpacing(4)
 
-        # Player search
+        # Row 0: Player, White, Black, Result, ECO
         filters_layout.addWidget(QLabel("Player (Any):"), 0, 0)
         self.filter_player = QLineEdit()
         self.filter_player.returnPressed.connect(self.on_search_clicked)
@@ -48,68 +48,74 @@ class FilterPanelWidget(QWidget):
         self.filter_black.returnPressed.connect(self.on_search_clicked)
         filters_layout.addWidget(self.filter_black, 0, 5)
 
-        # Result & ECO & Date
-        filters_layout.addWidget(QLabel("Result:"), 1, 0)
+        filters_layout.addWidget(QLabel("Result:"), 0, 6)
         self.filter_result = QComboBox()
         self.filter_result.addItems(["All", "1-0", "0-1", "1/2-1/2", "*"])
-        filters_layout.addWidget(self.filter_result, 1, 1)
+        filters_layout.addWidget(self.filter_result, 0, 7)
 
-        filters_layout.addWidget(QLabel("ECO Code:"), 1, 2)
+        filters_layout.addWidget(QLabel("ECO:"), 0, 8)
         self.filter_eco = QLineEdit()
-        self.filter_eco.setPlaceholderText("e.g. B85 or C")
+        self.filter_eco.setPlaceholderText("B85, C..")
         self.filter_eco.returnPressed.connect(self.on_search_clicked)
-        filters_layout.addWidget(self.filter_eco, 1, 3)
+        filters_layout.addWidget(self.filter_eco, 0, 9)
 
-        filters_layout.addWidget(QLabel("Date:"), 1, 4)
+        # Row 1: Date, Event, Site, Status Flags, Advanced Search
+        filters_layout.addWidget(QLabel("Date:"), 1, 0)
         self.filter_date = QLineEdit()
         self.filter_date.setPlaceholderText("YYYY.MM.DD")
         self.filter_date.returnPressed.connect(self.on_search_clicked)
-        filters_layout.addWidget(self.filter_date, 1, 5)
+        filters_layout.addWidget(self.filter_date, 1, 1)
 
-        # Event & Site & Deleted flags
-        filters_layout.addWidget(QLabel("Event:"), 2, 0)
+        filters_layout.addWidget(QLabel("Event:"), 1, 2)
         self.filter_event = QLineEdit()
         self.filter_event.returnPressed.connect(self.on_search_clicked)
-        filters_layout.addWidget(self.filter_event, 2, 1)
+        filters_layout.addWidget(self.filter_event, 1, 3)
 
-        filters_layout.addWidget(QLabel("Site:"), 2, 2)
+        filters_layout.addWidget(QLabel("Site:"), 1, 4)
         self.filter_site = QLineEdit()
         self.filter_site.returnPressed.connect(self.on_search_clicked)
-        filters_layout.addWidget(self.filter_site, 2, 3)
+        filters_layout.addWidget(self.filter_site, 1, 5)
 
         flags_layout = QHBoxLayout()
-        self.chk_include_deleted = QCheckBox("Include Deleted")
+        flags_layout.setContentsMargins(0, 0, 0, 0)
+        self.chk_include_deleted = QCheckBox("Deleted")
         self.chk_include_deleted.setChecked(True)
         flags_layout.addWidget(self.chk_include_deleted)
-
-        self.chk_only_deleted = QCheckBox("Only Deleted")
+        self.chk_only_deleted = QCheckBox("Only Del")
         flags_layout.addWidget(self.chk_only_deleted)
-        filters_layout.addLayout(flags_layout, 2, 4, 1, 2)
-
-        # Position (FEN) Search Row
-        filters_layout.addWidget(QLabel("Position (FEN):"), 3, 0)
-        self.filter_fen = QLineEdit()
-        self.filter_fen.setPlaceholderText("e.g. rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6")
-        self.filter_fen.returnPressed.connect(self.on_search_clicked)
-        filters_layout.addWidget(self.filter_fen, 3, 1, 1, 3)
-
-        # Action buttons
-        btn_search_layout = QHBoxLayout()
-        self.btn_search = QPushButton("Apply Filters / Search")
-        self.btn_search.setStyleSheet("font-weight: bold; background-color: #1976d2; color: white; padding: 5px 15px;")
-        self.btn_search.clicked.connect(self.on_search_clicked)
-        btn_search_layout.addWidget(self.btn_search)
+        filters_layout.addLayout(flags_layout, 1, 6, 1, 2)
 
         self.btn_adv_search = QPushButton("🔍 Advanced Search...")
-        self.btn_adv_search.setStyleSheet("font-weight: bold; background-color: #6a1b9a; color: white; padding: 5px 12px;")
+        self.btn_adv_search.setStyleSheet("font-weight: bold; background-color: #6a1b9a; color: white; padding: 3px 8px;")
         self.btn_adv_search.clicked.connect(self.open_advanced_search)
-        btn_search_layout.addWidget(self.btn_adv_search)
+        filters_layout.addWidget(self.btn_adv_search, 1, 8, 1, 2)
+
+        # Row 2: Position FEN, CQLite Query, Search & Reset Buttons
+        filters_layout.addWidget(QLabel("FEN:"), 2, 0)
+        self.filter_fen = QLineEdit()
+        self.filter_fen.setPlaceholderText("e.g. 8/8/8/8/3Q4/8/8/8 or full FEN")
+        self.filter_fen.returnPressed.connect(self.on_search_clicked)
+        filters_layout.addWidget(self.filter_fen, 2, 1, 1, 3)
+
+        filters_layout.addWidget(QLabel("🔎 CQLite:"), 2, 4)
+        self.filter_cql = QLineEdit()
+        self.filter_cql.setPlaceholderText("e.g. checkmate and attacks(N, k) or [Qq]==2 or tag \"TimeControl\"==\"300\"")
+        self.filter_cql.returnPressed.connect(self.on_search_clicked)
+        filters_layout.addWidget(self.filter_cql, 2, 5, 1, 3)
+
+        btn_search_layout = QHBoxLayout()
+        btn_search_layout.setContentsMargins(0, 0, 0, 0)
+        btn_search_layout.setSpacing(4)
+        self.btn_search = QPushButton("Apply / Search")
+        self.btn_search.setStyleSheet("font-weight: bold; background-color: #1976d2; color: white; padding: 4px 10px;")
+        self.btn_search.clicked.connect(self.on_search_clicked)
+        btn_search_layout.addWidget(self.btn_search)
 
         btn_reset = QPushButton("Reset")
         btn_reset.clicked.connect(self.reset_filters)
         btn_search_layout.addWidget(btn_reset)
 
-        filters_layout.addLayout(btn_search_layout, 3, 4, 1, 2)
+        filters_layout.addLayout(btn_search_layout, 2, 8, 1, 2)
         layout.addWidget(filters_group)
 
     def get_filter_dict(self) -> Dict[str, Any]:
@@ -126,10 +132,14 @@ class FilterPanelWidget(QWidget):
             "only_deleted": self.chk_only_deleted.isChecked(),
             "fen": self.filter_fen.text().strip(),
         }
+        quick_cql = self.filter_cql.text().strip()
+        if quick_cql:
+            filters["cql"] = quick_cql
+        elif self.current_cql_filter:
+            filters["cql"] = self.current_cql_filter
+
         if self.current_material_filter:
             filters["material"] = self.current_material_filter
-        if self.current_cql_filter:
-            filters["cql"] = self.current_cql_filter
         return filters
 
     def on_search_clicked(self):
@@ -145,6 +155,7 @@ class FilterPanelWidget(QWidget):
         self.filter_event.clear()
         self.filter_site.clear()
         self.filter_fen.clear()
+        self.filter_cql.clear()
         self.chk_include_deleted.setChecked(True)
         self.chk_only_deleted.setChecked(False)
         self.current_material_filter = None
@@ -170,6 +181,7 @@ class FilterPanelWidget(QWidget):
             self.chk_include_deleted.setChecked(f.get("include_deleted", True))
             self.chk_only_deleted.setChecked(f.get("only_deleted", False))
             self.filter_fen.setText(f.get("fen", ""))
+            self.filter_cql.setText(f.get("cql", ""))
 
             self.current_material_filter = f.get("material")
             self.current_cql_filter = f.get("cql")

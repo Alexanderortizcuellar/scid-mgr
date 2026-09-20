@@ -248,15 +248,14 @@ class PosIdxDevWorkbench(QMainWindow):
 
     def start_backend(self):
         backend_bin = os.path.join(
-            SCRIPT_DIR, "..", "target", "release", "scid-mgr.exe"
+            SCRIPT_DIR, "..", "target", "release", "scid-mgr.exe" if sys.platform == "win32" else "scid-mgr"
         )
         if not os.path.exists(backend_bin):
-            backend_bin = os.path.join(
-                SCRIPT_DIR, "..", "target", "debug", "scid-mgr.exe"
-            )
+            self.status_bar.setText(f"Release binary missing: {backend_bin}. Run cargo build --release")
+            return
         try:
             self.client.start(backend_bin)
-            self.status_bar.setText(f"Backend started: {backend_bin}")
+            self.status_bar.setText(f"Backend started (Release): {backend_bin}")
         except Exception as e:
             self.status_bar.setText(f"Failed to start backend: {e}")
 

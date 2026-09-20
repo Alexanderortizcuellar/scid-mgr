@@ -69,6 +69,7 @@ pub mod pgn_db;
 pub mod pgn_utils;
 pub mod position_index;
 pub mod position_search;
+pub mod search;
 pub mod server;
 pub mod test_suite;
 pub mod tree_index;
@@ -83,6 +84,11 @@ pub use position_index::{
     PositionPostingList,
 };
 pub use position_search::{MaterialFilter, PositionMatch, PositionSearchResult};
+pub use search::{
+    ComparisonOp, GameSearchEvaluator, HeaderMatcher, HeaderPredicate, MaterialPredicate,
+    MovePattern, MoveRecord, PathMatcher, PathPattern, PositionMatcher, PositionPattern,
+    QueryMatchResult, SearchQuery, SquareContent,
+};
 pub use tree_index::{
     OpeningTreeMoveView, OpeningTreeReport, TreeIndex, TreeIndexDiagnostics, TreeIndexHeader,
     TreeMoveStats, TreePositionNode,

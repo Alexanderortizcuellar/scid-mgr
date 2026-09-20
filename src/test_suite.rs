@@ -253,11 +253,21 @@ fn test_alapin_sicilian_piece_placement_search() {
         fen: Some(alapin_piece_placement.to_string()),
         ..Default::default()
     };
-    assert!(!fen_filter.is_empty(), "GameFilter with fen must not be empty!");
+    assert!(
+        !fen_filter.is_empty(),
+        "GameFilter with fen must not be empty!"
+    );
 
     let (summaries, total) = pgn_db.query_games(&fen_filter, 0, 10);
-    assert_eq!(total, 1, "query_games with FEN should return matching game count");
-    assert_eq!(summaries.len(), 1, "query_games with FEN should return matching game summary");
+    assert_eq!(
+        total, 1,
+        "query_games with FEN should return matching game count"
+    );
+    assert_eq!(
+        summaries.len(),
+        1,
+        "query_games with FEN should return matching game summary"
+    );
     assert_eq!(summaries[0].white, "Player A");
 }
 
@@ -1260,3 +1270,183 @@ fn test_multi_column_caching_and_fast_desc() {
     assert_eq!(summaries_elo[2].white_elo, 2785);
 }
 
+#[test]
+fn test_unified_search_engine_integration_scid_and_pgn() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("games.pgn");
+    let si5_path = dir.path().join("games.si5");
+
+    let pgn_data = format!(
+        "{}\n\n{}\n\n{}\n\n{}",
+        SAMPLE_GAME_1, SAMPLE_GAME_2, SAMPLE_GAME_3_VARIATIONS, SAMPLE_GAME_4_CUSTOM_FEN
+    );
+    std::fs::write(&pgn_path, &pgn_data)?;
+
+    // Create SCID database
+    let mut scid_db = ScidDatabaseWrapper::create(&si5_path, ScidFormat::Si5)?;
+    scid_db.add_game(SAMPLE_GAME_1)?;
+    scid_db.add_game(SAMPLE_GAME_2)?;
+    scid_db.add_game(SAMPLE_GAME_3_VARIATIONS)?;
+    scid_db.add_game(SAMPLE_GAME_4_CUSTOM_FEN)?;
+
+    // Open PGN database
+    let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path)?;
+
+    assert_eq!(scid_db.game_count(), 4);
+    assert_eq!(pgn_db.game_count(), 4);
+
+    // 1. Query: Player Morphy
+    let q1 = crate::search::QueryParser::parse_str("player 'Morphy'")?;
+    let scid_res1 = scid_db.search_query(&q1);
+    let pgn_res1 = pgn_db.search_query(&q1);
+    assert_eq!(scid_res1.len(), 1);
+    assert_eq!(scid_res1[0].game_id, 1);
+    assert_eq!(pgn_res1.len(), 1);
+    assert_eq!(pgn_res1[0].game_id, 1);
+
+    // 2. Query: Material Queenless [Qq] == 0 in custom FEN puzzle (Game 3 index)
+    let q2 = crate::search::QueryParser::parse_str("[Qq] == 0")?;
+    let scid_res2 = scid_db.search_query(&q2);
+    let pgn_res2 = pgn_db.search_query(&q2);
+    assert!(scid_res2.iter().any(|m| m.game_id == 3));
+    assert!(pgn_res2.iter().any(|m| m.game_id == 3));
+
+    // 3. Query: Move wildcard (any white move) path [A--]
+    let q3 = crate::search::QueryParser::parse_str("path [A--]")?;
+    let scid_res3 = scid_db.search_query(&q3);
+    let pgn_res3 = pgn_db.search_query(&q3);
+    assert_eq!(scid_res3.len(), 4);
+    assert_eq!(pgn_res3.len(), 4);
+
+    // 4. Query: Checkmate delivering games
+    let q4 = crate::search::QueryParser::parse_str("checkmate")?;
+    let scid_res4 = scid_db.search_query(&q4);
+    let pgn_res4 = pgn_db.search_query(&q4);
+    // Games 0 (Be7#), 1 (Rd8#), 3 (Rh1#) end in checkmate
+    assert_eq!(scid_res4.len(), 3);
+    assert_eq!(pgn_res4.len(), 3);
+    assert_eq!(scid_res4[0].game_id, 0);
+    assert_eq!(scid_res4[1].game_id, 1);
+    assert_eq!(scid_res4[2].game_id, 3);
+
+    // 5. Query: Pin tactics motif
+    let q5 = crate::search::QueryParser::parse_str("pin [B, n, q]")?;
+    let scid_res5 = scid_db.search_query(&q5);
+    let pgn_res5 = pgn_db.search_query(&q5);
+    assert_eq!(scid_res5.len(), pgn_res5.len());
+
+    Ok(())
+}
+
+#[test]
+fn test_scid_search_comprehensive_matrix() -> Result<()> {
+    let dir = tempdir()?;
+    let si5_path = dir.path().join("matrix_games.si5");
+    let pgn_path = dir.path().join("matrix_games.pgn");
+
+    let pgn_data = format!(
+        "{}\n\n{}\n\n{}\n\n{}",
+        SAMPLE_GAME_1, SAMPLE_GAME_2, SAMPLE_GAME_3_VARIATIONS, SAMPLE_GAME_4_CUSTOM_FEN
+    );
+    std::fs::write(&pgn_path, &pgn_data)?;
+
+    let mut scid_db = ScidDatabaseWrapper::create(&si5_path, ScidFormat::Si5)?;
+    scid_db.add_game(SAMPLE_GAME_1)?;
+    scid_db.add_game(SAMPLE_GAME_2)?;
+    scid_db.add_game(SAMPLE_GAME_3_VARIATIONS)?;
+    scid_db.add_game(SAMPLE_GAME_4_CUSTOM_FEN)?;
+
+    let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(&pgn_path)?;
+
+    // 1. Header tests: White, Black, Elo, ECO, Date, Event, Result
+    let q_white = crate::search::QueryParser::parse_str("white 'Kasparov'")?;
+    assert_eq!(scid_db.search_query(&q_white).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_white).len(), 1);
+
+    let q_black = crate::search::QueryParser::parse_str("black 'Kieseritzky'")?;
+    assert_eq!(scid_db.search_query(&q_black).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_black).len(), 1);
+
+    let q_elo = crate::search::QueryParser::parse_str("white_elo >= 2700")?;
+    // Morphy (2700) and Kasparov (2800)
+    assert_eq!(scid_db.search_query(&q_elo).len(), 2);
+    assert_eq!(pgn_db.search_query(&q_elo).len(), 2);
+
+    let q_eco = crate::search::QueryParser::parse_str("eco 'C33'")?;
+    assert_eq!(scid_db.search_query(&q_eco).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_eco).len(), 1);
+
+    let q_res_draw = crate::search::QueryParser::parse_str("result '1/2-1/2'")?;
+    assert_eq!(scid_db.search_query(&q_res_draw).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_res_draw).len(), 1);
+
+    // 2. Pure Board & Position tests
+    let q_turn_black = crate::search::QueryParser::parse_str("btm and ply <= 5")?;
+    assert_eq!(scid_db.search_query(&q_turn_black).len(), 4);
+    assert_eq!(pgn_db.search_query(&q_turn_black).len(), 4);
+
+    let q_queens = crate::search::QueryParser::parse_str("[Qq] >= 2")?;
+    assert_eq!(scid_db.search_query(&q_queens).len(), 3);
+    assert_eq!(pgn_db.search_query(&q_queens).len(), 3);
+
+    // 3. Power tests
+    let q_power = crate::search::QueryParser::parse_str("white_power > black_power")?;
+    assert!(scid_db.search_query(&q_power).len() >= 2);
+    assert!(pgn_db.search_query(&q_power).len() >= 2);
+
+    // 4. Move tests with and without SAN
+    let q_san_move = crate::search::QueryParser::parse_str("move 'Rd8#'")?;
+    assert_eq!(scid_db.search_query(&q_san_move).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_san_move).len(), 1);
+
+    let q_piece_move = crate::search::QueryParser::parse_str("move piece N to d5")?;
+    assert_eq!(scid_db.search_query(&q_piece_move).len(), 1); // Game 0: 17. Nd5
+    assert_eq!(pgn_db.search_query(&q_piece_move).len(), 1);
+
+    // 5. Line and Path tests
+    let q_line = crate::search::QueryParser::parse_str("line [e4 e5 Nf3]")?;
+    assert_eq!(scid_db.search_query(&q_line).len(), 1); // Game 1
+    assert_eq!(pgn_db.search_query(&q_line).len(), 1);
+
+    let q_path_wildcard = crate::search::QueryParser::parse_str("path [e4 ... Rd8#]")?;
+    assert_eq!(scid_db.search_query(&q_path_wildcard).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_path_wildcard).len(), 1);
+
+    // 6. Boolean & Composite tests
+    let q_and = crate::search::QueryParser::parse_str("player 'Morphy' and move 'Rd8#'")?;
+    assert_eq!(scid_db.search_query(&q_and).len(), 1);
+    assert_eq!(pgn_db.search_query(&q_and).len(), 1);
+
+    let q_or = crate::search::QueryParser::parse_str("white 'Morphy' or white 'Kasparov'")?;
+    assert_eq!(scid_db.search_query(&q_or).len(), 2);
+    assert_eq!(pgn_db.search_query(&q_or).len(), 2);
+
+    let q_not = crate::search::QueryParser::parse_str("not white 'Morphy'")?;
+    assert_eq!(scid_db.search_query(&q_not).len(), 3);
+    assert_eq!(pgn_db.search_query(&q_not).len(), 3);
+
+    // 7. Sub-range search tests (e.g. search only games in range [1, 3))
+    let q_all = crate::search::QueryParser::parse_str("result '1-0' or result '1/2-1/2'")?;
+    assert_eq!(scid_db.search_query(&q_all).len(), 4);
+    assert_eq!(pgn_db.search_query(&q_all).len(), 4);
+
+    // Only games 0..2 (Games 0 and 1)
+    let scid_range_0_2 = scid_db.search_query_range(&q_all, 0, 2);
+    let pgn_range_0_2 = pgn_db.search_query_range(&q_all, 0, 2);
+    assert_eq!(scid_range_0_2.len(), 2);
+    assert_eq!(pgn_range_0_2.len(), 2);
+    assert_eq!(scid_range_0_2[0].game_id, 0);
+    assert_eq!(scid_range_0_2[1].game_id, 1);
+    assert_eq!(pgn_range_0_2[0].game_id, 0);
+    assert_eq!(pgn_range_0_2[1].game_id, 1);
+
+    // Only game 2..3 (Game 2)
+    let scid_range_2_3 = scid_db.search_query_range(&q_all, 2, 3);
+    let pgn_range_2_3 = pgn_db.search_query_range(&q_all, 2, 3);
+    assert_eq!(scid_range_2_3.len(), 1);
+    assert_eq!(pgn_range_2_3.len(), 1);
+    assert_eq!(scid_range_2_3[0].game_id, 2);
+    assert_eq!(pgn_range_2_3[0].game_id, 2);
+
+    Ok(())
+}

@@ -50,8 +50,8 @@ class DatabaseControlWidget(QWidget):
         # 1. Connection & Database Management Group
         conn_group = QGroupBox("Backend Connection & SCID Database")
         conn_layout = QGridLayout(conn_group)
-        conn_layout.setContentsMargins(10, 8, 10, 8)
-        conn_layout.setSpacing(6)
+        conn_layout.setContentsMargins(8, 4, 8, 4)
+        conn_layout.setSpacing(4)
 
         # Binary Path
         conn_layout.addWidget(QLabel("scid-mgr Binary:"), 0, 0)
@@ -73,6 +73,7 @@ class DatabaseControlWidget(QWidget):
         # SCID C++ Engine (Optional Legacy)
         conn_layout.addWidget(QLabel("SCID C++ (Optional):"), 2, 0)
         scid_cpp_row = QHBoxLayout()
+        scid_cpp_row.setContentsMargins(0, 0, 0, 0)
         self.scid_cpp_input = QLineEdit()
         scid_cpp_row.addWidget(self.scid_cpp_input)
         self.chk_use_scid_cpp = QCheckBox("Use external SCID C++ binary instead of Native Rust (~1.2s)")
@@ -86,8 +87,10 @@ class DatabaseControlWidget(QWidget):
 
         # Database action buttons row
         db_actions_layout = QHBoxLayout()
+        db_actions_layout.setContentsMargins(0, 0, 0, 0)
+        db_actions_layout.setSpacing(4)
         self.btn_connect = QPushButton("Start Backend")
-        self.btn_connect.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 12px;")
+        self.btn_connect.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 4px 10px;")
         self.btn_connect.clicked.connect(self.toggle_backend)
         db_actions_layout.addWidget(self.btn_connect)
 
@@ -108,22 +111,22 @@ class DatabaseControlWidget(QWidget):
         db_actions_layout.addWidget(self.btn_compact)
 
         self.btn_save = QPushButton("Save DB")
-        self.btn_save.setStyleSheet("font-weight: bold; background-color: #0288d1; color: white; padding: 6px 12px;")
+        self.btn_save.setStyleSheet("font-weight: bold; background-color: #0288d1; color: white; padding: 4px 10px;")
         self.btn_save.clicked.connect(lambda: self.save_requested.emit())
         db_actions_layout.addWidget(self.btn_save)
 
-        self.btn_benchmark = QPushButton("📊 Metrics / Benchmark...")
-        self.btn_benchmark.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        self.btn_benchmark = QPushButton("📊 Metrics...")
+        self.btn_benchmark.setStyleSheet("font-weight: bold; padding: 4px 8px;")
         self.btn_benchmark.clicked.connect(self.open_benchmark_dialog)
         db_actions_layout.addWidget(self.btn_benchmark)
 
-        self.btn_pos_idx_diag = QPushButton("🔬 Pos.idx Dev Metrics...")
-        self.btn_pos_idx_diag.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        self.btn_pos_idx_diag = QPushButton("🔬 Pos.idx...")
+        self.btn_pos_idx_diag.setStyleSheet("font-weight: bold; padding: 4px 8px;")
         self.btn_pos_idx_diag.clicked.connect(self.open_pos_idx_diagnostics_dialog)
         db_actions_layout.addWidget(self.btn_pos_idx_diag)
 
         self.btn_settings = QPushButton("⚙️ Settings...")
-        self.btn_settings.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        self.btn_settings.setStyleSheet("font-weight: bold; padding: 4px 8px;")
         self.btn_settings.clicked.connect(self.open_settings_dialog)
         db_actions_layout.addWidget(self.btn_settings)
 
@@ -179,29 +182,10 @@ class DatabaseControlWidget(QWidget):
         layout.addWidget(self.stats_bar)
 
     def auto_detect_defaults(self):
-        settings = QSettings("ChessScidMgr", "ScidGui")
-        saved_bin = settings.value("binary_path", "")
-        if saved_bin and os.path.exists(saved_bin):
-            self.binary_input.setText(saved_bin)
-
-        if not self.binary_input.text():
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            bin_names = ["scid-mgr.exe", "scid-mgr"]
-            target_dirs = [
-                os.path.join(project_root, "target", "release"),
-                os.path.join(project_root, "target", "debug"),
-                os.path.join(os.getcwd(), "target", "release"),
-                os.path.join(os.getcwd(), "target", "debug"),
-            ]
-
-            for t_dir in target_dirs:
-                for b_name in bin_names:
-                    candidate = os.path.join(t_dir, b_name)
-                    if os.path.exists(candidate):
-                        self.binary_input.setText(os.path.abspath(candidate))
-                        break
-                if self.binary_input.text():
-                    break
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        release_bin = os.path.join(project_root, "target", "release", "scid-mgr.exe" if sys.platform == "win32" else "scid-mgr")
+        
+        self.binary_input.setText(os.path.abspath(release_bin))
 
         # Auto-detect official SCID C++ engine
         downloads_scid = r"C:\Users\ASUS\Downloads\scid-v5.2.202603_windows_x64\scid_windows_x64\bin\scid.exe"
@@ -258,7 +242,11 @@ class DatabaseControlWidget(QWidget):
             bin_path = self.binary_input.text().strip()
             db_path = self.db_input.text().strip()
             if not bin_path or not os.path.exists(bin_path):
-                QMessageBox.warning(self, "Invalid Binary", f"Cannot find binary at:\n{bin_path}")
+                QMessageBox.warning(
+                    self,
+                    "Release Binary Missing",
+                    f"Cannot find release binary at:\n{bin_path}\n\nPlease compile it using: cargo build --release",
+                )
                 return
 
             settings = QSettings("chess-scid-rw", "ScidDatabaseManager")

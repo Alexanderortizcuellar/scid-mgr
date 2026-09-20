@@ -71,6 +71,48 @@ enum Commands {
         desc: bool,
     },
 
+    /// Search games using unified CQLite text query or patterns across SCID/PGN
+    Search {
+        /// Path to .si4, .si5, or .pgn file
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Search query expression (e.g. "player 'Kasparov' and [Qq]==0 and move A--")
+        #[arg(value_name = "QUERY")]
+        query: String,
+
+        /// Maximum number of matching games to return (default: 50)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+
+        /// Start game index (0-based) for sub-range search
+        #[arg(long)]
+        start_game: Option<usize>,
+
+        /// End game index (0-based, exclusive) for sub-range search
+        #[arg(long)]
+        end_game: Option<usize>,
+
+        /// Output results as formatted JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Only output the total count of matching games
+        #[arg(long)]
+        count_only: bool,
+    },
+
+    /// Explain, normalize, and inspect CQL queries (parsed AST, canonical DSL, and symmetry branch breakdowns)
+    Explain {
+        /// Query expression to parse and explain
+        #[arg(value_name = "QUERY")]
+        query: String,
+
+        /// Output explanation as formatted JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Search for an exact board position by FEN across all games
     SearchPos {
         /// Path to .si4 or .si5 file
@@ -429,6 +471,191 @@ fn main() -> Result<()> {
                     del_mark,
                     truncate_str(&g.event, 15)
                 );
+            }
+        }
+        Some(Commands::Search {
+            db_path,
+            query,
+            limit,
+            start_game,
+            end_game,
+            json,
+            count_only,
+        }) => {
+            let parsed_query = match scid_mgr::search::parser::QueryParser::parse_str(&query) {
+                Ok(q) => q,
+                Err(e) => {
+                    eprintln!("Query Parse Error: {}", e);
+                    if let Some(help) = &e.help {
+                        eprintln!("Help: {}", help);
+                    }
+                    std::process::exit(1);
+                }
+            };
+
+            let path_str = db_path.to_string_lossy().to_lowercase();
+            let start = std::time::Instant::now();
+
+            let (matches, total_count, summaries) = if path_str.ends_with(".pgn") {
+                let pgn_db = pgn_db::PgnDatabaseWrapper::open(&db_path)?;
+                let total = pgn_db.game_count();
+                let matches = match (start_game, end_game) {
+                    (Some(s), Some(e)) => {
+                        pgn_db.search_query_range_with_progress(&parsed_query, s, e, |_, _, _| {})
+                    }
+                    (Some(s), None) => pgn_db.search_query_range_with_progress(
+                        &parsed_query,
+                        s,
+                        total,
+                        |_, _, _| {},
+                    ),
+                    (None, Some(e)) => {
+                        pgn_db.search_query_range_with_progress(&parsed_query, 0, e, |_, _, _| {})
+                    }
+                    (None, None) => pgn_db.search_query_with_progress(&parsed_query, |_, _, _| {}),
+                };
+                let mut summs = std::collections::HashMap::new();
+                for m in matches.iter().take(limit) {
+                    let g = pgn_db.get_summary(m.game_id);
+                    summs.insert(m.game_id, (g.white, g.black, g.result, g.date));
+                }
+                (matches, total, summs)
+            } else {
+                let db = ScidDatabaseWrapper::open(&db_path)?;
+                let total = db.game_count();
+                let matches = match (start_game, end_game) {
+                    (Some(s), Some(e)) => {
+                        db.search_query_range_with_progress(&parsed_query, s, e, |_, _, _| {})
+                    }
+                    (Some(s), None) => {
+                        db.search_query_range_with_progress(&parsed_query, s, total, |_, _, _| {})
+                    }
+                    (None, Some(e)) => {
+                        db.search_query_range_with_progress(&parsed_query, 0, e, |_, _, _| {})
+                    }
+                    (None, None) => db.search_query_with_progress(&parsed_query, |_, _, _| {}),
+                };
+                let mut summs = std::collections::HashMap::new();
+                for m in matches.iter().take(limit) {
+                    if let Some(g) = db.get_game_summary(m.game_id) {
+                        summs.insert(m.game_id, (g.white, g.black, g.result, g.date));
+                    }
+                }
+                (matches, total, summs)
+            };
+
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+            if count_only {
+                println!("{}", matches.len());
+                return Ok(());
+            }
+
+            if json {
+                let out_matches: Vec<serde_json::Value> = matches
+                    .iter()
+                    .take(limit)
+                    .map(|m| {
+                        let (w, b, r, d) = summaries.get(&m.game_id).cloned().unwrap_or_default();
+                        serde_json::json!({
+                            "game_id": m.game_id,
+                            "white": w,
+                            "black": b,
+                            "result": r,
+                            "date": d,
+                            "match_count": m.match_details.match_count,
+                            "matching_plies": m.match_details.matching_plies,
+                        })
+                    })
+                    .collect();
+
+                let output = serde_json::json!({
+                    "total_searched": total_count,
+                    "matched_count": matches.len(),
+                    "duration_ms": elapsed_ms,
+                    "matches": out_matches,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+                return Ok(());
+            }
+
+            println!(
+                "Search completed in {:.2} ms across {} games:",
+                elapsed_ms, total_count
+            );
+            println!("Query: {}\n", query);
+            println!("Found {} matching games.\n", matches.len());
+
+            println!(
+                "{:<6} | {:<20} | {:<20} | {:<7} | {:<10} | {:<15}",
+                "ID", "White", "Black", "Result", "Date", "Plies"
+            );
+            println!(
+                "{:-<6}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<10}-+-{:-<15}",
+                "", "", "", "", "", ""
+            );
+
+            for m in matches.iter().take(limit) {
+                if let Some((w, b, r, d)) = summaries.get(&m.game_id) {
+                    let plies_str = if m.match_details.matching_plies.is_empty() {
+                        "-".to_string()
+                    } else if m.match_details.matching_plies.len() <= 4 {
+                        format!("{:?}", m.match_details.matching_plies)
+                    } else {
+                        format!("{:?}...", &m.match_details.matching_plies[..4])
+                    };
+                    println!(
+                        "{:<6} | {:<20} | {:<20} | {:<7} | {:<10} | {:<15}",
+                        m.game_id,
+                        truncate_str(w, 20),
+                        truncate_str(b, 20),
+                        r,
+                        d,
+                        truncate_str(&plies_str, 15)
+                    );
+                }
+            }
+
+            if matches.len() > limit {
+                println!("... (showing first {} of {} matches)", limit, matches.len());
+            }
+        }
+        Some(Commands::Explain { query, json }) => {
+            let explanation = match scid_mgr::search::QueryParser::explain(&query) {
+                Ok(exp) => exp,
+                Err(e) => {
+                    eprintln!("Query Parse Error: {}", e);
+                    if let Some(help) = &e.help {
+                        eprintln!("Help: {}", help);
+                    }
+                    std::process::exit(1);
+                }
+            };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&explanation)?);
+                return Ok(());
+            }
+
+            println!("=== CQL Query Explanation ===");
+            println!("Original Query:  {}", explanation.original_query);
+            println!("Canonical DSL:   {}", explanation.canonical_dsl);
+            println!("Header-Only:     {}", explanation.is_header_only);
+            println!("Has Symmetries:  {}", explanation.has_symmetries);
+            println!(
+                "\nExpanded Search Branches ({}):",
+                explanation.branches.len()
+            );
+
+            for (i, branch) in explanation.branches.iter().enumerate() {
+                println!("\n  [Branch {}] Symmetry: {}", i + 1, branch.symmetry_name);
+                println!("  DSL:      {}", branch.dsl);
+                if !branch.transformed_fens.is_empty() {
+                    println!("  Transformed FENs:");
+                    for fen in &branch.transformed_fens {
+                        println!("    -> {}", fen);
+                    }
+                }
             }
         }
         Some(Commands::SearchPos {

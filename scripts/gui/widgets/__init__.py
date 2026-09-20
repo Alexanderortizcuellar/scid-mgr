@@ -1,5 +1,6 @@
 from .board_widget import ChessBoardEditorWidget, SquareWidget, get_piece_pixmap
 from .opening_tree_widget import OpeningTreeWidget
+from .cql_search_widget import CqlSearchWidget
 from .database_bar import DatabaseControlWidget
 from .filter_panel import FilterPanelWidget
 from .game_table_panel import GameTablePanelWidget
@@ -11,6 +12,7 @@ __all__ = [
     "SquareWidget",
     "get_piece_pixmap",
     "OpeningTreeWidget",
+    "CqlSearchWidget",
     "DatabaseControlWidget",
     "FilterPanelWidget",
     "GameTablePanelWidget",

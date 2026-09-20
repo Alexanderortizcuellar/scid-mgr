@@ -932,15 +932,60 @@ impl PgnDatabaseWrapper {
         }
 
         let mat_matches = filter.material.as_ref().and_then(|m| {
-            self.search_material(m, |scanned, total, matches| {
-                progress(scanned, total, matches);
-            })
-            .ok()
-            .map(|vec| {
+            self.search_material(m, &progress).ok().map(|vec| {
                 vec.into_iter()
                     .collect::<std::collections::HashSet<usize>>()
             })
         });
+
+        let cql_matches = filter
+            .cql
+            .as_deref()
+            .or(filter.query.as_deref())
+            .and_then(|q_str| {
+                let trimmed = q_str.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if let Ok(q) = crate::search::QueryParser::parse_str(trimmed) {
+                    let matches = match (filter.start_game, filter.end_game) {
+                        (Some(s), Some(e)) => {
+                            self.search_query_range_with_progress(&q, s, e, &progress)
+                        }
+                        (Some(s), None) => self.search_query_range_with_progress(
+                            &q,
+                            s,
+                            self.entries.len(),
+                            &progress,
+                        ),
+                        (None, Some(e)) => {
+                            self.search_query_range_with_progress(&q, 0, e, &progress)
+                        }
+                        (None, None) => self.search_query_with_progress(&q, &progress),
+                    };
+                    Some(
+                        matches
+                            .into_iter()
+                            .map(|m| m.game_id)
+                            .collect::<std::collections::HashSet<usize>>(),
+                    )
+                } else {
+                    Some(std::collections::HashSet::new())
+                }
+            });
+
+        if let Some(ref c_set) = cql_matches {
+            if let Some(ref existing) = candidate_ids {
+                candidate_ids = Some(
+                    existing
+                        .iter()
+                        .copied()
+                        .filter(|id| c_set.contains(id))
+                        .collect(),
+                );
+            } else {
+                candidate_ids = Some(c_set.iter().copied().collect());
+            }
+        }
 
         let mut matching_indices: Vec<usize> = if let Some(ref c_ids) = candidate_ids {
             c_ids
@@ -951,6 +996,11 @@ impl PgnDatabaseWrapper {
                     }
                     if let Some(ref m_set) = mat_matches {
                         if !m_set.contains(&idx) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref c_set) = cql_matches {
+                        if !c_set.contains(&idx) {
                             return false;
                         }
                     }
@@ -1032,6 +1082,11 @@ impl PgnDatabaseWrapper {
                 .filter(|&idx| {
                     if let Some(ref m_set) = mat_matches {
                         if !m_set.contains(&idx) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref c_set) = cql_matches {
+                        if !c_set.contains(&idx) {
                             return false;
                         }
                     }
@@ -1299,6 +1354,138 @@ impl PgnDatabaseWrapper {
         }
 
         Ok(matches)
+    }
+
+    /// Execute a unified SearchQuery across a sub-range of games [start_game..end_game] in the PGN database with progress streaming
+    pub fn search_query_range_with_progress<F>(
+        &self,
+        query: &crate::search::query::SearchQuery,
+        start_game: usize,
+        end_game: usize,
+        progress: F,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
+        let total_entries = self.game_count();
+        let start = start_game.min(total_entries);
+        let end = end_game.min(total_entries);
+        if start >= end {
+            return Vec::new();
+        }
+
+        let slice = &self.entries[start..end];
+        let total = slice.len();
+        let scanned = std::sync::atomic::AtomicUsize::new(0);
+        let matches_count = std::sync::atomic::AtomicUsize::new(0);
+        let chunk_size = 256;
+
+        let results: Vec<crate::search::scid_adapter::ScidMatchResult> = slice
+            .par_chunks(chunk_size)
+            .enumerate()
+            .flat_map(|(chunk_idx, chunk)| {
+                let mut local_results = Vec::new();
+                let mut local_matches = 0;
+
+                for (offset, entry) in chunk.iter().enumerate() {
+                    let game_id = start + chunk_idx * chunk_size + offset;
+
+                    // Fast in-memory header pre-filter before reading PGN text from mmap
+                    if let Some(false) = crate::search::evaluator::quick_check_pgn_entry_headers(
+                        query,
+                        entry,
+                        &self.names,
+                    ) {
+                        continue;
+                    }
+
+                    // Fast-path: Header-only query that matched in-memory
+                    if query.is_header_only() {
+                        if let Some(true) = crate::search::evaluator::quick_check_pgn_entry_headers(
+                            query,
+                            entry,
+                            &self.names,
+                        ) {
+                            local_matches += 1;
+                            local_results.push(crate::search::scid_adapter::ScidMatchResult {
+                                game_id,
+                                match_details: crate::search::evaluator::QueryMatchResult {
+                                    is_match: true,
+                                    matching_plies: vec![0],
+                                    match_count: 1,
+                                },
+                            });
+                            continue;
+                        }
+                    }
+
+                    let pgn_text = match self.get_game_pgn(game_id) {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
+
+                    let res = crate::search::evaluator::GameSearchEvaluator::evaluate_pgn(
+                        query, &pgn_text,
+                    );
+                    if res.is_match {
+                        local_matches += 1;
+                        local_results.push(crate::search::scid_adapter::ScidMatchResult {
+                            game_id,
+                            match_details: res,
+                        });
+                    }
+                }
+
+                let cur_scanned = scanned
+                    .fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed)
+                    + chunk.len();
+                let cur_matches = if local_matches > 0 {
+                    matches_count.fetch_add(local_matches, std::sync::atomic::Ordering::Relaxed)
+                        + local_matches
+                } else {
+                    matches_count.load(std::sync::atomic::Ordering::Relaxed)
+                };
+
+                if cur_scanned % 4096 < chunk.len() || cur_scanned >= total {
+                    progress(cur_scanned.min(total), total, cur_matches);
+                }
+
+                local_results
+            })
+            .collect();
+
+        progress(total, total, results.len());
+        results
+    }
+
+    /// Execute a unified SearchQuery across the PGN database in parallel with progress streaming
+    pub fn search_query_with_progress<F>(
+        &self,
+        query: &crate::search::query::SearchQuery,
+        progress: F,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
+        self.search_query_range_with_progress(query, 0, self.game_count(), progress)
+    }
+
+    /// Execute a unified SearchQuery across the PGN database in parallel
+    pub fn search_query(
+        &self,
+        query: &crate::search::query::SearchQuery,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult> {
+        self.search_query_with_progress(query, |_, _, _| {})
+    }
+
+    /// Execute a unified SearchQuery across a sub-range of games [start_game..end_game] in parallel
+    pub fn search_query_range(
+        &self,
+        query: &crate::search::query::SearchQuery,
+        start_game: usize,
+        end_game: usize,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult> {
+        self.search_query_range_with_progress(query, start_game, end_game, |_, _, _| {})
     }
 }
 

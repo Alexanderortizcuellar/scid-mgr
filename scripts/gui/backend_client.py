@@ -16,6 +16,7 @@ class BackendClient(QObject):
     """
 
     response_received = pyqtSignal(dict)
+    event_received = pyqtSignal(str, dict)
     process_error = pyqtSignal(str)
     process_stopped = pyqtSignal()
 
@@ -31,6 +32,10 @@ class BackendClient(QObject):
         self.response_received.connect(self._dispatch_callback)
 
     def _dispatch_callback(self, data: dict):
+        if "event" in data:
+            self.event_received.emit(data.get("event", ""), data.get("data", {}))
+            return
+
         req_id = data.get("id")
         if req_id is not None and req_id in self._callbacks:
             cb = self._callbacks.pop(req_id)

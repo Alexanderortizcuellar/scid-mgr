@@ -67,7 +67,11 @@ pub struct GameFilter {
     pub turn: Option<String>,
     pub match_mode: Option<String>,
     pub max_ply: Option<usize>,
+    pub start_game: Option<usize>,
+    pub end_game: Option<usize>,
     pub material: Option<crate::position_search::MaterialFilter>,
+    pub cql: Option<String>,
+    pub query: Option<String>,
 }
 
 impl GameFilter {
@@ -85,7 +89,11 @@ impl GameFilter {
             && self.fen == other.fen
             && self.turn == other.turn
             && self.match_mode == other.match_mode
+            && self.start_game == other.start_game
+            && self.end_game == other.end_game
             && self.material == other.material
+            && self.cql == other.cql
+            && self.query == other.query
     }
 
     pub fn is_empty(&self) -> bool {
@@ -98,8 +106,12 @@ impl GameFilter {
             && self.event.as_deref().unwrap_or("").trim().is_empty()
             && self.site.as_deref().unwrap_or("").trim().is_empty()
             && self.fen.as_deref().unwrap_or("").trim().is_empty()
+            && self.cql.as_deref().unwrap_or("").trim().is_empty()
+            && self.query.as_deref().unwrap_or("").trim().is_empty()
             && !self.only_deleted.unwrap_or(false)
             && self.material.is_none()
+            && self.start_game.is_none()
+            && self.end_game.is_none()
     }
 }
 
@@ -814,6 +826,64 @@ impl ScidDatabaseWrapper {
         self.search_material_with_progress(filter, |_, _, _| {})
     }
 
+    /// Execute a unified SearchQuery across the database in parallel with progress streaming
+    pub fn search_query_with_progress<F>(
+        &self,
+        query: &crate::search::query::SearchQuery,
+        progress: F,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
+        crate::search::scid_adapter::ScidSearchAdapter::search_parallel_with_progress(
+            query,
+            self.entries(),
+            self.names(),
+            |entry| self.get_blob(entry).ok(),
+            progress,
+        )
+    }
+
+    /// Execute a unified SearchQuery across the database in parallel
+    pub fn search_query(
+        &self,
+        query: &crate::search::query::SearchQuery,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult> {
+        self.search_query_with_progress(query, |_, _, _| {})
+    }
+
+    /// Execute a unified SearchQuery across a sub-range of games [start_game..end_game] in parallel with progress streaming
+    pub fn search_query_range_with_progress<F>(
+        &self,
+        query: &crate::search::query::SearchQuery,
+        start_game: usize,
+        end_game: usize,
+        progress: F,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
+        crate::search::scid_adapter::ScidSearchAdapter::search_parallel_range_with_progress(
+            query,
+            self.entries(),
+            self.names(),
+            start_game,
+            end_game,
+            |entry| self.get_blob(entry).ok(),
+            progress,
+        )
+    }
+
+    /// Execute a unified SearchQuery across a sub-range of games [start_game..end_game] in parallel
+    pub fn search_query_range(
+        &self,
+        query: &crate::search::query::SearchQuery,
+        start_game: usize,
+        end_game: usize,
+    ) -> Vec<crate::search::scid_adapter::ScidMatchResult> {
+        self.search_query_range_with_progress(query, start_game, end_game, |_, _, _| {})
+    }
+
     pub fn query_games_with_progress<F>(
         &self,
         filter: &GameFilter,
@@ -1013,8 +1083,58 @@ impl ScidDatabaseWrapper {
                 })
         });
 
+        let cql_matches = filter
+            .cql
+            .as_deref()
+            .or(filter.query.as_deref())
+            .and_then(|q_str| {
+                let trimmed = q_str.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if let Ok(q) = crate::search::QueryParser::parse_str(trimmed) {
+                    let matches = match (filter.start_game, filter.end_game) {
+                        (Some(s), Some(e)) => {
+                            self.search_query_range_with_progress(&q, s, e, &progress)
+                        }
+                        (Some(s), None) => self.search_query_range_with_progress(
+                            &q,
+                            s,
+                            self.entries.len(),
+                            &progress,
+                        ),
+                        (None, Some(e)) => {
+                            self.search_query_range_with_progress(&q, 0, e, &progress)
+                        }
+                        (None, None) => self.search_query_with_progress(&q, &progress),
+                    };
+                    Some(
+                        matches
+                            .into_iter()
+                            .map(|m| m.game_id)
+                            .collect::<std::collections::HashSet<usize>>(),
+                    )
+                } else {
+                    Some(std::collections::HashSet::new())
+                }
+            });
+
+        if let Some(ref c_set) = cql_matches {
+            if let Some(ref existing) = candidate_ids {
+                candidate_ids = Some(
+                    existing
+                        .iter()
+                        .copied()
+                        .filter(|id| c_set.contains(id))
+                        .collect(),
+                );
+            } else {
+                candidate_ids = Some(c_set.iter().copied().collect());
+            }
+        }
+
         let has_filter = candidate_ids.is_some()
             || mat_matches.is_some()
+            || cql_matches.is_some()
             || only_del
             || !include_del
             || result_filter.is_some()
@@ -1036,6 +1156,11 @@ impl ScidDatabaseWrapper {
                     let entry = &self.entries[idx];
                     if let Some(ref m_set) = mat_matches {
                         if !m_set.contains(&idx) {
+                            return None;
+                        }
+                    }
+                    if let Some(ref c_set) = cql_matches {
+                        if !c_set.contains(&idx) {
                             return None;
                         }
                     }
@@ -1113,6 +1238,11 @@ impl ScidDatabaseWrapper {
                 .filter_map(|(idx, entry)| {
                     if let Some(ref m_set) = mat_matches {
                         if !m_set.contains(&idx) {
+                            return None;
+                        }
+                    }
+                    if let Some(ref c_set) = cql_matches {
+                        if !c_set.contains(&idx) {
                             return None;
                         }
                     }

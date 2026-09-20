@@ -52,6 +52,63 @@ pub fn skip_extra_tags(blob: &[u8], cursor: &mut usize) -> bool {
     false
 }
 
+/// Decodes custom/extra tags from the SCID game blob into a HashMap
+pub fn decode_extra_tags(
+    blob: &[u8],
+    cursor: &mut usize,
+    map: &mut std::collections::HashMap<String, String>,
+) -> bool {
+    while *cursor < blob.len() {
+        let name_code = blob[*cursor];
+        *cursor += 1;
+        if name_code == 0 {
+            return true;
+        }
+        if name_code == 255 {
+            *cursor += 3;
+            continue;
+        }
+        let tag_name = if name_code <= 240 {
+            let name_len = name_code as usize;
+            if *cursor + name_len > blob.len() {
+                return false;
+            }
+            let name_bytes = &blob[*cursor..*cursor + name_len];
+            *cursor += name_len;
+            String::from_utf8_lossy(name_bytes).to_string()
+        } else {
+            // Standard SCID built-in extra tag codes 241..=254
+            match name_code {
+                241 => "EventDate".to_string(),
+                242 => "Annotator".to_string(),
+                243 => "Source".to_string(),
+                244 => "TimeControl".to_string(),
+                245 => "WhiteTitle".to_string(),
+                246 => "BlackTitle".to_string(),
+                247 => "WhiteType".to_string(),
+                248 => "BlackType".to_string(),
+                249 => "SetUp".to_string(),
+                250 => "FEN".to_string(),
+                _ => format!("Tag{}", name_code),
+            }
+        };
+
+        if *cursor >= blob.len() {
+            return false;
+        }
+        let value_len = blob[*cursor] as usize;
+        *cursor += 1;
+        if *cursor + value_len > blob.len() {
+            return false;
+        }
+        let value_bytes = &blob[*cursor..*cursor + value_len];
+        *cursor += value_len;
+        let tag_val = String::from_utf8_lossy(value_bytes).to_string();
+        map.insert(tag_name, tag_val);
+    }
+    false
+}
+
 /// Parses the initial position and advances cursor past flags and optional FEN
 #[inline]
 pub fn parse_start_position(blob: &[u8], cursor: &mut usize) -> Option<Chess> {

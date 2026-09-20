@@ -12,7 +12,7 @@ from .backend_client import BackendClient
 from .models import VirtualScidTableModel
 from .widgets import (
     DatabaseControlWidget, FilterPanelWidget, GameTablePanelWidget,
-    GamePreviewPanelWidget, OpeningTreeWidget, ProtocolLogPanelWidget
+    GamePreviewPanelWidget, OpeningTreeWidget, CqlSearchWidget, ProtocolLogPanelWidget
 )
 from .dialogs.add_edit_game_dialog import AddEditGameDialog
 from .dialogs.search_progress_dialog import SearchProgressDialog
@@ -25,7 +25,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SCID Chess Database Manager (chess-scid-rw)")
-        self.resize(1340, 880)
+        self.setMinimumSize(850, 500)
+        self.resize(1280, 780)
 
         # Backend Client & Table Model
         self.client = BackendClient(self)
@@ -47,8 +48,8 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         root_layout = QVBoxLayout(main_widget)
-        root_layout.setContentsMargins(10, 10, 10, 10)
-        root_layout.setSpacing(8)
+        root_layout.setContentsMargins(6, 6, 6, 6)
+        root_layout.setSpacing(4)
 
         # 1. Database & Connection Control Bar
         self.db_panel = DatabaseControlWidget(self.client, self)
@@ -93,7 +94,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.opening_tree_widget, "🌲 Opening Tree")
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # Tab 3: Protocol Logs
+        # Tab 3: Dedicated CQL / Search Engine Query Panel
+        self.cql_search_widget = CqlSearchWidget(self.client, self)
+        self.tabs.addTab(self.cql_search_widget, "🔎 CQL Search")
+
+        # Tab 4: Protocol Logs
         self.log_panel = ProtocolLogPanelWidget(self)
         self.tabs.addTab(self.log_panel, "Protocol Logs")
 
@@ -378,9 +383,9 @@ class MainWindow(QMainWindow):
 
         resp_data = data.get("data", {})
 
-        # 3. Handle games query response
-        if "games" in resp_data:
-            total_matches = resp_data.get("total", 0)
+        # 3. Handle games or dsl_search query response
+        if "games" in resp_data or "matches" in resp_data:
+            total_matches = resp_data.get("total", resp_data.get("matched_count", 0))
             if self.search_progress_dialog and self.search_progress_dialog.isVisible():
                 self.search_progress_dialog.on_finished(total_matches)
             self.status_bar.showMessage(f"Search complete: {total_matches:,} matching games found.", 5000)

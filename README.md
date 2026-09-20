@@ -8,6 +8,8 @@ A high-performance, multithreaded Rust chess database engine, CLI utility, and J
 
 Comprehensive technical documentation is available in the [`docs/`](docs/) directory:
 - 📖 [**Architecture & End-to-End Workflow**](docs/ARCHITECTURE_AND_WORKFLOW.md)
+- 🔍 [**Search Engine Specification & Reference**](docs/SEARCH_ENGINE.md)
+- 🗺️ [**Search Engine Development Roadmap**](docs/SEARCH_ENGINE_ROADMAP.md)
 - ⚡ [**Performance & Engineering Optimizations**](docs/PERFORMANCE_AND_OPTIMIZATIONS.md)
 - 📊 [**Benchmarks & Performance Metrics (10.35M Games)**](docs/BENCHMARKS_AND_METRICS.md)
 - 📜 [**CQLi (Chess Query Language) Integration Guide**](docs/CQL_INTEGRATION_GUIDE.md)
@@ -27,11 +29,13 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
   - Custom inverted position index format with sorted Zobrist 64-bit keys and Delta-Varint posting list compression.
   - Instant Opening Tree / Explorer (< 0.05 ms lookup time) returning move win/draw/loss statistics, average ratings, and sample game IDs.
   - Dynamic opening tree filtering by metadata (player, rating, date, ECO, custom candidate game lists).
-- **Advanced Search Engine**:
-  - **Position Search**: Zobrist-hashed position lookup with automatic `.pos.idx` candidate acceleration and multi-threaded fallback move-stream scanning.
-  - **Partial Board & Piece Placement Search**: Search arbitrary square configurations (e.g. Queen on d4, King on g1).
-  - **Hardware Bitboard Material Search**: Fast endgame and piece combination search (e.g. opposite/same-colored bishops, specific piece counts) evaluated in microseconds via CPU bitwise instructions.
-  - **Multi-Attribute Header Filtering**: White/Black/Any player, result, ECO prefix, date range, rating filters, event, site, and round.
+- **Advanced Search Engine & CQLite DSL**:
+  - **Text Query DSL (CQLite)**: Express complex chess queries cleanly (e.g. `white "Kasparov" tag "TimeControl" == "300+0" [Qq] == 0 move A--`).
+  - **Position & Partial Board Search**: Full FEN, wildcard FEN, square contents, and turn/legal move filters (`wtm`, `legal == 0`).
+  - **Hardware Bitboard Material & Piece Groups**: Instant piece counts (`R == 1`), bracketed piece group sums (`[Qq] == 0`, `[RBN] == 2`), material differences, and bishop color configurations.
+  - **Move & Sequence Patterns**: Exact moves, candidate legal move filters, path sequences, and wildcard piece moves (`A--`, `R--`, `--=R`, `pxN=q`, `_--`).
+  - **Tactical Motifs & Pawn Structures**: Hardware-accelerated pawn structures (passed, isolated, doubled, islands) and tactical motifs (pins, forks, skewers, trapped pieces, outposts, distance).
+  - **Metadata & Custom Tag Filtering**: White/Black/Any player, Elo rating, ECO prefix, date range, site, event, and custom extra headers (`tag` / `header`) with regex and substring matching.
 - **Full PGN Reconstruction**:
   - Reconstructs Seven Tag Roster, move lists, variations, annotations/comments, NAGs, and custom start positions (FEN).
 - **Database Mutations**:

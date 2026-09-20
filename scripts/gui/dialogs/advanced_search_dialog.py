@@ -1,5 +1,6 @@
 from typing import Optional
 import chess
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -7,6 +8,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QComboBox,
     QCheckBox,
@@ -18,6 +20,7 @@ from PyQt5.QtWidgets import (
     QSpinBox,
 )
 from ..widgets.board_widget import ChessBoardEditorWidget
+from ..widgets.cql_search_widget import PRESET_THEMES
 
 
 class AdvancedSearchDialog(QDialog):
@@ -74,6 +77,13 @@ class AdvancedSearchDialog(QDialog):
         )
         self.chk_enable_mat.toggled.connect(self.update_tab_titles)
         cat_layout.addWidget(self.chk_enable_mat)
+
+        self.chk_enable_cql = QCheckBox("🔎 Query Language (CQLite)")
+        self.chk_enable_cql.setToolTip(
+            "Include CQLite / Search Query expressions (Mating themes, Tactics, Piece geometry, Header tags) in search"
+        )
+        self.chk_enable_cql.toggled.connect(self.update_tab_titles)
+        cat_layout.addWidget(self.chk_enable_cql)
 
         cat_layout.addStretch()
 
@@ -433,6 +443,60 @@ class AdvancedSearchDialog(QDialog):
         mat_layout.addStretch()
         self.tabs.addTab(self.tab_mat, "⚖️ Material")
 
+        # TAB 4: Query Language (CQLite)
+        self.tab_cql = QWidget()
+        cql_main_layout = QVBoxLayout(self.tab_cql)
+        cql_main_layout.setContentsMargins(15, 15, 15, 15)
+        cql_main_layout.setSpacing(10)
+
+        # Preset Selector Bar
+        cql_preset_box = QGroupBox("Query Templates & Mating / Tactical Themes")
+        cql_preset_layout = QHBoxLayout(cql_preset_box)
+        cql_preset_layout.addWidget(QLabel("📚 Preset Theme:"))
+        self.combo_cql_preset = QComboBox()
+        self.combo_cql_preset.addItem("— Select CQLite Preset Theme —", "")
+        for label, query_str in PRESET_THEMES.items():
+            self.combo_cql_preset.addItem(label, query_str)
+        self.combo_cql_preset.currentIndexChanged.connect(self.on_cql_preset_changed)
+        cql_preset_layout.addWidget(self.combo_cql_preset, stretch=1)
+        cql_main_layout.addWidget(cql_preset_box)
+
+        # Query Text Editor
+        cql_edit_box = QGroupBox("CQLite Query Expression")
+        cql_edit_layout = QVBoxLayout(cql_edit_box)
+        self.in_cql = QPlainTextEdit()
+        self.in_cql.setFont(QFont("Consolas, Courier New, monospace", 10))
+        self.in_cql.setPlaceholderText(
+            "Enter search query expression, e.g.:\n"
+            "  • checkmate and attacks(N, k)\n"
+            "  • piece B on [a1..h8]\n"
+            "  • [Qq] == 2 and [RBNrbn] == 4\n"
+            "  • tag \"TimeControl\" == \"300\"\n"
+            "  • wtm and move N*e5 and ply >= 20\n"
+            "  • fork(attacker in [N, B], targets count >= 2)\n"
+            "  • pin(pinner in [Q, R, B])\n"
+            "  • power(Q, w) > power(Q, b) * 2"
+        )
+        self.in_cql.setStyleSheet(
+            "QPlainTextEdit { background-color: #1e1e1e; color: #dcdcdc; border-radius: 4px; padding: 8px; }"
+        )
+        self.in_cql.textChanged.connect(self.mark_cql_modified)
+        cql_edit_layout.addWidget(self.in_cql)
+        cql_main_layout.addWidget(cql_edit_box, stretch=1)
+
+        # Quick Syntax Reference Card
+        cheat_box = QGroupBox("💡 CQLite Syntax Cheat Sheet")
+        cheat_layout = QGridLayout(cheat_box)
+        cheat_layout.addWidget(QLabel("<b>Piece Counts:</b> <code>[Qq]==2</code>, <code>[RBN]==0</code>, <code>queens>=1</code>"), 0, 0)
+        cheat_layout.addWidget(QLabel("<b>Placements:</b> <code>piece B on [a1..h8]</code>, <code>piece k on [a8-h8]</code>"), 0, 1)
+        cheat_layout.addWidget(QLabel("<b>Tactics:</b> <code>fork(...)</code>, <code>pin(...)</code>, <code>attacks(N, k)</code>"), 1, 0)
+        cheat_layout.addWidget(QLabel("<b>Headers & Tags:</b> <code>tag \"Site\" == \"Lichess\"</code>, <code>white ~ \"Carlsen\"</code>"), 1, 1)
+        cheat_layout.addWidget(QLabel("<b>Moves:</b> <code>move O-O</code>, <code>move N*e5</code>, <code>promotions >= 1</code>"), 2, 0)
+        cheat_layout.addWidget(QLabel("<b>Transforms:</b> <code>flipcolor { ... }</code>, <code>flip { ... }</code>"), 2, 1)
+        cql_main_layout.addWidget(cheat_box)
+
+        self.tabs.addTab(self.tab_cql, "🔎 CQLite Query")
+
         # Bottom Action Buttons
         btn_box = QHBoxLayout()
         btn_reset = QPushButton("🔄 Reset All Filters")
@@ -465,20 +529,24 @@ class AdvancedSearchDialog(QDialog):
             "  ✓" if self.chk_enable_pos.isChecked() else ""
         )
         title_mat = "⚖️ Material" + ("  ✓" if self.chk_enable_mat.isChecked() else "")
+        title_cql = "🔎 CQLite Query" + ("  ✓" if self.chk_enable_cql.isChecked() else "")
 
         self.tabs.setTabText(0, title_info)
         self.tabs.setTabText(1, title_pos)
         self.tabs.setTabText(2, title_mat)
+        self.tabs.setTabText(3, title_cql)
 
     def select_all_categories(self):
         self.chk_enable_info.setChecked(True)
         self.chk_enable_pos.setChecked(True)
         self.chk_enable_mat.setChecked(True)
+        self.chk_enable_cql.setChecked(True)
 
     def clear_all_categories(self):
         self.chk_enable_info.setChecked(False)
         self.chk_enable_pos.setChecked(False)
         self.chk_enable_mat.setChecked(False)
+        self.chk_enable_cql.setChecked(False)
 
     def mark_info_modified(self):
         if not self._loading:
@@ -491,6 +559,18 @@ class AdvancedSearchDialog(QDialog):
     def mark_mat_modified(self):
         if not self._loading:
             self.chk_enable_mat.setChecked(True)
+
+    def mark_cql_modified(self):
+        if not self._loading:
+            self.chk_enable_cql.setChecked(True)
+
+    def on_cql_preset_changed(self, idx: int):
+        if idx == 0:
+            return
+        query_val = self.combo_cql_preset.currentData()
+        if query_val:
+            self.in_cql.setPlainText(query_val)
+            self.mark_cql_modified()
 
     def on_material_preset_changed(self, idx: int):
         if idx == 0:
@@ -617,10 +697,13 @@ class AdvancedSearchDialog(QDialog):
             self.chk_opposite_bishops.setChecked(False)
             self.chk_same_bishops.setChecked(False)
             self.rb_final_pos.setChecked(True)
+            self.in_cql.clear()
+            self.combo_cql_preset.setCurrentIndex(0)
 
             self.chk_enable_info.setChecked(False)
             self.chk_enable_pos.setChecked(False)
             self.chk_enable_mat.setChecked(False)
+            self.chk_enable_cql.setChecked(False)
             self.update_tab_titles()
         finally:
             self._loading = False
@@ -727,9 +810,16 @@ class AdvancedSearchDialog(QDialog):
                 else:
                     self.rb_final_pos.setChecked(True)
 
+            has_cql = False
+            cql_val = f.get("cql") or f.get("query")
+            if cql_val:
+                self.in_cql.setPlainText(cql_val)
+                has_cql = True
+
             self.chk_enable_info.setChecked(has_info)
             self.chk_enable_pos.setChecked(has_pos)
             self.chk_enable_mat.setChecked(has_mat)
+            self.chk_enable_cql.setChecked(has_cql)
             self.update_tab_titles()
         finally:
             self._loading = False
@@ -829,5 +919,11 @@ class AdvancedSearchDialog(QDialog):
                 mat["match_any_ply"] = self.rb_any_move.isChecked()
                 mat["max_ply"] = self.spin_max_ply.value()
                 f["material"] = mat
+
+        # 4. CQLite Query Language Tab
+        if self.chk_enable_cql.isChecked():
+            cql_text = self.in_cql.toPlainText().strip()
+            if cql_text:
+                f["cql"] = cql_text
 
         return f
