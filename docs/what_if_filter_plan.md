@@ -60,14 +60,25 @@ what_if add Q on e5 { mate }
 what_if add [B, N] on [d4, e4] { check }
 ```
 
-### 3.5. Turn Switch (`turn <color>`)
+### 3.5. Square & Color Swapping (`swap` / `swap_color`)
+Swaps pieces between two squares or inverts a piece's color:
+```text
+# Swap the pieces on square 1 and square 2:
+what_if swap g1 f1 { not check }
+what_if swap d5 d1 { fork(queen, king, rook) }
+
+# Invert color of piece on square (White <-> Black):
+what_if swap_color c4 { is_attacked(k) }
+```
+
+### 3.6. Turn Switch (`turn <color>`)
 Explicitly sets whose turn it is to move:
 ```text
 what_if turn white { play { mate } }
 what_if turn black { play { check } }
 ```
 
-### 3.6. Multi-Move Hypothetical Sequence
+### 3.7. Multi-Move Hypothetical Sequence
 Simulates playing a sequence of moves (even if not played in the game):
 ```text
 what_if [e4 e5 Qh5] { attacks(queen, f7) }
