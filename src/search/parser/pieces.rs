@@ -1,4 +1,4 @@
-use shakmaty::{Color, Piece, Square};
+use shakmaty::{Bitboard, Color, Piece, Square};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -6,7 +6,8 @@ use super::helpers::parse_piece_specifier;
 use super::lexer::{ParseError, Token};
 use super::QueryParser;
 use crate::search::query::{
-    PawnPredicate, PieceMatcher, PositionPattern, SearchQuery, SquareContent, VariableDomain,
+    PawnPredicate, PieceMatcher, PositionPattern, SearchQuery, SetPredicate, SquareContent,
+    SquareSetExpr, VariableDomain,
 };
 
 impl<'a> QueryParser<'a> {
@@ -151,13 +152,42 @@ impl<'a> QueryParser<'a> {
 
         if self.match_ident("count") || is_cmp {
             let op = self.parse_comparison_op();
-            let count = self.expect_number()? as usize;
-            return Ok(SearchQuery::Position(PositionPattern::PieceCount {
-                content,
-                squares: square_filter,
-                op,
-                count,
-            }));
+            if let Some(Token::Number(n)) = self.peek() {
+                let count = *n as usize;
+                self.advance();
+                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                    content,
+                    squares: square_filter,
+                    op,
+                    count,
+                }));
+            } else if self.is_square_set_atom_start() {
+                let right_expr = self.parse_square_set_expr()?;
+                let mut left_expr = SquareSetExpr::Piece(content);
+                if let Some(filter_sqs) = square_filter {
+                    let mut bb = Bitboard::EMPTY;
+                    for sq in filter_sqs {
+                        bb.add(sq);
+                    }
+                    left_expr = SquareSetExpr::Intersection(
+                        Box::new(left_expr),
+                        Box::new(SquareSetExpr::Squares(bb)),
+                    );
+                }
+                return Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
+                    left: left_expr,
+                    op,
+                    right: right_expr,
+                }));
+            } else {
+                let count = self.expect_number()? as usize;
+                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                    content,
+                    squares: square_filter,
+                    op,
+                    count,
+                }));
+            }
         }
 
         self.match_ident("on");
@@ -186,13 +216,39 @@ impl<'a> QueryParser<'a> {
         );
         if self.match_ident("count") || is_cmp_after_sq {
             let op = self.parse_comparison_op();
-            let count = self.expect_number()? as usize;
-            return Ok(SearchQuery::Position(PositionPattern::PieceCount {
-                content,
-                squares: Some(final_squares),
-                op,
-                count,
-            }));
+            if let Some(Token::Number(n)) = self.peek() {
+                let count = *n as usize;
+                self.advance();
+                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                    content,
+                    squares: Some(final_squares),
+                    op,
+                    count,
+                }));
+            } else if self.is_square_set_atom_start() {
+                let right_expr = self.parse_square_set_expr()?;
+                let mut bb = Bitboard::EMPTY;
+                for sq in final_squares {
+                    bb.add(sq);
+                }
+                let left_expr = SquareSetExpr::Intersection(
+                    Box::new(SquareSetExpr::Piece(content)),
+                    Box::new(SquareSetExpr::Squares(bb)),
+                );
+                return Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
+                    left: left_expr,
+                    op,
+                    right: right_expr,
+                }));
+            } else {
+                let count = self.expect_number()? as usize;
+                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                    content,
+                    squares: Some(final_squares),
+                    op,
+                    count,
+                }));
+            }
         }
 
         if final_squares.len() == 1 {
@@ -227,13 +283,39 @@ impl<'a> QueryParser<'a> {
             );
             if self.match_ident("count") || is_cmp {
                 let op = self.parse_comparison_op();
-                let count = self.expect_number()? as usize;
-                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
-                    content,
-                    squares: Some(squares),
-                    op,
-                    count,
-                }));
+                if let Some(Token::Number(n)) = self.peek() {
+                    let count = *n as usize;
+                    self.advance();
+                    return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                        content,
+                        squares: Some(squares),
+                        op,
+                        count,
+                    }));
+                } else if self.is_square_set_atom_start() {
+                    let right_expr = self.parse_square_set_expr()?;
+                    let mut bb = Bitboard::EMPTY;
+                    for sq in squares {
+                        bb.add(sq);
+                    }
+                    let left_expr = SquareSetExpr::Intersection(
+                        Box::new(SquareSetExpr::Piece(content)),
+                        Box::new(SquareSetExpr::Squares(bb)),
+                    );
+                    return Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
+                        left: left_expr,
+                        op,
+                        right: right_expr,
+                    }));
+                } else {
+                    let count = self.expect_number()? as usize;
+                    return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                        content,
+                        squares: Some(squares),
+                        op,
+                        count,
+                    }));
+                }
             }
             if squares.len() == 1 {
                 let mut map = HashMap::new();
@@ -249,13 +331,31 @@ impl<'a> QueryParser<'a> {
 
         self.match_ident("count");
         let op = self.parse_comparison_op();
-        let count = self.expect_number()? as usize;
-        Ok(SearchQuery::Position(PositionPattern::PieceCount {
-            content,
-            squares: None,
-            op,
-            count,
-        }))
+        if let Some(Token::Number(n)) = self.peek() {
+            let count = *n as usize;
+            self.advance();
+            Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                content,
+                squares: None,
+                op,
+                count,
+            }))
+        } else if self.is_square_set_atom_start() {
+            let right_expr = self.parse_square_set_expr()?;
+            Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
+                left: SquareSetExpr::Piece(content),
+                op,
+                right: right_expr,
+            }))
+        } else {
+            let count = self.expect_number()? as usize;
+            Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                content,
+                squares: None,
+                op,
+                count,
+            }))
+        }
     }
 
     pub(crate) fn parse_pawn_color_opt(&mut self) -> Color {
@@ -392,5 +492,88 @@ impl<'a> QueryParser<'a> {
                 .to_string(),
             pos,
         ))
+    }
+
+    pub(crate) fn parse_castling_filter(&mut self) -> Result<SearchQuery, ParseError> {
+        let mut color = Color::White;
+        let mut kingside = None;
+        let mut queenside = None;
+
+        if matches!(self.peek(), Some(Token::LParen) | Some(Token::LBracket)) {
+            let is_bracket = matches!(self.peek(), Some(Token::LBracket));
+            self.advance();
+            while let Some(tok) = self.peek() {
+                if (is_bracket && matches!(tok, Token::RBracket))
+                    || (!is_bracket && matches!(tok, Token::RParen))
+                {
+                    self.advance();
+                    break;
+                }
+                if let Token::Comma = tok {
+                    self.advance();
+                    continue;
+                }
+                if let Token::Ident(s) = tok {
+                    let s_low = s.to_lowercase();
+                    self.advance();
+                    match s_low.as_str() {
+                        "white" | "w" => color = Color::White,
+                        "black" | "b" => color = Color::Black,
+                        "kingside" | "k" | "o-o" | "oo" | "short" => kingside = Some(true),
+                        "queenside" | "q" | "o-o-o" | "ooo" | "long" => queenside = Some(true),
+                        "both" | "any" | "all" => {
+                            kingside = Some(true);
+                            queenside = Some(true);
+                        }
+                        "none" | "no" => {
+                            kingside = Some(false);
+                            queenside = Some(false);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    self.advance();
+                }
+            }
+        } else {
+            // Unbracketed: castling white kingside
+            while let Some(Token::Ident(s)) = self.peek() {
+                let s_low = s.to_lowercase();
+                match s_low.as_str() {
+                    "white" | "w" => {
+                        self.advance();
+                        color = Color::White;
+                    }
+                    "black" | "b" => {
+                        self.advance();
+                        color = Color::Black;
+                    }
+                    "kingside" | "k" | "o-o" | "oo" | "short" => {
+                        self.advance();
+                        kingside = Some(true);
+                    }
+                    "queenside" | "q" | "o-o-o" | "ooo" | "long" => {
+                        self.advance();
+                        queenside = Some(true);
+                    }
+                    "both" | "any" | "all" => {
+                        self.advance();
+                        kingside = Some(true);
+                        queenside = Some(true);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        if kingside.is_none() && queenside.is_none() {
+            kingside = Some(true);
+        }
+
+        Ok(SearchQuery::Position(PositionPattern::Castling {
+            color,
+            kingside,
+            queenside,
+        }))
     }
 }

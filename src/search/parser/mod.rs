@@ -8,12 +8,14 @@ pub mod pieces;
 pub mod ranges;
 pub mod squares;
 pub mod tactics;
+pub mod validator;
 
 pub use helpers::{
     expand_diagonal_ray, expand_rectangular_range, expand_square_specifier, parse_piece_specifier,
     parse_square_or_piece,
 };
 pub use lexer::{is_ident_char, is_ident_start, Lexer, ParseError, Token};
+pub use validator::validate_query_semantics;
 
 use super::query::{ComparisonOp, MaterialPredicate, PositionPattern, SearchQuery, SquareContent};
 
@@ -49,6 +51,7 @@ impl<'a> QueryParser<'a> {
             .with_source_context(input);
             return Err(err);
         }
+        validate_query_semantics(&query, 0).map_err(|e| e.with_source_context(input))?;
         Ok(query)
     }
 
@@ -327,6 +330,11 @@ impl<'a> QueryParser<'a> {
 
         // 1. Parenthesized expression: `( ... )`
         if let Some(Token::LParen) = self.peek() {
+            let saved_pos = self.pos;
+            if let Ok(sq_expr) = self.parse_square_set_query() {
+                return Ok(sq_expr);
+            }
+            self.pos = saved_pos;
             self.advance();
             let expr = self.parse_or_expr()?;
             if let Some(Token::RParen) = self.peek() {
@@ -337,6 +345,11 @@ impl<'a> QueryParser<'a> {
                 "Expected ')'".to_string(),
                 self.current_pos(),
             ));
+        }
+
+        // 1b. Tilde: `~occupied count >= 32`
+        if let Some(Token::Tilde) = self.peek() {
+            return self.parse_square_set_query();
         }
 
         // 2. CQL Wrapper: `cql ( ... )`
@@ -513,6 +526,11 @@ impl<'a> QueryParser<'a> {
                     return self.parse_pawn_pred_islands();
                 }
 
+                "castling" | "castle_rights" | "castling_rights" => {
+                    self.advance();
+                    return self.parse_castling_filter();
+                }
+
                 // Moves & Legal Moves & Paths
                 "legal" => {
                     self.advance();
@@ -522,13 +540,59 @@ impl<'a> QueryParser<'a> {
                     self.advance();
                     return self.parse_move_filter(false);
                 }
-                "line" => {
+                "prev" | "previous" => {
                     self.advance();
-                    return self.parse_path_expr(true);
+                    if matches!(self.peek(), Some(Token::Ident(ref s)) if s.eq_ignore_ascii_case("move"))
+                    {
+                        self.advance();
+                    }
+                    let mut q = self.parse_move_filter(false)?;
+                    if let SearchQuery::Move(ref mut m) = q {
+                        m.is_previous = true;
+                    }
+                    return Ok(q);
+                }
+                "line" | "cqlline" | "cql_line" => {
+                    self.advance();
+                    let single_color =
+                        if self.match_ident("singlecolor") || self.match_ident("single_color") {
+                            Some(None)
+                        } else if self.match_ident("white") {
+                            Some(Some(Color::White))
+                        } else if self.match_ident("black") {
+                            Some(Some(Color::Black))
+                        } else {
+                            None
+                        };
+                    return self.parse_cql_line_or_legacy_path(single_color);
                 }
                 "path" => {
                     self.advance();
-                    return self.parse_path_expr(false);
+                    let single_color =
+                        if self.match_ident("singlecolor") || self.match_ident("single_color") {
+                            Some(None)
+                        } else if self.match_ident("white") {
+                            Some(Some(Color::White))
+                        } else if self.match_ident("black") {
+                            Some(Some(Color::Black))
+                        } else {
+                            None
+                        };
+                    return self.parse_path_expr(false, single_color);
+                }
+                "cql_path" | "cqlpath" | "turnstile" | "sequence" | "seq" => {
+                    self.advance();
+                    let single_color =
+                        if self.match_ident("singlecolor") || self.match_ident("single_color") {
+                            Some(None)
+                        } else if self.match_ident("white") {
+                            Some(Some(Color::White))
+                        } else if self.match_ident("black") {
+                            Some(Some(Color::Black))
+                        } else {
+                            None
+                        };
+                    return self.parse_cql_path_expr(single_color);
                 }
 
                 // Material
@@ -827,7 +891,9 @@ impl<'a> QueryParser<'a> {
                     return self.parse_occurrences_expr();
                 }
                 "flipcolor" | "flip_color" | "fliphorizontal" | "flip_horizontal"
-                | "flipvertical" | "flip_vertical" => {
+                | "flipvertical" | "flip_vertical" | "rotate90" | "rotate_90" | "rot90"
+                | "rotate180" | "rotate_180" | "rot180" | "rotate270" | "rotate_270" | "rot270"
+                | "rotate" | "rot" | "all_rotations" => {
                     let sym = match key.as_str() {
                         "flipcolor" | "flip_color" => {
                             crate::search::transform::BoardSymmetry::ColorInvert
@@ -837,6 +903,15 @@ impl<'a> QueryParser<'a> {
                         }
                         "flipvertical" | "flip_vertical" => {
                             crate::search::transform::BoardSymmetry::VerticalMirror
+                        }
+                        "rotate90" | "rotate_90" | "rot90" | "rotate" | "rot" | "all_rotations" => {
+                            crate::search::transform::BoardSymmetry::AllRotations
+                        }
+                        "rotate180" | "rotate_180" | "rot180" => {
+                            crate::search::transform::BoardSymmetry::Rotate180
+                        }
+                        "rotate270" | "rotate_270" | "rot270" => {
+                            crate::search::transform::BoardSymmetry::Rotate270
                         }
                         _ => unreachable!(),
                     };
@@ -988,6 +1063,140 @@ impl<'a> QueryParser<'a> {
                     }
                 }
 
+                "parent" => {
+                    self.advance();
+                    let sub_query = if let Some(Token::LBrace) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        self.expect_token(Token::RBrace)?;
+                        q
+                    } else if let Some(Token::LParen) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        self.expect_token(Token::RParen)?;
+                        q
+                    } else {
+                        self.parse_unary_expr()?
+                    };
+                    return Ok(SearchQuery::Parent(Box::new(sub_query)));
+                }
+
+                "child" => {
+                    self.advance();
+                    let sub_query = if let Some(Token::LBrace) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        self.expect_token(Token::RBrace)?;
+                        q
+                    } else if let Some(Token::LParen) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        self.expect_token(Token::RParen)?;
+                        q
+                    } else {
+                        self.parse_unary_expr()?
+                    };
+                    return Ok(SearchQuery::Child(Box::new(sub_query)));
+                }
+
+                "play" => {
+                    self.advance();
+                    // Check if followed by legal or move keywords
+                    let is_legal = if matches!(self.peek(), Some(Token::Ident(s)) if s.eq_ignore_ascii_case("legal"))
+                    {
+                        self.advance();
+                        true
+                    } else if matches!(self.peek(), Some(Token::Ident(s)) if s.eq_ignore_ascii_case("move"))
+                    {
+                        self.advance();
+                        if matches!(self.peek(), Some(Token::Ident(s2)) if s2.eq_ignore_ascii_case("legal"))
+                        {
+                            self.advance();
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        // Default for `play promote Q { ... }` or `play e4 { ... }` is legal move
+                        true
+                    };
+
+                    // If directly followed by `{`, `(`, `->`, or `leads_to`, it means `play legal { ... }` or `play { ... }`
+                    let (move_pat, has_direct_block) =
+                        if matches!(self.peek(), Some(Token::LBrace) | Some(Token::LParen)) {
+                            (
+                                super::query::MovePattern {
+                                    is_legal,
+                                    ..Default::default()
+                                },
+                                true,
+                            )
+                        } else {
+                            let q = self.parse_move_filter(is_legal)?;
+                            match q {
+                                SearchQuery::Play {
+                                    move_pattern,
+                                    outcome_query,
+                                } => {
+                                    return Ok(SearchQuery::Play {
+                                        move_pattern,
+                                        outcome_query,
+                                    });
+                                }
+                                SearchQuery::Move(m) => (m, false),
+                                _ => (
+                                    super::query::MovePattern {
+                                        is_legal,
+                                        ..Default::default()
+                                    },
+                                    false,
+                                ),
+                            }
+                        };
+
+                    let outcome_query = if has_direct_block
+                        || matches!(self.peek(), Some(Token::LBrace) | Some(Token::LParen))
+                    {
+                        if let Some(Token::LBrace) = self.peek() {
+                            self.advance();
+                            let q = self.parse_or_expr()?;
+                            self.expect_token(Token::RBrace)?;
+                            q
+                        } else if let Some(Token::LParen) = self.peek() {
+                            self.advance();
+                            let q = self.parse_or_expr()?;
+                            self.expect_token(Token::RParen)?;
+                            q
+                        } else {
+                            self.parse_unary_expr()?
+                        }
+                    } else if matches!(self.peek(), Some(Token::Ident(s)) if s.eq_ignore_ascii_case("leads_to") || s.eq_ignore_ascii_case("leadsto"))
+                        || matches!(self.peek(), Some(Token::ArrowRight))
+                    {
+                        self.advance();
+                        if let Some(Token::LBrace) = self.peek() {
+                            self.advance();
+                            let q = self.parse_or_expr()?;
+                            self.expect_token(Token::RBrace)?;
+                            q
+                        } else if let Some(Token::LParen) = self.peek() {
+                            self.advance();
+                            let q = self.parse_or_expr()?;
+                            self.expect_token(Token::RParen)?;
+                            q
+                        } else {
+                            self.parse_unary_expr()?
+                        }
+                    } else {
+                        self.parse_unary_expr()?
+                    };
+
+                    return Ok(SearchQuery::Play {
+                        move_pattern: move_pat,
+                        outcome_query: Box::new(outcome_query),
+                    });
+                }
+
                 "for" => {
                     self.advance();
                     let var_name = self.expect_ident()?;
@@ -1096,6 +1305,12 @@ impl<'a> QueryParser<'a> {
                 }
             }
         }
+
+        let saved_pos = self.pos;
+        if let Ok(sq) = self.parse_square_set_query() {
+            return Ok(sq);
+        }
+        self.pos = saved_pos;
 
         Err(ParseError::new(
             format!("Unrecognized query token at pos {}", pos),

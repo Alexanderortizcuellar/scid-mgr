@@ -7,6 +7,7 @@ use crate::search::path::{MoveRecord, PathMatcher};
 use crate::search::pattern::PositionMatcher;
 use crate::search::pawn::PawnEvaluator;
 use crate::search::query::SearchQuery;
+use crate::search::squares::SquareSetEvaluator;
 use crate::search::tactics::TacticsEvaluator;
 
 /// Evaluate a SearchQuery AST across game timeline positions and moves
@@ -30,6 +31,20 @@ pub fn evaluate_with_timeline_env(
             let mut matched_plies = Vec::new();
             for (ply, pos) in positions.iter().enumerate() {
                 if PositionMatcher::matches_at_ply_with_env(pattern, pos, ply, env) {
+                    matched_plies.push(ply);
+                }
+            }
+            let is_match = !matched_plies.is_empty();
+            QueryMatchResult {
+                is_match,
+                match_count: matched_plies.len(),
+                matching_plies: matched_plies,
+            }
+        }
+        SearchQuery::SquareSet(set_pred) => {
+            let mut matched_plies = Vec::new();
+            for (ply, pos) in positions.iter().enumerate() {
+                if SquareSetEvaluator::matches_with_env(set_pred, pos, env) {
                     matched_plies.push(ply);
                 }
             }
@@ -183,6 +198,14 @@ pub fn evaluate_with_timeline_env(
                         matched_plies.push(ply);
                     }
                 }
+            } else if move_pattern.is_previous {
+                for (idx, record) in moves.iter().enumerate() {
+                    if idx < positions.len()
+                        && PathMatcher::match_move(move_pattern, &positions[idx], record)
+                    {
+                        matched_plies.push(idx + 1);
+                    }
+                }
             } else {
                 for (idx, record) in moves.iter().enumerate() {
                     if idx < positions.len()
@@ -208,6 +231,149 @@ pub fn evaluate_with_timeline_env(
                     match_count: 1,
                 },
                 None => QueryMatchResult::default(),
+            }
+        }
+        SearchQuery::CqlPath(cql_path_pattern) => {
+            let matched = crate::search::path::CqlPathMatcher::match_cql_path(
+                cql_path_pattern,
+                positions,
+                moves,
+            );
+            match matched {
+                Some(plies) => QueryMatchResult {
+                    is_match: true,
+                    matching_plies: plies,
+                    match_count: 1,
+                },
+                None => QueryMatchResult::default(),
+            }
+        }
+        SearchQuery::CqlLine(cql_line_pattern) => {
+            let matched = crate::search::path::CqlLineMatcher::match_cql_line(
+                cql_line_pattern,
+                positions,
+                moves,
+            );
+            match matched {
+                Some(plies) => QueryMatchResult {
+                    is_match: true,
+                    matching_plies: plies,
+                    match_count: 1,
+                },
+                None => QueryMatchResult::default(),
+            }
+        }
+        SearchQuery::Parent(sub_query) => {
+            let sub_res = evaluate_with_timeline_env(sub_query, headers, positions, moves, env);
+            let mut parent_plies = Vec::new();
+            for &p in &sub_res.matching_plies {
+                let cur = p + 1;
+                if cur < positions.len() {
+                    parent_plies.push(cur);
+                }
+            }
+            parent_plies.sort_unstable();
+            parent_plies.dedup();
+            let is_match = !parent_plies.is_empty();
+            QueryMatchResult {
+                is_match,
+                match_count: parent_plies.len(),
+                matching_plies: parent_plies,
+            }
+        }
+        SearchQuery::Child(sub_query) => {
+            let sub_res = evaluate_with_timeline_env(sub_query, headers, positions, moves, env);
+            let mut child_plies = Vec::new();
+            for &p in &sub_res.matching_plies {
+                if p > 0 && p <= positions.len() {
+                    let cur = p - 1;
+                    if cur < positions.len() {
+                        child_plies.push(cur);
+                    }
+                }
+            }
+            child_plies.sort_unstable();
+            child_plies.dedup();
+            let is_match = !child_plies.is_empty();
+            QueryMatchResult {
+                is_match,
+                match_count: child_plies.len(),
+                matching_plies: child_plies,
+            }
+        }
+        SearchQuery::Play {
+            move_pattern,
+            outcome_query,
+        } => {
+            let mut matched_plies = Vec::new();
+            for (ply, pos) in positions.iter().enumerate() {
+                let legal_moves = pos.legal_moves();
+                let matching_candidates: Vec<&shakmaty::Move> = legal_moves
+                    .iter()
+                    .filter(|m| PathMatcher::match_legal_move(m, pos, move_pattern))
+                    .collect();
+
+                let mut matching_outcome_count = 0;
+                for cand in matching_candidates {
+                    let mut hyp_pos = pos.clone();
+                    hyp_pos.play_unchecked(cand);
+
+                    let hyp_move_record = MoveRecord {
+                        ply: ply + 1,
+                        mv: cand.clone(),
+                        san: String::new(),
+                        is_check: hyp_pos.is_check(),
+                        nags: Vec::new(),
+                        comment: None,
+                    };
+
+                    let res = evaluate_with_timeline_env(
+                        outcome_query,
+                        headers,
+                        std::slice::from_ref(&hyp_pos),
+                        std::slice::from_ref(&hyp_move_record),
+                        env,
+                    );
+                    if res.is_match {
+                        matching_outcome_count += 1;
+                    }
+                }
+
+                let is_pos_match = if let Some((op, count)) = move_pattern.count_predicate {
+                    match op {
+                        crate::search::query::ComparisonOp::Equal => {
+                            matching_outcome_count == count
+                        }
+                        crate::search::query::ComparisonOp::NotEqual => {
+                            matching_outcome_count != count
+                        }
+                        crate::search::query::ComparisonOp::GreaterThan => {
+                            matching_outcome_count > count
+                        }
+                        crate::search::query::ComparisonOp::GreaterThanOrEqual => {
+                            matching_outcome_count >= count
+                        }
+                        crate::search::query::ComparisonOp::LessThan => {
+                            matching_outcome_count < count
+                        }
+                        crate::search::query::ComparisonOp::LessThanOrEqual => {
+                            matching_outcome_count <= count
+                        }
+                        _ => matching_outcome_count == count,
+                    }
+                } else {
+                    matching_outcome_count > 0
+                };
+
+                if is_pos_match {
+                    matched_plies.push(ply);
+                }
+            }
+            let is_match = !matched_plies.is_empty();
+            QueryMatchResult {
+                is_match,
+                match_count: matched_plies.len(),
+                matching_plies: matched_plies,
             }
         }
         SearchQuery::PlyRange { range, query } => {
@@ -259,24 +425,35 @@ pub fn evaluate_with_timeline_env(
                             && !move_pattern.is_legal
                             && move_pattern.count_predicate.is_none() =>
                     {
-                        let mut departure_matches = Vec::new();
+                        let mut move_matches = Vec::new();
                         for &pos_ply in &matching_plies_set {
-                            if pos_ply < moves.len() {
+                            if move_pattern.is_previous {
+                                if pos_ply > 0 && pos_ply <= moves.len() {
+                                    let record = &moves[pos_ply - 1];
+                                    if PathMatcher::match_move(
+                                        move_pattern,
+                                        &positions[pos_ply - 1],
+                                        record,
+                                    ) {
+                                        move_matches.push(pos_ply);
+                                    }
+                                }
+                            } else if pos_ply < moves.len() {
                                 let record = &moves[pos_ply];
                                 if PathMatcher::match_move(
                                     move_pattern,
                                     &positions[pos_ply],
                                     record,
                                 ) {
-                                    departure_matches.push(pos_ply);
+                                    move_matches.push(pos_ply);
                                 }
                             }
                         }
-                        let is_match = !departure_matches.is_empty();
+                        let is_match = !move_matches.is_empty();
                         QueryMatchResult {
                             is_match,
-                            match_count: departure_matches.len(),
-                            matching_plies: departure_matches,
+                            match_count: move_matches.len(),
+                            matching_plies: move_matches,
                         }
                     }
                     SearchQuery::Path(path_pattern)
@@ -288,6 +465,58 @@ pub fn evaluate_with_timeline_env(
                             anchored_pat.start_ply_range = Some(start_ply..start_ply + 1);
                             if PathMatcher::match_path(&anchored_pat, positions, moves).is_some() {
                                 anchored_matches.push(start_ply);
+                            }
+                        }
+                        let is_match = !anchored_matches.is_empty();
+                        QueryMatchResult {
+                            is_match,
+                            match_count: anchored_matches.len(),
+                            matching_plies: anchored_matches,
+                        }
+                    }
+                    SearchQuery::CqlPath(path_pattern)
+                        if has_positional && !matching_plies_set.is_empty() =>
+                    {
+                        let mut anchored_matches = Vec::new();
+                        for &start_ply in &matching_plies_set {
+                            let mut anchored_pat = path_pattern.clone();
+                            anchored_pat.start_ply_range = Some(start_ply..start_ply + 1);
+                            if crate::search::path::CqlPathMatcher::match_cql_path(
+                                &anchored_pat,
+                                positions,
+                                moves,
+                            )
+                            .is_some()
+                            {
+                                anchored_matches.push(start_ply);
+                            }
+                        }
+                        let is_match = !anchored_matches.is_empty();
+                        QueryMatchResult {
+                            is_match,
+                            match_count: anchored_matches.len(),
+                            matching_plies: anchored_matches,
+                        }
+                    }
+                    SearchQuery::CqlLine(line_pattern)
+                        if has_positional && !matching_plies_set.is_empty() =>
+                    {
+                        let mut anchored_matches = Vec::new();
+                        for &start_ply in &matching_plies_set {
+                            let mut anchored_pat = line_pattern.clone();
+                            anchored_pat.start_ply_range = Some(start_ply..start_ply + 1);
+                            if let Some(res_plies) =
+                                crate::search::path::CqlLineMatcher::match_cql_line(
+                                    &anchored_pat,
+                                    positions,
+                                    moves,
+                                )
+                            {
+                                if line_pattern.last_position {
+                                    anchored_matches.extend(res_plies);
+                                } else {
+                                    anchored_matches.push(start_ply);
+                                }
                             }
                         }
                         let is_match = !anchored_matches.is_empty();
@@ -511,6 +740,9 @@ pub fn matches_single_ply(
         SearchQuery::Position(pattern) => {
             crate::search::pattern::PositionMatcher::matches_at_ply(pattern, pos, ply)
         }
+        SearchQuery::SquareSet(set_pred) => {
+            crate::search::squares::SquareSetEvaluator::matches(set_pred, pos)
+        }
         SearchQuery::Pawn(pred) => crate::search::pawn::PawnEvaluator::matches(pred, pos.board()),
         SearchQuery::Tactical(pred) => crate::search::tactics::TacticsEvaluator::matches(pred, pos),
         SearchQuery::Material(pred) => {
@@ -520,11 +752,31 @@ pub fn matches_single_ply(
             crate::search::pattern::PositionMatcher::matches_power(pred, pos)
         }
         SearchQuery::Move(move_pattern) => {
-            if let Some((pos_before, record)) = last_move {
-                if !move_pattern.is_legal
-                    && move_pattern.count_predicate.is_none()
-                    && move_pattern.san.is_none()
-                {
+            if move_pattern.is_legal || move_pattern.count_predicate.is_some() {
+                let legal_moves = pos.legal_moves();
+                let matching_count = legal_moves
+                    .iter()
+                    .filter(|m| PathMatcher::match_legal_move(m, pos, move_pattern))
+                    .count();
+                if let Some((op, count)) = move_pattern.count_predicate {
+                    match op {
+                        crate::search::query::ComparisonOp::Equal => matching_count == count,
+                        crate::search::query::ComparisonOp::NotEqual => matching_count != count,
+                        crate::search::query::ComparisonOp::GreaterThan => matching_count > count,
+                        crate::search::query::ComparisonOp::GreaterThanOrEqual => {
+                            matching_count >= count
+                        }
+                        crate::search::query::ComparisonOp::LessThan => matching_count < count,
+                        crate::search::query::ComparisonOp::LessThanOrEqual => {
+                            matching_count <= count
+                        }
+                        _ => matching_count == count,
+                    }
+                } else {
+                    matching_count > 0
+                }
+            } else if let Some((pos_before, record)) = last_move {
+                if move_pattern.is_previous {
                     crate::search::path::PathMatcher::match_move(move_pattern, pos_before, record)
                 } else {
                     false
@@ -533,6 +785,71 @@ pub fn matches_single_ply(
                 false
             }
         }
+        SearchQuery::Parent(sub) => {
+            if let Some((pos_before, _)) = last_move {
+                if ply > 0 {
+                    matches_single_ply(sub, pos_before, ply - 1, None)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        SearchQuery::Child(_) => {
+            // Standalone single-ply evaluation has no forward/future position available
+            false
+        }
+        SearchQuery::Play {
+            move_pattern,
+            outcome_query,
+        } => {
+            let legal_moves = pos.legal_moves();
+            let matching_candidates: Vec<&shakmaty::Move> = legal_moves
+                .iter()
+                .filter(|m| PathMatcher::match_legal_move(m, pos, move_pattern))
+                .collect();
+
+            let mut matching_outcome_count = 0;
+            for cand in matching_candidates {
+                let mut hyp_pos = pos.clone();
+                hyp_pos.play_unchecked(cand);
+
+                let hyp_record = MoveRecord {
+                    ply: ply + 1,
+                    mv: cand.clone(),
+                    san: String::new(),
+                    is_check: hyp_pos.is_check(),
+                    nags: Vec::new(),
+                    comment: None,
+                };
+
+                if matches_single_ply(outcome_query, &hyp_pos, ply + 1, Some((pos, &hyp_record))) {
+                    matching_outcome_count += 1;
+                }
+            }
+
+            if let Some((op, count)) = move_pattern.count_predicate {
+                match op {
+                    crate::search::query::ComparisonOp::Equal => matching_outcome_count == count,
+                    crate::search::query::ComparisonOp::NotEqual => matching_outcome_count != count,
+                    crate::search::query::ComparisonOp::GreaterThan => {
+                        matching_outcome_count > count
+                    }
+                    crate::search::query::ComparisonOp::GreaterThanOrEqual => {
+                        matching_outcome_count >= count
+                    }
+                    crate::search::query::ComparisonOp::LessThan => matching_outcome_count < count,
+                    crate::search::query::ComparisonOp::LessThanOrEqual => {
+                        matching_outcome_count <= count
+                    }
+                    _ => matching_outcome_count == count,
+                }
+            } else {
+                matching_outcome_count > 0
+            }
+        }
+        SearchQuery::Not(sub) => !matches_single_ply(sub, pos, ply, last_move),
         SearchQuery::PlyRange { range, query: sub } => {
             if ply >= range.start && ply < range.end {
                 matches_single_ply(sub, pos, ply, last_move)
@@ -551,6 +868,16 @@ pub fn matches_single_ply(
                 .into_iter()
                 .all(|q| matches_single_ply(q, pos, ply, last_move))
         }
+        SearchQuery::Symmetric {
+            query: sub,
+            symmetry,
+        } => {
+            let symmetries = symmetry.expand();
+            symmetries.into_iter().any(|sym| {
+                let transformed = sym.transform_query(sub);
+                matches_single_ply(&transformed, pos, ply, last_move)
+            })
+        }
         _ => false,
     }
 }
@@ -565,6 +892,7 @@ fn predicate_eval_cost(q: &SearchQuery) -> u8 {
         SearchQuery::Position(crate::search::query::PositionPattern::Turn(_)) => 1,
         SearchQuery::Position(crate::search::query::PositionPattern::Ply { .. }) => 1,
         SearchQuery::Position(crate::search::query::PositionPattern::MoveNumber { .. }) => 1,
+        SearchQuery::SquareSet(_) => 1,
         SearchQuery::Material(_) => 1,
         SearchQuery::Power(_) => 1,
         SearchQuery::Pawn(_) => 2,

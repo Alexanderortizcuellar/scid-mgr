@@ -36,7 +36,27 @@ Header filters query game metadata, player names, tournament information, rating
 | **`contains`** or **`has`** | Substring search | `event contains "Candidates"` |
 | **`startswith`** | Prefix match | `eco startswith "B"` |
 | **`endswith`** | Suffix match | `white endswith "ov"` |
-| **`~`** or **`regex(...)`** | Regular expression match | `player ~ "(?i)alexander.*"` |
+| **`~`**, **`=~`**, or **`regex(...)`** | Regular expression match (PCRE/Rust regex) | `white ~ "alex|pedro"` |
+
+---
+
+## 🔍 Regular Expression Matching (`~` / `=~` / `regex`)
+
+Header filters support full regular expression pattern matching via the **`~`**, **`=~`**, or **`regex(...)`** operators across all text headers (`player`, `white`, `black`, `event`, `site`, `eco`, and `tag`).
+
+### Key Regex Patterns & Features:
+* **Alternation / Multi-name search (`|`)**:
+  * `white ~ "alex|pedro"` — Matches White player named either "alex" or "pedro".
+  * `player ~ "Carlsen|Kasparov|Fischer"` — Matches games where Carlsen, Kasparov, or Fischer played on either side.
+* **Anchor & Prefix/Suffix Patterns (`^`, `$`)**:
+  * `white ~ "^Kasparov"` — Player name starting strictly with Kasparov.
+  * `black ~ "ov$"` — Player name ending in "ov".
+* **Character Sets and Wildcards (`.*`, `[0-9]`)**:
+  * `tag "TimeControl" ~ "180\+.*"` — Time controls starting with 180s (3+0, 3+1, 3+2).
+  * `event ~ ".*Candidates.*(2022|2024)"` — Candidates tournament from 2022 or 2024.
+* **Alternative Functional Syntax (`regex`)**:
+  * `white regex("alex|pedro")`
+  * `tag "Annotator" regex("Stockfish [0-9]+")`
 
 ---
 
@@ -47,19 +67,24 @@ Header filters query game metadata, player names, tournament information, rating
 avg_elo >= 2700 and result != "1/2-1/2" and date >= "2018"
 ```
 
-### 2. Specific Player Matches with Regex
+### 2. Specific Player Matches with Regex Alternation
 ```text
-player ~ "Kasparov|Karpov" and eco startswith "E" and date in "1984".."1990"
+player ~ "Kasparov|Karpov" and eco startswith "E" and date >= "1984" and date <= "1990"
 ```
 
-### 3. Big Rating Upset (White Rated 300+ Points Higher but Lost)
+### 3. Multiple Target Players
+```text
+white ~ "alex|pedro" or black ~ "alex|pedro"
+```
+
+### 4. Big Rating Upset (White Rated 300+ Points Higher but Lost)
 ```text
 raw_elo_diff >= 300 and result "0-1"
 ```
 
-### 4. Custom Tags (TimeControl, Annotator, FEN)
+### 5. Custom Tags (TimeControl, Annotator, FEN)
 ```text
-tag "TimeControl" == "300+0"
+tag "TimeControl" ~ "300\+.*"
 header "Annotator" contains "Stockfish"
 tag "Variant" != "Standard"
 ```

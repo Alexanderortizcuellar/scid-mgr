@@ -141,9 +141,14 @@ pub enum Token {
     Lte,
     Colon,
     Comma,
-    Tilde,  // "~"
-    Dots,   // "..."
-    DotDot, // ".."
+    Tilde,      // "~"
+    Pipe,       // "|"
+    Ampersand,  // "&"
+    Backslash,  // "\"
+    Dots,       // "..."
+    DotDot,     // ".."
+    ArrowRight, // "-->" or "->"
+    ArrowLeft,  // "<--" or "<-"
     // Brackets & Parentheses
     LParen,
     RParen,
@@ -272,6 +277,18 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     tokens.push((start, Token::Tilde));
                 }
+                '|' => {
+                    self.advance();
+                    tokens.push((start, Token::Pipe));
+                }
+                '&' => {
+                    self.advance();
+                    tokens.push((start, Token::Ampersand));
+                }
+                '\\' => {
+                    self.advance();
+                    tokens.push((start, Token::Backslash));
+                }
                 '=' => {
                     self.advance();
                     if self.peek() == Some('=') {
@@ -316,15 +333,29 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 '<' => {
-                    self.advance();
-                    if self.peek() == Some('=') {
+                    if self.pos + 2 < self.chars.len()
+                        && self.chars[self.pos + 1].1 == '-'
+                        && self.chars[self.pos + 2].1 == '-'
+                    {
                         self.advance();
-                        tokens.push((start, Token::Lte));
-                    } else if self.peek() == Some('>') {
                         self.advance();
-                        tokens.push((start, Token::Neq));
+                        self.advance();
+                        tokens.push((start, Token::ArrowLeft));
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1].1 == '-' {
+                        self.advance();
+                        self.advance();
+                        tokens.push((start, Token::ArrowLeft));
                     } else {
-                        tokens.push((start, Token::Lt));
+                        self.advance();
+                        if self.peek() == Some('=') {
+                            self.advance();
+                            tokens.push((start, Token::Lte));
+                        } else if self.peek() == Some('>') {
+                            self.advance();
+                            tokens.push((start, Token::Neq));
+                        } else {
+                            tokens.push((start, Token::Lt));
+                        }
                     }
                 }
                 '.' => {
@@ -360,6 +391,24 @@ impl<'a> Lexer<'a> {
                         s.push(ch);
                     }
                     tokens.push((start, Token::StringLit(s)));
+                }
+                _ if c == '-'
+                    && self.pos + 2 < self.chars.len()
+                    && self.chars[self.pos + 1].1 == '-'
+                    && self.chars[self.pos + 2].1 == '>' =>
+                {
+                    self.advance();
+                    self.advance();
+                    self.advance();
+                    tokens.push((start, Token::ArrowRight));
+                }
+                _ if c == '-'
+                    && self.pos + 1 < self.chars.len()
+                    && self.chars[self.pos + 1].1 == '>' =>
+                {
+                    self.advance();
+                    self.advance();
+                    tokens.push((start, Token::ArrowRight));
                 }
                 _ if c.is_ascii_digit() || (c == '-' && self.is_next_digit()) => {
                     let mut num_str = String::new();

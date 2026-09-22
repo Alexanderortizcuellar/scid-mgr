@@ -49,7 +49,12 @@ Header filters query game metadata, player names, tournament information, rating
 * **`contains`** or **`has`**: Substring search $\rightarrow$ `event contains "Candidates"`
 * **`startswith`**: Prefix match $\rightarrow$ `eco startswith "B"`
 * **`endswith`**: Suffix match $\rightarrow$ `white endswith "ov"`
-* **`~`** or **`regex(...)`**: Regular expression match $\rightarrow$ `player ~ "(?i)alexander.*"`
+* **`~`**, **`=~`**, or **`regex(...)`**: Regular expression match $\rightarrow$ `player ~ "Kasparov|Karpov"`
+
+### 🔍 Regular Expression Matching (`~` / `=~` / `regex`)
+* **Alternation / Multi-name**: `white ~ "alex|pedro"` or `player ~ "Carlsen|Nakamura"`
+* **Prefix / Suffix Anchors**: `white ~ "^Kasparov"` or `black ~ "ov$"`
+* **Custom Tags**: `tag "TimeControl" ~ "180\+.*"` or `header "Annotator" regex("Stockfish [0-9]+")`
 
 ---
 
@@ -91,11 +96,22 @@ bke8     # Black King on e8 (explicit prefix)
 * **`light`** / **`light_squares`**: All 32 light squares $\rightarrow$ `B on light`
 * **`dark`** / **`dark_squares`**: All 32 dark squares $\rightarrow$ `b on dark`
 
+## ⚡ Square Set Algebra & Bitboard Operations
+
+* **Set Union (`|`)**: `(N | B) [b5, g5] >= 2`
+* **Set Difference (`\`, `-`)**: `(occupied \ [e4, d4]) >= 30`
+* **Set Intersection (`&`, juxtaposition)**: `B [c4, g5] == 2` or `B & [c4, g5]`
+* **Set Complement (`~`, `!`)**: `~occupied >= 32`
+* **Non-Empty Truthiness**: `B [c4, g5]` (evaluates to true if non-empty)
+* **Set-to-Set Comparisons**: `[Aa] == [KkPp]` (King & Pawn endgame), `[Aa] == []` (empty board), `[Qq] > [Rr]` (more queens than rooks), `[Kk] == [Pp]` (equal kings & pawns)
+
 ## 🔢 Piece Counts
 
 ```text
 queens == 0                  # Queenless positions
 [Qq] == 0                    # Zero queens on board
+[Aa] == [KkPp]               # Pure King & Pawn endgame (no other pieces)
+[Qq] == []                   # Queenless endgame
 rooks >= 3                   # 3 or more rooks
 white_pawns <= 4             # 4 or fewer White pawns
 white_light_bishops == 1 and black_dark_bishops == 1
@@ -127,6 +143,9 @@ This chapter documents move matching, path sequences, the quiet move separator (
 | Syntax | Type | Description | Matches |
 | :--- | :--- | :--- | :--- |
 | **`Nf3`** | SAN Move | Standard SAN Knight move to `f3` | White Knight to `f3` |
+| **`Bg4+`** | Move with Check | White Bishop to `g4` delivering check (`+`) | White Bishop checks on `g4` |
+| **`bg4+`** | Move with Check | Black Bishop to `g4` delivering check (`+`) | Black Bishop checks on `g4` |
+| **`Rd8#`** | Move with Checkmate | White Rook to `d8` delivering checkmate (`#`) | White Rook checkmates on `d8` |
 | **`h7`** / **`e4`** | SAN Pawn | Bare square pawn move | Pawn advances to `h7` / `e4` |
 | **`Ph7`** | Explicit Pawn | White pawn to `h7` | White Pawn moves to `h7` |
 | **`ph7`** | Explicit Pawn | Black pawn to `h7` | Black Pawn moves to `h7` |
@@ -137,6 +156,7 @@ This chapter documents move matching, path sequences, the quiet move separator (
 | **`N--[e4, d5]`** | Destination Set | Knight moves to `e4` or `d5` | Knight to `e4` or `d5` |
 | **`Bc2xh7`** | Capture with Origin | Bishop on `c2` captures on `h7` | `Bc2` captures on `h7` |
 | **`Bxh7`** | White Capture | White bishop captures on `h7` | White Bishop captures on `h7` |
+| **`Bxh7+`** | Capture with Check | White bishop captures on `h7` giving check | White Bishop takes on `h7` with check |
 | **`bxh7`** | Black Capture | Black bishop captures on `h7` | Black Bishop captures on `h7` |
 | **`Bxph7`** | Target Piece Type | White bishop captures Black pawn on `h7` | Bishop captures black pawn on `h7` |
 | **`Bx[q,r]h7`** | Multi-Piece Target | Bishop captures Black Queen or Rook on `h7` | Bishop captures Q/R on `h7` |
@@ -151,6 +171,45 @@ This chapter documents move matching, path sequences, the quiet move separator (
 | **`A--=Q`** | Color Promotion | Any White piece/pawn promotes to Queen | White promotion to Q |
 | **`--=R`** | Underpromotion | Promotes to Rook (any side) | `=R` underpromotion |
 | **`--="RBN"`** | Underpromotion Set | Promotes to Rook, Bishop, or Knight | Underpromotion to R, B, or N |
+
+## 🔍 Dedicated `move` Keyword Filter
+
+Query origins, targets, pieces, captures, checks, promotions, and legal candidate moves using the `move` clause:
+
+```text
+move [from <sqs/pieces>] [to <sqs/pieces/dir>] [piece <p>] [capture <piece/pieces>] [check] [mate] [promote <roles>] [legal] [count <op> <n>]
+```
+
+* **Captured Piece Filtering:** `move from R to d5 capture p`, `move capture [q, r]`, `move capture white_pieces`, `move en_passant capture p`, `legal capture Q count >= 1`, `flipcolor { move capture p }`
+* **Previous / Incoming Moves:** `move previous castle` (or `previous castle`), `check and move previous piece B`, `mate and move previous capture p`
+* **Piece-to-Piece Captures:** `move from B to r` (White Bishop takes Black Rook), `move from A to a` (Any White takes Black)
+* **Coordinate / Square Sets:** `move from e2 to e4`, `move from [e1, e8] to [c1, g1, c8, g8]`
+* **Specific Moves & Flags:** `move piece Q to [d8, e8]`, `move from Q to f7 capture p`, `move check`, `move mate`, `move castle`
+* **Promotions & Underpromotions:** `move promote Q`, `move promote [Q, R]`, `move promote "RBN"`
+* **Candidate Legal Move & Mate Counting (`move legal ... count`):**
+  * `move legal mate count >= 2` — Positions with 2+ different legal moves delivering mate-in-1 (dual solutions / overkill)
+  * `move legal mate count == 1` — Positions with exactly 1 unique mate-in-1 move
+  * `move legal piece Q mate count >= 1` — Mate-in-1 delivered by a Queen
+  * `move legal capture mate count >= 1` — Mate-in-1 delivered by a capture
+  * `move legal capture Q count >= 1` — Immediate capture of a Queen available
+  * `move legal en_passant mate count >= 1` — Mate-in-1 delivered by en passant
+  * `move legal castle mate count >= 1` — Mate-in-1 delivered by castling
+  * `move legal count == 0` — Positions with 0 legal moves (checkmate or stalemate)
+
+### 👑 Check, Checkmate & Cross-Check Patterns Showcase
+* **Cross-Check Counter-Mate (Check answered with Mate):**
+  * `check and move mate` — (Recommended) Position is in check, and outgoing move delivers checkmate.
+  * `cqlpath { check mate }` — 1-ply transition from check directly to mate.
+  * `line --> check --> mate` — Forward CQLi line from check to mate.
+  * `check and move piece Q mate` — Check answered with a Queen checkmate.
+  * `check and move capture mate` — Check answered by capturing a piece and delivering mate.
+* **Mates Delivered by Special Move Types:**
+  * `move en_passant mate` — Checkmate delivered by en passant.
+  * `move castle mate` — Checkmate delivered by castling (`O-O` or `O-O-O`).
+  * `move promote Q mate` — Checkmate delivered by promotion to Queen.
+* **Sequences with Intermediate Gaps:**
+  * `path [O-O-O ... --#]` — Long castle played, followed later in the game by any checkmate.
+  * `cqlpath { O-O-O ... mate }` — Long castle followed later by checkmate.
 
 ## 🛣️ Path Sequences & Gaps (`path [...]`)
 
@@ -190,18 +249,44 @@ pawn_islands white <= 2 and pawn_islands black >= 3
 
 This chapter covers geometric tactical predicates: Pins, Forks, Skewers, Trapped pieces, Outposts, Attacks, and Square Distances.
 
-## 📌 Tactical Keywords
+## 📌 Tactical & Geometric Keywords
 
-| Keyword | Description | Syntax / Example |
+| Keyword / Function | Description | Syntax / Example |
 | :--- | :--- | :--- |
 | **`pin`** | Absolute or relative pin along a ray | `pin(rook, knight, king)` or `pin(bishop, black_knight, black_king)` |
 | **`fork`** | Piece simultaneously attacking 2+ targets | `fork(knight, queen, rook)` or `fork(pawn, bishop, knight)` |
 | **`skewer`** | Skewer along an attack ray | `skewer(bishop, king, queen)` |
 | **`trapped`** | Piece has 0 legal/safe departure moves | `trapped black_bishop` or `trapped black_queen` |
 | **`outpost`** | Advanced protected square | `outpost knight on d5` |
-| **`attacks(attacker, target)`** | Attack relation between squares/pieces | `attacks(g5, f6)` or `attacks(B, k)` |
+| **`attacks(attacker, target)`** | Target squares attacked by attacker set | `attacks(R, k) >= 2` or `attacks(white, [d1..d8]) > attacks(black, [d1..d8])` |
+| **`attackers(attacker, target)`** | Attacking piece squares that target squares | `attackers(white, e5) > attackers(black, e5)` |
+| **`ray(direction, origin)`** | Squares along a directional ray | `ray(diagonal, [c1, f1]) & [d4, e5]` |
+| **`between(from, to)`** | Squares strictly between two sets | `between(k, q) & occupied == 0` |
 | **`distance(sq1, sq2)`** | Chebyshev square distance | `distance(K, k) <= 2` |
 | **`is_attacked`** | Square attacked by color | `is_attacked e4 by black` |
+
+### 🧭 Direction Keywords & Spatial Shift Translation Operators
+Directional keywords can be used both as ray arguments and anywhere as **prefix spatial translation operators** on square sets:
+
+$$\text{direction}\quad[\text{distance}]\quad\text{SquareSet}$$
+
+* **Direction words**: `up`, `down`, `left`, `right`, `northeast`, `northwest`, `southeast`, `southwest`, `diagonal`, `orthogonal`, `vertical`, `horizontal`, `anydirection`.
+* **Translation Examples**:
+  * `northwest 2 Q` — Shifts White Queen's square 2 steps Northwest ($\nwarrow\nwarrow$).
+  * `up 1 k` — Shifts Black King's square 1 step North ($\uparrow$).
+  * `right 1 k & _` — Square 1 step East of Black King is empty (`_`).
+  * `northwest 2 Q & up 1 k & R` — Square is 2 steps NW of White Queen, 1 step North of Black King, and occupied by White Rook.
+
+#### Example: CQL / CQLi Mating Matrix Query
+```cql
+mate
+flipcolor rotate90 {
+    northwest 2 Q & up 1 k & R
+    right 1 k & _
+}
+```
+* Searches for checkmates where a Rook delivers contact mate 1 square away, backed up diagonally 2 squares away by a Queen, with an adjacent empty flight square.
+* Evaluates across all 8 board rotations and player color perspectives (`flipcolor rotate90`).
 
 ---
 
@@ -269,11 +354,21 @@ This chapter covers logical combinators (`and`, `or`, `not`), timeline scopes (`
 * **`not`**: Logical Negation $\rightarrow$ `not check and legal == 0`
 * **`( ... )`**: Grouping Parentheses $\rightarrow$ `(white "Karpov" or white "Kasparov") and date >= "1985"`
 
-## ⏳ Timeline Scopes
+### 🎯 Game-Level vs. Position-Anchored Conjunction
+* **Whole-Game Scope (`and`)**: `path [e4] and attacks(R, b)` — Matches if `1. e4` was played AND `attacks(R, b)` occurred anywhere in the game.
+* **Immediately After Move**: `attacks(R, b) and move previous e4` — Asserts attack right after `e4` is played.
+* **Immediately Before Move**: `attacks(R, b) and move e4` — Asserts attack on board right before `e4` is executed.
+* **Interleaved Sequence**: `cqlpath { e4 { attacks(R, b) } }` — Advances by `e4`, then asserts attack at that exact position.
+
+## ⏳ Timeline Scopes & Positional Scoping
 
 * **`ply in min..max { ... }`**: Restrict evaluation to ply range $\rightarrow$ `ply in 1..20 { fork(knight, queen, rook) }`
 * **`move_number [op] [num]`**: Match at specific full move numbers $\rightarrow$ `move_number <= 10 and queens == 0`
 * **`occurrences min..max { ... }`**: Require $N$ occurrences throughout the game $\rightarrow$ `occurrences >= 3 { check }`
+* **`parent { <filter> }`**: Scopes evaluation to previous position (`ply - 1`) $\rightarrow$ `mate and parent { not check }`
+* **`child { <filter> }`**: Scopes evaluation to next position (`ply + 1`) $\rightarrow$ `child { mate }` (setup position before mate)
+* **`legal <move> leads_to { <outcome> }`**: Simulates candidate legal moves and checks resulting board $\rightarrow$ `legal promote B leads_to { stalemate }`
+* **`play [legal] <move> { <outcome> }`**: Prefix syntax for hypothetical move simulation $\rightarrow$ `play legal { mate }` (mate in 1) or `play promote Q { stalemate }`
 
 ## 💬 Comment & NAG Annotation Filters
 

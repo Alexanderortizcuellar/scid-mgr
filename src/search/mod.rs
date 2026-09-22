@@ -13,6 +13,7 @@ pub mod pattern;
 pub mod pawn;
 pub mod query;
 pub mod scid_adapter;
+pub mod squares;
 pub mod tactics;
 pub mod transform;
 
@@ -29,9 +30,10 @@ pub use path::{MoveRecord, PathMatcher};
 pub use pattern::PositionMatcher;
 pub use pawn::PawnEvaluator;
 pub use query::{
-    ComparisonOp, HeaderPredicate, MaterialPredicate, MovePattern, PathPattern, PawnPredicate,
-    PieceMatcher, PositionPattern, PowerPredicate, SearchQuery, SquareContent, SquareOrPiece,
-    TacticalPredicate,
+    ComparisonOp, CqlLinePattern, CqlPathConstituent, CqlPathPattern, Direction, HeaderPredicate,
+    LineDirection, MaterialPredicate, MovePattern, PathPattern, PawnPredicate, PieceMatcher,
+    PositionPattern, PowerPredicate, SearchQuery, SetPredicate, SquareContent, SquareOrPiece,
+    SquareSetExpr, TacticalPredicate,
 };
 pub use scid_adapter::{ScidMatchResult, ScidSearchAdapter};
 pub use tactics::TacticsEvaluator;

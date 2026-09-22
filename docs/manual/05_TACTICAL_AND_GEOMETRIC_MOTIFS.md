@@ -6,15 +6,18 @@ This chapter covers geometric tactical predicates: Pins, Forks, Skewers, Trapped
 
 ## 📌 Tactical Keywords & Functions
 
-| Keyword | Description | Syntax |
+| Keyword / Function | Description | Syntax |
 | :--- | :--- | :--- |
 | **`pin`** | Absolute or relative pin along a ray | `pin([pinner], [pinned], [target])` |
 | **`fork`** | Piece simultaneously attacking 2+ targets | `fork([attacker], [target1], [target2])` |
 | **`skewer`** | Skewer along an attack ray | `skewer([attacker], [front_target], [rear_target])` |
 | **`trapped`** | Piece has 0 legal/safe departure moves | `trapped [piece]` |
 | **`outpost`** | Advanced protected square | `outpost [piece] on [square]` |
-| **`attacks(attacker, target)`** | Square/Piece attacks another square/piece | `attacks(e4, d5)` or `attacks(B, k)` |
-| **`distance(sq1, sq2)`** | Chebyshev distance between two squares `max(\|dx\|, \|dy\|)` | `distance(e1, e8) >= 5` |
+| **`attacks(attacker, target)`** | Target squares attacked by attacker set | `attacks(R, k)` or `attacks(white, [d1..d8])` |
+| **`attackers(attacker, target)`** | Attacking piece squares that target squares | `attackers(white, e5)` |
+| **`ray(direction, origin)`** | Squares along a directional ray | `ray(up, d4)` or `ray(diagonal, [c1, f1])` |
+| **`between(from, to)`** | Squares strictly between two sets | `between(K, R)` |
+| **`distance(sq1, sq2)`** | Chebyshev distance between two squares `max(|dx|, |dy|)` | `distance(e1, e8) >= 5` |
 | **`is_attacked`** | Square attacked by color | `is_attacked e4 by black` |
 
 ---
@@ -66,11 +69,77 @@ outpost knight on d5
 outpost white_knight on e5
 ```
 
-### 6. Square Distance & Geometric Attacks
-```text
-# King distance in the endgame
-distance(K, k) <= 2
+### 6. Square Set Geometric Functions & Set Comparisons
 
-# Direct attack predicate
-attacks(g5, f6)
+#### Attack Target Evaluation (`attacks`)
+Returns the subset of `target` squares attacked by any piece in `attacker`:
+```text
+attacks(R, k) >= 2                                      # King subjected to double rook check/attack
+attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8]) # Spatial file control dominance
+attacks(n, K) & ~occupied                               # Knight attacks on king while targeting escape squares
 ```
+
+#### Attack Origin Evaluation (`attackers`)
+Returns the subset of `attacker` pieces that attack any square in `target`:
+```text
+attackers(white_pieces, e5) > attackers(black_pieces, e5) # Outnumbering defenders on e5
+attackers(N, d5) >= 2                                    # Multiple knights attacking d5
+```
+
+#### Directional Rays, Vectors & Lines (`ray`)
+Rays and directional filters use full English words for directions (abbreviations like `ne` are avoided to prevent ambiguity with piece/square tokens like `ne5`):
+
+| Direction Keyword | Meaning / Vector | Example |
+| :--- | :--- | :--- |
+| **`up`** | North (increasing rank $\uparrow$) | `ray(up, e4)` |
+| **`down`** | South (decreasing rank $\downarrow$) | `ray(down, d5)` |
+| **`left`** | West (decreasing file $\leftarrow$) | `ray(left, e4)` |
+| **`right`** | East (increasing file $\rightarrow$) | `ray(right, d4)` |
+| **`northeast`** | Up-Right diagonal ($\nearrow$) | `ray(northeast, c1)` |
+| **`northwest`** | Up-Left diagonal ($\nwarrow$) | `ray(northwest, f1)` |
+| **`southeast`** | Down-Right diagonal ($\searrow$) | `ray(southeast, c8)` |
+| **`southwest`** | Down-Left diagonal ($\swarrow$) | `ray(southwest, f8)` |
+| **`diagonal`** | All 4 diagonal directions ($\nearrow \nwarrow \searrow \swarrow$) | `ray(diagonal, [c1, f1]) & [d4, e5]` |
+| **`orthogonal`** | All 4 orthogonal rank/file directions ($\uparrow \downarrow \leftarrow \rightarrow$) | `ray(orthogonal, d4)` |
+| **`vertical`** | Files ($\uparrow \downarrow$) | `ray(vertical, e1)` |
+| **`horizontal`** | Ranks ($\leftarrow \rightarrow$) | `ray(horizontal, a4)` |
+| **`anydirection`** | All 8 directions | `ray(anydirection, e4)` |
+
+```text
+ray(diagonal, [c1, f1]) & [d4, e5]                       # Diagonal ray intersecting central squares
+between(k, q) & occupied == 0                            # Clear open line between king and queen
+distance(K, k) <= 2                                      # Kings in close proximity
+```
+
+---
+
+### 7. Directional Spatial Shift Translation Operators (`<direction> [dist] <SquareSet>`)
+
+In CQL and CQLi, direction keywords can be used anywhere as **prefix translation (shift) operators** on square sets:
+
+$$\text{direction}\quad[\text{distance}]\quad\text{SquareSet}$$
+
+Every square in `SquareSet` is shifted by the specified distance in the given direction.
+
+#### Syntax & Expressions:
+* `northwest 2 Q`: Shifts the White Queen's square by 2 squares North-West ($\nwarrow\nwarrow$).
+* `up 1 k`: Shifts the Black King's square by 1 square North ($\uparrow$).
+* `right 1 k`: Shifts the Black King's square by 1 square East ($\rightarrow$).
+* `down 1..3 R`: Shifts White Rook squares down 1 to 3 ranks.
+* `orthogonal 1 [d4, e5]`: Shifts central squares 1 step in all 4 orthogonal directions.
+
+#### Geometric Matrix & Mating Nets:
+Combining shifts with set intersection (`&`) and symmetries allows searching for precise geometric arrangements:
+
+```cql
+mate
+flipcolor rotate90 {
+    northwest 2 Q & up 1 k & R
+    right 1 k & _
+}
+```
+
+* **`northwest 2 Q & up 1 k & R`**: Asserts that a square exists which is simultaneously 2 squares NW of the Queen, 1 square North of the enemy King, and occupied by a White Rook (contact Rook check supported diagonally by Queen 2 squares behind).
+* **`right 1 k & _`**: Asserts that the adjacent flight square 1 step right of the King is empty (`_`).
+* **`flipcolor rotate90`**: Evaluates this mating net across all 4 rotational angles (0°, 90°, 180°, 270°) and both White/Black mating perspectives!
+

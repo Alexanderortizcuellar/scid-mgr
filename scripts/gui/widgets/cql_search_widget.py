@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QPlainTextEdit, QTextEdit, QComboBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
     QSpinBox, QGroupBox, QRadioButton, QButtonGroup, QMessageBox,
-    QProgressBar, QApplication
+    QProgressBar, QApplication, QDialog, QTabWidget, QDialogButtonBox
 )
 
 from ..backend_client import BackendClient
@@ -55,11 +55,138 @@ PRESET_THEMES = {
 }
 
 
+class CqlExplainDialog(QDialog):
+    """
+    Dialog displaying the AST analysis, canonical DSL query, and symmetry expansion branches.
+    """
+
+    def __init__(self, explanation: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.explanation = explanation
+        self.setWindowTitle("💡 CQL Query Plan & Symmetries Explanation")
+        self.resize(780, 560)
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        # Overview
+        is_header_only = self.explanation.get("is_header_only", False)
+        has_symmetries = self.explanation.get("has_symmetries", False)
+        branches = self.explanation.get("branches", [])
+        canonical_dsl = self.explanation.get("canonical_dsl", "")
+
+        info_box = QGroupBox("📊 Query Properties & Optimization Plan")
+        info_layout = QVBoxLayout(info_box)
+
+        header_status = (
+            '<span style="color: #15803d; font-weight: bold;">Yes</span> (Fast metadata/tag search)'
+            if is_header_only
+            else '<span style="color: #1d4ed8; font-weight: bold;">No</span> (Evaluates board positions / moves)'
+        )
+        sym_status = (
+            f'<span style="color: #d97706; font-weight: bold;">Yes</span> ({len(branches)} branch(es))'
+            if has_symmetries
+            else '<span style="color: #6b7280;">No</span>'
+        )
+
+        info_txt = (
+            f"<b>Header-Only Optimization:</b> {header_status}<br>"
+            f"<b>Symmetries Active:</b> {sym_status}<br>"
+            f"<b>Execution Plan:</b> {len(branches)} parallel symmetry branch(es) to evaluate"
+        )
+        lbl_info = QLabel(info_txt)
+        lbl_info.setTextFormat(Qt.RichText)
+        info_layout.addWidget(lbl_info)
+        layout.addWidget(info_box)
+
+        # Canonical Query Section
+        canon_box = QGroupBox("✨ Canonical Parsed Query")
+        canon_layout = QVBoxLayout(canon_box)
+
+        self.txt_canonical = QPlainTextEdit()
+        self.txt_canonical.setPlainText(canonical_dsl)
+        self.txt_canonical.setReadOnly(True)
+        self.txt_canonical.setFont(QFont("Consolas, Courier New, monospace", 10))
+        self.txt_canonical.setMaximumHeight(85)
+        self.txt_canonical.setStyleSheet(
+            "background-color: #1e1e1e; color: #4ade80; border-radius: 4px; padding: 6px;"
+        )
+        canon_layout.addWidget(self.txt_canonical)
+        layout.addWidget(canon_box)
+
+        # Branches / Symmetries Tabs
+        branches_box = QGroupBox("🔀 Symmetry Expansion Branches")
+        branches_layout = QVBoxLayout(branches_box)
+
+        if branches:
+            tab_widget = QTabWidget()
+            for idx, branch in enumerate(branches, 1):
+                sym_name = branch.get("symmetry_name", f"Branch {idx}")
+                branch_dsl = branch.get("dsl", "")
+                fens = branch.get("transformed_fens", [])
+
+                branch_page = QWidget()
+                page_layout = QVBoxLayout(branch_page)
+                page_layout.setContentsMargins(8, 8, 8, 8)
+                page_layout.setSpacing(6)
+
+                page_layout.addWidget(QLabel(f"<b>Transformation:</b> <code>{sym_name}</code>"))
+
+                txt_branch = QPlainTextEdit()
+                txt_branch.setPlainText(branch_dsl)
+                txt_branch.setReadOnly(True)
+                txt_branch.setFont(QFont("Consolas, Courier New, monospace", 9))
+                txt_branch.setStyleSheet(
+                    "background-color: #f8fafc; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px;"
+                )
+                page_layout.addWidget(txt_branch, stretch=1)
+
+                if fens:
+                    page_layout.addWidget(QLabel(f"<b>Transformed FENs ({len(fens)}):</b>"))
+                    txt_fens = QPlainTextEdit()
+                    txt_fens.setPlainText("\n".join(fens))
+                    txt_fens.setReadOnly(True)
+                    txt_fens.setFont(QFont("Consolas, Courier New, monospace", 9))
+                    txt_fens.setMaximumHeight(65)
+                    page_layout.addWidget(txt_fens)
+
+                btn_copy_branch = QPushButton(f"📋 Copy {sym_name} DSL")
+                btn_copy_branch.setStyleSheet("padding: 3px 10px;")
+                btn_copy_branch.clicked.connect(lambda _, text=branch_dsl: QApplication.clipboard().setText(text))
+                page_layout.addWidget(btn_copy_branch, alignment=Qt.AlignRight)
+
+                tab_widget.addTab(branch_page, f"{idx}. {sym_name}")
+            branches_layout.addWidget(tab_widget)
+        else:
+            branches_layout.addWidget(QLabel("No symmetry transformations needed."))
+
+        layout.addWidget(branches_box, stretch=1)
+
+        # Button Bar
+        btn_box = QHBoxLayout()
+        btn_copy_all = QPushButton("📋 Copy Canonical Query")
+        btn_copy_all.setStyleSheet("padding: 4px 12px;")
+        btn_copy_all.clicked.connect(lambda: QApplication.clipboard().setText(canonical_dsl))
+        btn_box.addWidget(btn_copy_all)
+
+        btn_box.addStretch(1)
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_close.setStyleSheet("padding: 5px 20px; font-weight: bold; background-color: #1976d2; color: white; border-radius: 4px;")
+        btn_box.addWidget(btn_close)
+
+        layout.addLayout(btn_box)
+
+
 class CqlSearchWidget(QWidget):
     """
     Dedicated Interactive CQL / Search DSL Testing and Development Panel.
-    Allows composing queries, validating syntax live, and executing searches
-    against the active database or standalone PGN files with full board preview.
+    Allows composing queries, validating syntax live, explaining AST and symmetries,
+    and executing searches against the active database (.si5, .si4, .pgn) or standalone PGN files.
     """
 
     def __init__(self, client: BackendClient, parent=None):
@@ -72,6 +199,7 @@ class CqlSearchWidget(QWidget):
         self.current_ply_index = 0
         self.game_moves: List[chess.Move] = []
         self.game_positions: List[chess.Board] = []
+        self.current_db_path = ""
 
         self.init_ui()
         if hasattr(self.client, "event_received"):
@@ -98,8 +226,15 @@ class CqlSearchWidget(QWidget):
         self.combo_presets.currentIndexChanged.connect(self.on_preset_selected)
         preset_bar.addWidget(self.combo_presets, stretch=1)
 
+        self.btn_explain = QPushButton("💡 Explain Query")
+        self.btn_explain.setStyleSheet("font-weight: bold; background-color: #fef3c7; color: #92400e; padding: 4px 12px; border-radius: 4px; border: 1px solid #fde68a;")
+        self.btn_explain.setToolTip("Inspect canonical query, symmetry branch expansions, and execution plan")
+        self.btn_explain.clicked.connect(self.explain_current_query)
+        preset_bar.addWidget(self.btn_explain)
+
         self.btn_validate = QPushButton("✓ Validate Syntax")
-        self.btn_validate.setStyleSheet("font-weight: bold; background-color: #f0f4f8; padding: 4px 12px;")
+        self.btn_validate.setStyleSheet("font-weight: bold; background-color: #f0f4f8; padding: 4px 12px; border-radius: 4px;")
+        self.btn_validate.setToolTip("Verify syntax and check for parse errors")
         self.btn_validate.clicked.connect(self.validate_current_query)
         preset_bar.addWidget(self.btn_validate)
 
@@ -128,8 +263,17 @@ class CqlSearchWidget(QWidget):
         run_bar = QHBoxLayout()
         run_bar.addWidget(QLabel("🎯 Target Source:"))
 
+        self.btn_open_db = QPushButton("📂 Open Database...")
+        self.btn_open_db.setStyleSheet(
+            "font-weight: bold; background-color: #eff6ff; color: #1d4ed8; padding: 4px 12px; border-radius: 4px; border: 1px solid #bfdbfe;"
+        )
+        self.btn_open_db.setToolTip("Open a SCID database (.si5, .si4) or PGN file (.pgn)")
+        self.btn_open_db.clicked.connect(self.open_database_dialog)
+        run_bar.addWidget(self.btn_open_db)
+
         self.radio_active_db = QRadioButton("Currently Open Database")
         self.radio_active_db.setChecked(True)
+        self.radio_active_db.setStyleSheet("font-weight: bold; color: #1e3a8a;")
         run_bar.addWidget(self.radio_active_db)
 
         self.radio_custom_pgn = QRadioButton("Custom PGN File:")
@@ -150,7 +294,7 @@ class CqlSearchWidget(QWidget):
 
         run_bar.addWidget(QLabel("Limit:"))
         self.spin_limit = QSpinBox()
-        self.spin_limit.setRange(10, 5000)
+        self.spin_limit.setRange(10, 100000)
         self.spin_limit.setValue(500)
         run_bar.addWidget(self.spin_limit)
 
@@ -209,6 +353,7 @@ class CqlSearchWidget(QWidget):
         self.table_results.setSelectionMode(QTableWidget.SingleSelection)
         self.table_results.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_results.itemSelectionChanged.connect(self.on_result_row_selected)
+        self.table_results.cellClicked.connect(lambda _r, _c: self.on_result_row_selected())
         res_layout.addWidget(self.table_results)
 
         splitter.addWidget(results_widget)
@@ -335,6 +480,71 @@ class CqlSearchWidget(QWidget):
         if path:
             self.txt_pgn_path.setPlainText(path)
 
+    def open_database_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Chess Database",
+            "",
+            "Chess Databases (*.si5 *.si4 *.pgn);;SCID 5 (*.si5);;SCID 4 (*.si4);;PGN Files (*.pgn);;All Files (*)"
+        )
+        if path:
+            self.open_database(path)
+
+    def open_database(self, path: str):
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "Invalid Database", f"Database file not found: {path}")
+            return
+
+        if not self.client.is_running():
+            QMessageBox.warning(self, "Backend Offline", "Backend engine is not running.")
+            return
+
+        self.lbl_results_header.setText(f"Opening database: {os.path.basename(path)}...")
+
+        def on_db_opened(resp: dict):
+            if resp.get("status") == "ok":
+                data = resp.get("data", {})
+                stats = data.get("stats", {})
+                fmt = stats.get("format") or data.get("format", "db")
+                total_games = stats.get("total_games") or data.get("total_games", 0)
+
+                self.current_db_path = path
+                base_name = os.path.basename(path)
+                self.radio_active_db.setText(f"Active DB: {base_name} ({total_games:,} games) [{fmt.upper()}]")
+                self.radio_active_db.setToolTip(f"Full path: {path}\nFormat: {fmt.upper()}\nGames: {total_games:,}")
+                self.radio_active_db.setChecked(True)
+
+                self.lbl_results_header.setText(f"📁 Loaded {base_name} ({total_games:,} games)")
+                self.clear_game_display()
+                self.populate_results_table([])
+            else:
+                err = resp.get("error", "Failed to open database")
+                self.lbl_results_header.setText(f"Error opening database: {err}")
+                QMessageBox.critical(self, "Open Database Failed", f"Failed to open {path}:\n\n{err}")
+
+        self.client.send_request("open_db", {"path": path}, on_db_opened)
+
+    def explain_current_query(self):
+        query = self.txt_query.toPlainText().strip()
+        if not query:
+            QMessageBox.warning(self, "Empty Query", "Please enter a query to explain.")
+            return
+
+        if not self.client.is_running():
+            QMessageBox.warning(self, "Backend Offline", "Backend engine is not running.")
+            return
+
+        def on_explain_done(resp: dict):
+            if resp.get("status") == "ok":
+                explanation = resp.get("data", {})
+                dialog = CqlExplainDialog(explanation, parent=self)
+                dialog.exec_()
+            else:
+                err = resp.get("error", "Failed to explain query")
+                QMessageBox.critical(self, "Explain Error", f"Failed to explain query:\n\n{err}")
+
+        self.client.send_request("explain_dsl", {"query": query}, on_explain_done)
+
     def validate_current_query(self):
         query = self.txt_query.toPlainText().strip()
         if not query:
@@ -445,6 +655,8 @@ class CqlSearchWidget(QWidget):
             )
 
     def populate_results_table(self, matches: List[Dict[str, Any]]):
+        self.table_results.blockSignals(True)
+        self.table_results.clearSelection()
         self.table_results.setRowCount(len(matches))
         for row, item in enumerate(matches):
             game_id = str(item.get("game_id", row + 1))
@@ -466,12 +678,33 @@ class CqlSearchWidget(QWidget):
             self.table_results.setItem(row, 6, QTableWidgetItem(match_count))
             self.table_results.setItem(row, 7, QTableWidgetItem(first_ply))
 
+        self.table_results.blockSignals(False)
+
         if matches:
             self.table_results.selectRow(0)
+            self.on_result_row_selected()
+        else:
+            self.clear_game_display()
+
+    def clear_game_display(self):
+        self.current_game_pgn = ""
+        self.txt_pgn.clear()
+        self.current_plies_list = []
+        self.current_ply_index = 0
+        self.game_moves = []
+        self.game_positions = [chess.Board()]
+        self.lbl_ply.setText("Ply: 0")
+        self.lbl_ply.setStyleSheet("font-weight: bold; color: #333;")
+        self.update_board_display(chess.Board())
 
     def on_result_row_selected(self):
         row = self.table_results.currentRow()
-        if row < 0 or row >= len(self.matches_data):
+        if row < 0:
+            if self.matches_data:
+                row = 0
+            else:
+                return
+        if row >= len(self.matches_data):
             return
 
         match_item = self.matches_data[row]

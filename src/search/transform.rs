@@ -1,9 +1,9 @@
-use shakmaty::{Chess, File, Piece, Rank, Square};
+use shakmaty::{Bitboard, Chess, File, Piece, Rank, Square};
 use std::collections::HashMap;
 
 use super::query::{
-    MaterialPredicate, PawnPredicate, PieceMatcher, PositionPattern, SearchQuery, SquareContent,
-    SquareOrPiece, TacticalPredicate,
+    MaterialPredicate, PawnPredicate, PieceMatcher, PositionPattern, SearchQuery, SetPredicate,
+    SquareContent, SquareOrPiece, SquareSetExpr, TacticalPredicate,
 };
 
 /// Board and geometric transformation symmetries
@@ -17,6 +17,12 @@ pub enum BoardSymmetry {
     VerticalMirror,
     /// 180-degree board rotation (both horizontal and vertical)
     Rotate180,
+    /// 90-degree clockwise board rotation
+    Rotate90,
+    /// 270-degree clockwise board rotation
+    Rotate270,
+    /// All 4 rotational orientations (0, 90, 180, 270)
+    AllRotations,
     /// Color inversion (invert piece colors and rank mirror, preserving turn perspective)
     ColorInvert,
     /// Color inversion with horizontal mirror
@@ -35,6 +41,14 @@ impl BoardSymmetry {
             BoardSymmetry::HorizontalMirror => vec![BoardSymmetry::HorizontalMirror],
             BoardSymmetry::VerticalMirror => vec![BoardSymmetry::VerticalMirror],
             BoardSymmetry::Rotate180 => vec![BoardSymmetry::Rotate180],
+            BoardSymmetry::Rotate90 => vec![BoardSymmetry::Rotate90],
+            BoardSymmetry::Rotate270 => vec![BoardSymmetry::Rotate270],
+            BoardSymmetry::AllRotations => vec![
+                BoardSymmetry::Identity,
+                BoardSymmetry::Rotate90,
+                BoardSymmetry::Rotate180,
+                BoardSymmetry::Rotate270,
+            ],
             BoardSymmetry::ColorInvert => vec![BoardSymmetry::Identity, BoardSymmetry::ColorInvert],
             BoardSymmetry::ColorInvertHorizontal => vec![
                 BoardSymmetry::Identity,
@@ -45,12 +59,16 @@ impl BoardSymmetry {
                 BoardSymmetry::HorizontalMirror,
                 BoardSymmetry::VerticalMirror,
                 BoardSymmetry::Rotate180,
+                BoardSymmetry::Rotate90,
+                BoardSymmetry::Rotate270,
             ],
             BoardSymmetry::AnyTotalSymmetry => vec![
                 BoardSymmetry::Identity,
                 BoardSymmetry::HorizontalMirror,
                 BoardSymmetry::VerticalMirror,
                 BoardSymmetry::Rotate180,
+                BoardSymmetry::Rotate90,
+                BoardSymmetry::Rotate270,
                 BoardSymmetry::ColorInvert,
                 BoardSymmetry::ColorInvertHorizontal,
             ],
@@ -67,9 +85,13 @@ impl BoardSymmetry {
             BoardSymmetry::HorizontalMirror => (7 - f, r),
             BoardSymmetry::VerticalMirror => (f, 7 - r),
             BoardSymmetry::Rotate180 => (7 - f, 7 - r),
+            BoardSymmetry::Rotate90 => (r, 7 - f),
+            BoardSymmetry::Rotate270 => (7 - r, f),
             BoardSymmetry::ColorInvert => (f, 7 - r),
             BoardSymmetry::ColorInvertHorizontal => (7 - f, 7 - r),
-            BoardSymmetry::AnySpatialSymmetry | BoardSymmetry::AnyTotalSymmetry => (f, r),
+            BoardSymmetry::AnySpatialSymmetry
+            | BoardSymmetry::AnyTotalSymmetry
+            | BoardSymmetry::AllRotations => (f, r),
         };
 
         Square::from_coords(File::new(new_f), Rank::new(new_r))
@@ -632,6 +654,15 @@ impl BoardSymmetry {
                 SearchQuery::Or(subs.iter().map(|s| self.transform_query(s)).collect())
             }
             SearchQuery::Not(sub) => SearchQuery::Not(Box::new(self.transform_query(sub))),
+            SearchQuery::Parent(sub) => SearchQuery::Parent(Box::new(self.transform_query(sub))),
+            SearchQuery::Child(sub) => SearchQuery::Child(Box::new(self.transform_query(sub))),
+            SearchQuery::Play {
+                move_pattern,
+                outcome_query,
+            } => SearchQuery::Play {
+                move_pattern: self.transform_move_pattern(move_pattern),
+                outcome_query: Box::new(self.transform_query(outcome_query)),
+            },
             SearchQuery::PlyRange { range, query: sub } => SearchQuery::PlyRange {
                 range: range.clone(),
                 query: Box::new(self.transform_query(sub)),
@@ -665,9 +696,15 @@ impl BoardSymmetry {
                     .steps
                     .iter()
                     .map(|s| match s {
-                        super::query::PathStep::Move(m) => {
-                            super::query::PathStep::Move(self.transform_move_pattern(m))
-                        }
+                        super::query::PathStep::Move {
+                            pattern,
+                            repeat_min,
+                            repeat_max,
+                        } => super::query::PathStep::Move {
+                            pattern: self.transform_move_pattern(pattern),
+                            repeat_min: *repeat_min,
+                            repeat_max: *repeat_max,
+                        },
                         super::query::PathStep::Gap { min, max } => super::query::PathStep::Gap {
                             min: *min,
                             max: *max,
@@ -727,7 +764,251 @@ impl BoardSymmetry {
                 },
                 query: Box::new(self.transform_query(sub)),
             },
+            SearchQuery::SquareSet(set_pred) => {
+                SearchQuery::SquareSet(self.transform_set_predicate(set_pred))
+            }
+            SearchQuery::CqlPath(cql_path) => {
+                SearchQuery::CqlPath(self.transform_cql_path_pattern(cql_path))
+            }
+            SearchQuery::CqlLine(cql_line) => {
+                SearchQuery::CqlLine(self.transform_cql_line_pattern(cql_line))
+            }
             other => other.clone(),
+        }
+    }
+
+    /// Transform a CqlLinePattern under geometric or color inversion symmetry
+    pub fn transform_cql_line_pattern(
+        &self,
+        line: &super::query::CqlLinePattern,
+    ) -> super::query::CqlLinePattern {
+        super::query::CqlLinePattern {
+            min_length: line.min_length,
+            max_length: line.max_length,
+            direction: line.direction,
+            single_color: match line.single_color {
+                Some(Some(c)) => match self {
+                    BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal => {
+                        Some(Some(c.other()))
+                    }
+                    _ => Some(Some(c)),
+                },
+                other => other,
+            },
+            first_match: line.first_match,
+            last_position: line.last_position,
+            nest_ban: line.nest_ban,
+            primary_only: line.primary_only,
+            start_ply_range: line.start_ply_range.clone(),
+            constituents: line
+                .constituents
+                .iter()
+                .map(|c| self.transform_cql_path_constituent(c))
+                .collect(),
+        }
+    }
+
+    /// Transform a CqlPathPattern under geometric or color inversion symmetry
+    pub fn transform_cql_path_pattern(
+        &self,
+        path: &super::query::CqlPathPattern,
+    ) -> super::query::CqlPathPattern {
+        super::query::CqlPathPattern {
+            constituents: path
+                .constituents
+                .iter()
+                .map(|c| self.transform_cql_path_constituent(c))
+                .collect(),
+            single_color: match path.single_color {
+                Some(Some(c)) => match self {
+                    BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal => {
+                        Some(Some(c.other()))
+                    }
+                    _ => Some(Some(c)),
+                },
+                other => other,
+            },
+            start_ply_range: path.start_ply_range.clone(),
+        }
+    }
+
+    /// Transform a CqlPathConstituent under geometric or color inversion symmetry
+    pub fn transform_cql_path_constituent(
+        &self,
+        c: &super::query::CqlPathConstituent,
+    ) -> super::query::CqlPathConstituent {
+        match c {
+            super::query::CqlPathConstituent::Move(m) => {
+                super::query::CqlPathConstituent::Move(self.transform_move_pattern(m))
+            }
+            super::query::CqlPathConstituent::Filter(q) => {
+                super::query::CqlPathConstituent::Filter(Box::new(self.transform_query(q)))
+            }
+            super::query::CqlPathConstituent::Repetition {
+                constituent,
+                min,
+                max,
+            } => super::query::CqlPathConstituent::Repetition {
+                constituent: Box::new(self.transform_cql_path_constituent(constituent)),
+                min: *min,
+                max: *max,
+            },
+            super::query::CqlPathConstituent::Chain(subs) => {
+                super::query::CqlPathConstituent::Chain(
+                    subs.iter()
+                        .map(|s| self.transform_cql_path_constituent(s))
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// Transform a SetPredicate under geometric or color inversion symmetry
+    pub fn transform_set_predicate(&self, pred: &SetPredicate) -> SetPredicate {
+        match pred {
+            SetPredicate::NonEmpty(expr) => {
+                SetPredicate::NonEmpty(self.transform_square_set_expr(expr))
+            }
+            SetPredicate::CountComparison { expr, op, count } => SetPredicate::CountComparison {
+                expr: self.transform_square_set_expr(expr),
+                op: *op,
+                count: *count,
+            },
+            SetPredicate::SetComparison { left, op, right } => SetPredicate::SetComparison {
+                left: self.transform_square_set_expr(left),
+                op: *op,
+                right: self.transform_square_set_expr(right),
+            },
+        }
+    }
+
+    /// Transform a SquareSetExpr under geometric or color inversion symmetry
+    pub fn transform_square_set_expr(&self, expr: &SquareSetExpr) -> SquareSetExpr {
+        match expr {
+            SquareSetExpr::Piece(content) => {
+                SquareSetExpr::Piece(self.transform_square_content(content))
+            }
+            SquareSetExpr::Squares(bb) => {
+                let mut new_bb = Bitboard::EMPTY;
+                for sq in *bb {
+                    new_bb.add(self.transform_square(sq));
+                }
+                SquareSetExpr::Squares(new_bb)
+            }
+            SquareSetExpr::Variable(var) => SquareSetExpr::Variable(var.clone()),
+            SquareSetExpr::Intersection(left, right) => SquareSetExpr::Intersection(
+                Box::new(self.transform_square_set_expr(left)),
+                Box::new(self.transform_square_set_expr(right)),
+            ),
+            SquareSetExpr::Union(left, right) => SquareSetExpr::Union(
+                Box::new(self.transform_square_set_expr(left)),
+                Box::new(self.transform_square_set_expr(right)),
+            ),
+            SquareSetExpr::Difference(left, right) => SquareSetExpr::Difference(
+                Box::new(self.transform_square_set_expr(left)),
+                Box::new(self.transform_square_set_expr(right)),
+            ),
+            SquareSetExpr::Complement(inner) => {
+                SquareSetExpr::Complement(Box::new(self.transform_square_set_expr(inner)))
+            }
+            SquareSetExpr::Attacks { attacker, target } => SquareSetExpr::Attacks {
+                attacker: Box::new(self.transform_square_set_expr(attacker)),
+                target: Box::new(self.transform_square_set_expr(target)),
+            },
+            SquareSetExpr::Attackers { attacker, target } => SquareSetExpr::Attackers {
+                attacker: Box::new(self.transform_square_set_expr(attacker)),
+                target: Box::new(self.transform_square_set_expr(target)),
+            },
+            SquareSetExpr::Ray { direction, origin } => SquareSetExpr::Ray {
+                direction: self.transform_direction(*direction),
+                origin: Box::new(self.transform_square_set_expr(origin)),
+            },
+            SquareSetExpr::Between { from, to } => SquareSetExpr::Between {
+                from: Box::new(self.transform_square_set_expr(from)),
+                to: Box::new(self.transform_square_set_expr(to)),
+            },
+            SquareSetExpr::Shift {
+                direction,
+                min_dist,
+                max_dist,
+                expr,
+            } => SquareSetExpr::Shift {
+                direction: self.transform_direction(*direction),
+                min_dist: *min_dist,
+                max_dist: *max_dist,
+                expr: Box::new(self.transform_square_set_expr(expr)),
+            },
+        }
+    }
+
+    /// Transform a board direction under geometric symmetry
+    pub fn transform_direction(
+        &self,
+        dir: crate::search::query::Direction,
+    ) -> crate::search::query::Direction {
+        use crate::search::query::Direction;
+        match self {
+            BoardSymmetry::Identity => dir,
+            BoardSymmetry::HorizontalMirror => match dir {
+                Direction::Up => Direction::Up,
+                Direction::Down => Direction::Down,
+                Direction::Left => Direction::Right,
+                Direction::Right => Direction::Left,
+                Direction::NorthEast => Direction::NorthWest,
+                Direction::NorthWest => Direction::NorthEast,
+                Direction::SouthEast => Direction::SouthWest,
+                Direction::SouthWest => Direction::SouthEast,
+                other => other,
+            },
+            BoardSymmetry::VerticalMirror | BoardSymmetry::ColorInvert => match dir {
+                Direction::Up => Direction::Down,
+                Direction::Down => Direction::Up,
+                Direction::Left => Direction::Left,
+                Direction::Right => Direction::Right,
+                Direction::NorthEast => Direction::SouthEast,
+                Direction::NorthWest => Direction::SouthWest,
+                Direction::SouthEast => Direction::NorthEast,
+                Direction::SouthWest => Direction::NorthWest,
+                other => other,
+            },
+            BoardSymmetry::Rotate180 | BoardSymmetry::ColorInvertHorizontal => match dir {
+                Direction::Up => Direction::Down,
+                Direction::Down => Direction::Up,
+                Direction::Left => Direction::Right,
+                Direction::Right => Direction::Left,
+                Direction::NorthEast => Direction::SouthWest,
+                Direction::NorthWest => Direction::SouthEast,
+                Direction::SouthEast => Direction::NorthWest,
+                Direction::SouthWest => Direction::NorthEast,
+                other => other,
+            },
+            BoardSymmetry::Rotate90 => match dir {
+                Direction::Up => Direction::Right,
+                Direction::Right => Direction::Down,
+                Direction::Down => Direction::Left,
+                Direction::Left => Direction::Up,
+                Direction::NorthEast => Direction::SouthEast,
+                Direction::SouthEast => Direction::SouthWest,
+                Direction::SouthWest => Direction::NorthWest,
+                Direction::NorthWest => Direction::NorthEast,
+                Direction::Vertical => Direction::Horizontal,
+                Direction::Horizontal => Direction::Vertical,
+                other => other,
+            },
+            BoardSymmetry::Rotate270 => match dir {
+                Direction::Up => Direction::Left,
+                Direction::Left => Direction::Down,
+                Direction::Down => Direction::Right,
+                Direction::Right => Direction::Up,
+                Direction::NorthEast => Direction::NorthWest,
+                Direction::NorthWest => Direction::SouthWest,
+                Direction::SouthWest => Direction::SouthEast,
+                Direction::SouthEast => Direction::NorthEast,
+                Direction::Vertical => Direction::Horizontal,
+                Direction::Horizontal => Direction::Vertical,
+                other => other,
+            },
+            _ => dir,
         }
     }
 
@@ -823,6 +1104,14 @@ impl BoardSymmetry {
         if let Some(ref to_pcs) = pat.to_pieces {
             new_pat.to_pieces = Some(
                 to_pcs
+                    .iter()
+                    .map(|p| self.transform_square_content(p))
+                    .collect(),
+            );
+        }
+        if let Some(ref cap_pcs) = pat.captured_pieces {
+            new_pat.captured_pieces = Some(
+                cap_pcs
                     .iter()
                     .map(|p| self.transform_square_content(p))
                     .collect(),

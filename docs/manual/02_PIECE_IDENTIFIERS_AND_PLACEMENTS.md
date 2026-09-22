@@ -59,6 +59,36 @@ You can query individual squares, sets, rectangular board boxes, ranks, files, o
 
 ---
 
+## ⚡ First-Class Square Set Algebra
+
+CQLite supports full mathematical square set algebra evaluated directly over 64-bit hardware bitboards. Square sets can be intersected, united, subtracted, complemented, and evaluated in both boolean (non-empty) and numeric comparison contexts.
+
+### 1. Set Operators & Precedence
+
+| Operation | Syntax | Bitboard Code | Description / Example |
+| :--- | :--- | :--- | :--- |
+| **Union** | `A \| B` | `A \| B` | Squares in A, B, or both $\rightarrow$ `(N \| B) [b5, g5] >= 2` |
+| **Difference** | `A \ B` or `A - B` | `A & !B` | Squares in A not in B $\rightarrow$ `(occupied \ [e4, d4]) >= 30` |
+| **Intersection** | `A & B` or `A B` | `A & B` | Squares common to both $\rightarrow$ `B & [c1, f1]` or `B [c1, f1]` |
+| **Complement** | `~A` or `!A` | `!A` | All 64 squares not in A $\rightarrow$ `~occupied >= 32` |
+
+### 2. Dual-Nature Truthiness
+
+* **Boolean Truthiness**: Evaluates whether the resulting square set is **non-empty** (`count > 0`):
+  ```text
+  B [c4, g5]                 # True if White has a bishop on c4 OR g5
+  occupied & [e4, d4, e5, d5]# True if any piece occupies the center
+  ```
+* **Numeric Comparisons**: Compares the size of the set using standard comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`):
+  ```text
+  B [c4, g5] == 2            # White has bishops on BOTH c4 and g5
+  (N | B) [b5, g5] >= 2      # At least 2 knights or bishops on b5 and g5
+  (occupied \ [e4, d4]) >= 30# At least 30 pieces excluding central squares
+  ~occupied >= 32            # 32 or more empty squares on the board
+  ```
+
+---
+
 ## 🔢 Piece Counts & Group Counts
 
 Count total pieces on the board or within a specific square set:
@@ -85,6 +115,18 @@ Count occurrences of combined piece sets:
 ```text
 white_light_bishops == 1 and black_dark_bishops == 1
 light_bishops == 2 and dark_bishops == 0
+```
+
+### 4. Set-to-Set Comparisons
+Compare square sets and piece sets directly against other sets or the empty set (`[]`):
+```text
+[Aa] == [KkPp]               # Pure King & Pawn endgame (no queens, rooks, bishops, or knights)
+[Aa] == []                   # Empty board
+[Qq] == []                   # Queenless endgame
+[Kk] == [Pp]                 # Equal number of kings and pawns
+[Qq] > [Rr]                  # More queens than rooks on the board
+[Nn] > [Bb]                  # More knights than bishops (knight advantage)
+[Aa] on light == [KkPp]      # All pieces on light squares are kings or pawns
 ```
 
 ---

@@ -199,6 +199,21 @@ move legal from [e1, e8] to [c1, g1]
 - **`consecutive: false` (Themed / Gapped Paths)**: Moves must occur in order, with up to `max_gap_plies` between them (e.g., `e4` followed later by `Bg5` and eventually `Rd8#`).
 - **`start_ply_range`**: Restricts where the sequence can begin (e.g., `0..2` for move 1).
 
+#### CQL 6.2 Path & Turnstile Sequences (`cqlpath { ... }` / `turnstile { ... }` / `sequence { ... }`):
+In addition to standard `path [...]`, the engine supports full CQL 6.2 `cqlpath` sequences interleaving **Move Constituents** (which advance the ply timeline) and **Positional Filter Constituents** (which assert board states at the current position without advancing the move index):
+- **SAN Moves with Suffixes**: `cqlpath { Qb8+ Nxb8 Rd8# }`
+- **Keyword & Filter Checkers**: `cqlpath { e4 not check e5 }`, `cqlpath { Qb8 check Nxb8 Rd8 mate }`
+- **Interleaved Positional Filters**: `sequence { e4 { [p] on e7 } e5 { [p] on e5 } }`
+- **Repetitions & Chains**: `turnstile { (Bxh7+ kxh7)+ }`, `(e4 e5){1, 3}`
+
+#### Modern CQLi `line` Filter (`line -->` / `line <--` / `cqlline`):
+Searches for sequential position transitions along directional arrows (`-->` forward or `<--` backward look-behind):
+- **Canonical Arrow Chains**: `line --> check --> move previous capture --> mate`
+- **Check Streaks & Ranges**: `line 5 100 nestban --> check+`
+- **Backward Look-Behind**: `mate and line lastposition <-- check* <-- Queen`
+- **Group Chains**: `line --> ( check --> move previous capture )+`
+- **Modifiers**: `firstmatch`, `lastposition`, `nestban`, `singlecolor`, `primary`
+
 ---
 
 ### 4. Pawn Structure Predicates (`PawnPredicate`)
@@ -276,6 +291,29 @@ You can place `light` or `dark` directly before any piece role, symbol, color gr
 
 ---
 
+### 6.2. First-Class Square Set Algebra & Bitboard Engine
+
+CQLite treats square collections, piece placements, and attack geometries as **first-class square sets** evaluating directly to 64-bit hardware bitboards (`shakmaty::Bitboard`):
+
+#### A. Set Expressions & Hardware Operations
+| Operation | Syntax | Bitboard Code | Description |
+| :--- | :--- | :--- | :--- |
+| **Union** | `A \| B` | `A \| B` | Combines pieces or zones $\rightarrow$ `(N \| B) [b5, g5] >= 2` |
+| **Difference** | `A \ B` or `A - B` | `A & !B` | Excludes subsets $\rightarrow$ `(occupied \ [e4, d4]) >= 30` |
+| **Intersection** | `A & B` or `A B` | `A & B` | Overlap $\rightarrow$ `B & [c1, f1]` or `B [c1, f1]` |
+| **Complement** | `~A` or `!A` | `!A` | Entire 64-square bitboard inversion $\rightarrow$ `~occupied >= 32` |
+| **Attacks** | `attacks(attacker, target)` | `atk_bb attacks & tgt_bb` | Target squares attacked by attacker $\rightarrow$ `attacks(R, k) >= 2` |
+| **Attackers** | `attackers(attacker, target)` | `atk_sqs attacking tgt_bb` | Attacker pieces targeting target set $\rightarrow$ `attackers(white, e5) >= 2` |
+| **Ray** | `ray(direction, origin)` | `expand_ray(dir, orig_bb)` | Directional rays from origin $\rightarrow$ `ray(diagonal, [c1, f1])` |
+| **Between** | `between(from, to)` | `between_sqs(from, to)` | Squares strictly between two sets $\rightarrow$ `between(k, q) & occupied == 0` |
+
+#### B. Dual-Nature Truthiness & Set-to-Set Comparisons
+- **Boolean Context**: Evaluates to `true` if the resulting square set is non-empty (`!set.is_empty()`), e.g., `B [c4, g5]` or `attacks(n, K) & ~occupied`.
+- **Numeric Count Comparisons**: Direct evaluation with integer literals, e.g., `attacks(R, k) >= 2`, `B [c4, g5] == 2`.
+- **Dynamic Set Comparisons**: Compares the size of two dynamic square set expressions against each other, e.g., `attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8])` (spatial file control dominance).
+
+---
+
 ### 7. Composite Boolean Combinators & Scoping
 
 | Combinator | Description |
@@ -314,7 +352,7 @@ let result = GameSearchEvaluator::evaluate_pgn(&query, pgn_game_str);
 - **Headers & Regex**: `player "Kasparov"`, `player ~ "Kasp.*"`, `player: regex("^Paul\\s+Morphy$")`, `white "Morphy"`, `black "Topalov"`, `elo >= 2700`, `whiteelo >= 2800`, `result "1-0"`, `eco "B88"`, `date >= "2000"`, `site "Paris"`, `event "World Championship"`, `tag "TimeControl" == "300+0"`, `header "Annotator" contains "Stockfish"`.
 - **Board & Position**: `wtm` (*White to move*), `btm` (*Black to move*), `turn white`, `turn black`, `check`, `mate` / `checkmate`, `stalemate`, `legal == 0`, `legal >= 20`, `check and legal == 0`, `ply == 10`, `ply <= 20`, `ply 1..20`, `movenumber == 10`, `movenumber <= 5`, `R on d8`, `R == 1`, `r == 0`, `[Qq] == 0`, `[RBN] == 2`, `[KkQq] == 2`, `A == 2 and R == 1 and a == 1`, `white_pieces == 2 and R == 1 black_pieces == 1`, `white_pieces [e4, d4] >= 2`, `empty [e5, d5]`, `empty on e4`, `not empty on e4`, `fen "r1bqk2r/pppp1ppp/2n2n2/*/*/*/*/*"`, `fen "*/*/*/*ppA*/*/*/*/*"`.
 - **Light / Dark Modifiers & Pieces**: `dark queen`, `light queen`, `dark [B, b] >= 1`, `light white_pieces >= 6`, `dark white_pieces count >= 4`, `dark empty >= 16`, `dark queen on [d1..d8]`, `light B`, `dark b`, `light bishop`.
-- **Move & Legal Move Filters**: `move from B to R`, `move from [B, N] to [r, q]`, `move from A to a`, `move A--`, `move --=R`, `move pxN=q`, `move from e2 to e4`, `move from [e1, e8] to [c1, g1, c8, g8]`, `move piece Q to [d8, e8]`, `move capture`, `move check`, `move legal count == 0`, `move legal from [e1, e8] to [c1, g1]`, `line [e4 e5 Nf3 d6]`, `path [e4 ... Bg5 ... Rd8#]`, `move "Qb8+"`.
+- **Move & Legal Move Filters**: `move from B to r`, `move from [B, N] to [r, q]`, `move from A to a`, `move A--`, `move --=R`, `move pxN=q`, `move from e2 to e4`, `move from [e1, e8] to [c1, g1, c8, g8]`, `move piece Q to [d8, e8]`, `move capture`, `move check`, `move legal count == 0`, `move legal from [e1, e8] to [c1, g1]`, `line [e4 e5 Nf3 d6]`, `path [e4 ... Bg5 ... Rd8#]`, `move "Qb8+"`.
 - **Power & Material Points**: `white_power > black_power`, `black_power > white_power`, `power >= 78`, `34 >= black_power`, `power_diff >= 3`, `power(white) <= 30`.
 - **Pawn Structures**: `passedpawns [white] >= 1`, `isolatedpawns [black] == 0`, `doubledpawns [white] == 0`, `backwardpawns [black] >= 1`, `pawnislands [black] <= 2`.
 - **Tactics & Motifs**: `attacks [N, k]`, `pin [B, n, k]`, `pin from B to k through n`, `pin from bishop to queen through knight`, `fork [N, k, q]`, `discovered_attack white`, `skewer [Q, k, r]`, `skewer from Q to r through k`, `trapped [q]`, `outpost [N, d5]`, `distance(K, k) <= 2`.

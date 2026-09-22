@@ -945,6 +945,42 @@ fn test_wtm_btm_any_color_and_legal_move_filters() {
     assert!(res_mate.is_match);
     assert_eq!(res_mate.matching_plies, vec![33]);
 
+    // 4b. Legal Mate in 1 analysis: at ply 32, White has legal move 17. Rd8# delivering mate
+    let q_legal_mate = QueryParser::parse_str("legal mate count >= 1").unwrap();
+    let res_legal_mate = GameSearchEvaluator::evaluate_pgn(&q_legal_mate, OPERA_GAME);
+    assert!(
+        res_legal_mate.is_match,
+        "Must match ply 32 where White has legal mate in 1 (17. Rd8#)"
+    );
+    assert_eq!(res_legal_mate.matching_plies, vec![32]);
+
+    let q_legal_mate_rook = QueryParser::parse_str("legal mate piece R").unwrap();
+    let res_legal_mate_r = GameSearchEvaluator::evaluate_pgn(&q_legal_mate_rook, OPERA_GAME);
+    assert!(res_legal_mate_r.is_match);
+    assert_eq!(res_legal_mate_r.matching_plies, vec![32]);
+
+    let q_legal_mate_queen = QueryParser::parse_str("legal mate piece Q").unwrap();
+    let res_legal_mate_q = GameSearchEvaluator::evaluate_pgn(&q_legal_mate_queen, OPERA_GAME);
+    assert!(
+        !res_legal_mate_q.is_match,
+        "Queen was sacrificed, cannot mate"
+    );
+
+    // 4c. Multiple mates in 1 on custom puzzle: White has 3 distinct legal checkmates (Qg7#, Qh7#, Ra8#)
+    let multi_mate_fen = "7k/1Q6/6K1/8/8/8/8/R7 w - - 0 1";
+    let multi_mate_pos: shakmaty::Chess = shakmaty::fen::Fen::from_ascii(multi_mate_fen.as_bytes())
+        .unwrap()
+        .into_position(shakmaty::CastlingMode::Standard)
+        .unwrap();
+    let q_multi_mate = QueryParser::parse_str("legal mate count >= 2").unwrap();
+    let res_multi = GameSearchEvaluator::evaluate_with_timeline(
+        &q_multi_mate,
+        &HashMap::new(),
+        std::slice::from_ref(&multi_mate_pos),
+        &[],
+    );
+    assert!(res_multi.is_match, "Position has multiple legal checkmates");
+
     // 5. move filter: move from [e1, e8] to [c1, g1, c8, g8] (castling move 12. O-O-O at ply 23)
     let q_castling = QueryParser::parse_str("move from [e1, e8] to [c1, g1, c8, g8]").unwrap();
     let res_castling = GameSearchEvaluator::evaluate_pgn(&q_castling, OPERA_GAME);
@@ -1084,6 +1120,22 @@ fn test_descriptive_parse_error_diagnostics() {
     assert_eq!(err_turn.line, 1);
     let formatted_turn = format!("{}", err_turn);
     assert!(formatted_turn.contains("Invalid turn color"));
+
+    // 4. Color mismatch in path: path black [Bg4]
+    let bad_path_col = "path black [Bg4]";
+    let err_path_col = QueryParser::parse_str(bad_path_col).unwrap_err();
+    assert!(err_path_col.message.contains("Color mismatch"));
+    assert!(err_path_col.help.as_ref().unwrap().contains("uppercase"));
+
+    // 5. Impossible same-color capture in path: path [BxPh7] (White bishop takes white pawn)
+    let bad_cap = "path [BxPh7]";
+    let err_cap = QueryParser::parse_str(bad_cap).unwrap_err();
+    assert!(err_cap.message.contains("cannot capture"));
+
+    // 6. Impossible same-color capture in move filter: move from B to R
+    let bad_move_cap = "move from B to R capture";
+    let err_move_cap = QueryParser::parse_str(bad_move_cap).unwrap_err();
+    assert!(err_move_cap.message.contains("cannot capture"));
 }
 
 #[test]
@@ -1371,6 +1423,24 @@ fn test_wildcard_moves_and_promotions_and_en_passant() {
     // At ply 21 (before 12. bxa8=R), White has legal promotions on b7
     let res_legal_promo = GameSearchEvaluator::evaluate_pgn(&q10_legal_promote, game_pgn);
     assert!(res_legal_promo.is_match);
+
+    // 11. move en_passant / move ep
+    let q11_ep = QueryParser::parse_str("move en_passant").unwrap();
+    let res_ep = GameSearchEvaluator::evaluate_pgn(&q11_ep, game_pgn);
+    assert!(res_ep.is_match, "Should match 3. exd6 (en passant)");
+    assert_eq!(res_ep.matching_plies, vec![5]);
+
+    let q11_ep_short = QueryParser::parse_str("move ep").unwrap();
+    let res_ep_short = GameSearchEvaluator::evaluate_pgn(&q11_ep_short, game_pgn);
+    assert!(res_ep_short.is_match);
+    assert_eq!(res_ep_short.matching_plies, vec![5]);
+
+    // Opera game has no en passant moves:
+    let res_ep_opera = GameSearchEvaluator::evaluate_pgn(&q11_ep, OPERA_GAME);
+    assert!(
+        !res_ep_opera.is_match,
+        "Opera game does not have en passant moves"
+    );
 }
 
 #[test]
@@ -1591,7 +1661,7 @@ fn test_query_explain_and_to_dsl() {
     // 2. FEN symmetry explanation
     let fen_query = "flip:all { fen \"8/8/8/8/8/8/4P3/8 w - - 0 1\" }";
     let exp_fen = QueryParser::explain(fen_query).unwrap();
-    assert_eq!(exp_fen.branches.len(), 6);
+    assert_eq!(exp_fen.branches.len(), 8);
     assert!(exp_fen.has_symmetries);
     assert!(!exp_fen.branches[0].transformed_fens.is_empty());
     assert_eq!(
@@ -1791,11 +1861,11 @@ fn test_alex_pgn_queries() {
         res_ph7.len(),
         "Both queries should match the exact same number of games"
     );
-    let bare_ids: Vec<usize> = res_bare.iter().map(|r| r.game_id).collect();
-    let ph7_ids: Vec<usize> = res_ph7.iter().map(|r| r.game_id).collect();
-    assert_eq!(
-        bare_ids, ph7_ids,
-        "Both queries should match the exact same game IDs"
+    let q_nxne5 = QueryParser::parse_str("path [Nxne5]").unwrap();
+    let res_nxne5 = pgn_db.search_query(&q_nxne5);
+    assert!(
+        !res_nxne5.is_empty(),
+        "Nxne5 (White Knight captures Black Knight on e5) must match games in alex.pgn"
     );
 }
 
@@ -1848,6 +1918,26 @@ fn test_manual_examples_all_valid() {
         r#"path [e4 --+ d5]"#,
         r#"path [e4 --{0, 2} e5]"#,
         r#"path [e4 --{1} d6]"#,
+        r#"path [Bg4+]"#,
+        r#"path [bg4+]"#,
+        r#"move legal mate count >= 2"#,
+        r#"move legal mate count == 1"#,
+        r#"move legal piece Q mate count >= 1"#,
+        r#"move legal piece N mate count >= 1"#,
+        r#"move legal capture mate count >= 1"#,
+        r#"move legal en_passant mate count >= 1"#,
+        r#"move legal castle mate count >= 1"#,
+        r#"move legal count == 0"#,
+        r#"move from Q to f7 capture"#,
+        r#"move previous castle"#,
+        r#"check and move previous piece B"#,
+        r#"check and move mate"#,
+        r#"check and move piece Q mate"#,
+        r#"check and move capture mate"#,
+        r#"move en_passant mate"#,
+        r#"move castle mate"#,
+        r#"move promote Q mate"#,
+        r#"path [O-O-O ... --#]"#,
         // Chapter 4: Pawn Structures
         r#"passed_pawns white >= 1 and passed_pawns black == 0 and [Qq] == 0"#,
         r#"Pd4 and isolated white == 1 and white_pawns >= 5"#,
@@ -1872,6 +1962,12 @@ fn test_manual_examples_all_valid() {
         r#"distance(K, k) <= 2"#,
         r#"attacks(g5, f6)"#,
         r#"attacks(B, k)"#,
+        r#"attacks(P, [qr])"#,
+        r#"attacks(P, [q])"#,
+        r#"attacks(P, [q, r])"#,
+        r#"attacks(k, _)"#,
+        r#"attacks(k, empty)"#,
+        r#"attacks(K, .)"#,
         r#"is_attacked e4 by black"#,
         // Chapter 6: Material & Power
         r#"opposite_bishops and [Qq] == 0 and [Rr] == 0 and [Nn] == 0"#,
@@ -1896,6 +1992,9 @@ fn test_manual_examples_all_valid() {
         r#"ply in 1..20 { fork(knight, queen, rook) }"#,
         r#"move_number <= 10 and queens == 0"#,
         r#"occurrences >= 3 { check }"#,
+        r#"attacks(R, b) and move previous e4"#,
+        r#"attacks(R, b) and move e4"#,
+        r#"cqlpath { e4 { attacks(R, b) } }"#,
         r#"comment contains "blunder""#,
         r#"comment contains "??""#,
         r#"nag $3"#,
@@ -2054,4 +2153,1138 @@ fn test_pgn_index_entry_header_prefiltering() {
     assert_eq!(results_match.len(), 1);
     let results_miss = pgn_db.search_query(&q_wrong_white);
     assert_eq!(results_miss.len(), 0);
+}
+
+#[test]
+fn test_previous_move_queries() {
+    // Morphy's Opera Game:
+    // 1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7
+    // 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8
+    // 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris FRA"]
+[Date "1858.??.??"]
+[White "Paul Morphy"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"#;
+
+    // 1. Check positions reached immediately after castling (12. O-O-O)
+    let q_prev_castle = QueryParser::parse_str("move previous castle").unwrap();
+    let res_prev_castle = GameSearchEvaluator::evaluate_pgn(&q_prev_castle, opera_pgn);
+    assert!(res_prev_castle.is_match);
+    // 12. O-O-O is white move 12 (ply 23)
+    assert!(res_prev_castle.matching_plies.contains(&23));
+
+    // 2. Syntax variations: "previous castle", "prev castle"
+    let q_prev_castle_syntax = QueryParser::parse_str("previous castle").unwrap();
+    let res_syntax = GameSearchEvaluator::evaluate_pgn(&q_prev_castle_syntax, opera_pgn);
+    assert!(res_syntax.is_match);
+    assert_eq!(res_syntax.matching_plies, res_prev_castle.matching_plies);
+
+    // 3. Combined query: "check and move previous from B" (e.g. 11. Bxb5+ or 15. Bxd7+)
+    // 11. Bxb5+ plays Bishop from c4 (ply 21), giving check!
+    let q_check_prev_b = QueryParser::parse_str("check and move previous piece B").unwrap();
+    let res_check_b = GameSearchEvaluator::evaluate_pgn(&q_check_prev_b, opera_pgn);
+    assert!(res_check_b.is_match);
+    assert!(res_check_b.matching_plies.contains(&21)); // After 11. Bxb5+
+
+    // 4. Combined query: "check and move previous from [c4 d7]"
+    let q_check_from_c4 = QueryParser::parse_str("check and move previous from [c4 d7]").unwrap();
+    let res_check_from_c4 = GameSearchEvaluator::evaluate_pgn(&q_check_from_c4, opera_pgn);
+    assert!(res_check_from_c4.is_match);
+    assert!(res_check_from_c4.matching_plies.contains(&21));
+
+    // 5. "not check and move previous castle"
+    let q_not_check_prev_castle =
+        QueryParser::parse_str("not check and move previous castle").unwrap();
+    let res_not_chk_cst = GameSearchEvaluator::evaluate_pgn(&q_not_check_prev_castle, opera_pgn);
+    assert!(res_not_chk_cst.is_match);
+    assert!(res_not_chk_cst.matching_plies.contains(&23));
+
+    // 6. Checkmate move delivered: 17. Rd8# (ply 33)
+    let q_prev_mate = QueryParser::parse_str("move previous mate").unwrap();
+    let res_prev_mate = GameSearchEvaluator::evaluate_pgn(&q_prev_mate, opera_pgn);
+    assert!(res_prev_mate.is_match);
+    assert_eq!(res_prev_mate.matching_plies, vec![33]);
+
+    // 7. Explain / ToDsl roundtrip formatting
+    let dsl = q_check_prev_b.to_dsl();
+    assert!(dsl.contains("previous") && dsl.contains("B"));
+}
+
+#[test]
+fn test_legal_mate_queries() {
+    // Opera Game final position before 17. Rd8#:
+    // At ply 32 (after 16... Nxb8), White's turn with Rd8# as a legal mate move.
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris FRA"]
+[Date "1858.??.??"]
+[White "Paul Morphy"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"#;
+
+    // 1. Legal mate count >= 1
+    let q_legal_mate = QueryParser::parse_str("legal mate count >= 1").unwrap();
+    let res1 = GameSearchEvaluator::evaluate_pgn(&q_legal_mate, opera_pgn);
+    assert!(res1.is_match);
+    // At ply 32 (White to move after 16... Nxb8), White has 17. Rd8# as legal checkmate
+    assert_eq!(res1.matching_plies, vec![32]);
+
+    // 2. Specific piece legal mate: "legal mate piece R"
+    let q_rook_mate = QueryParser::parse_str("legal mate piece R count >= 1").unwrap();
+    let res_rook = GameSearchEvaluator::evaluate_pgn(&q_rook_mate, opera_pgn);
+    assert!(res_rook.is_match);
+    assert_eq!(res_rook.matching_plies, vec![32]); // 17. Rd8#
+
+    // 3. Knight mate should NOT match in Opera game
+    let q_knight_mate = QueryParser::parse_str("legal mate piece N count >= 1").unwrap();
+    let res_knight = GameSearchEvaluator::evaluate_pgn(&q_knight_mate, opera_pgn);
+    assert!(!res_knight.is_match);
+}
+
+#[test]
+fn test_direction_filters_and_move_paths() {
+    use shakmaty::Square;
+
+    // 1. Basic & Compound Direction square set expansions
+    let q_up1 = QueryParser::parse_str("piece P on up 1 d4").unwrap();
+    if let SearchQuery::Position(PositionPattern::Squares(map)) = q_up1 {
+        assert_eq!(map.keys().copied().collect::<Vec<_>>(), vec![Square::D5]);
+    } else {
+        panic!("Expected PositionPattern::Squares");
+    }
+
+    let q_up_range = QueryParser::parse_str("piece P on up 1 3 d4").unwrap();
+    if let SearchQuery::Position(PositionPattern::MultiSquare { squares: sqs, .. }) = q_up_range {
+        assert_eq!(sqs, vec![Square::D5, Square::D6, Square::D7]);
+    } else {
+        panic!("Expected PositionPattern::MultiSquare");
+    }
+
+    let q_down2 = QueryParser::parse_str("piece P on down 2 d4").unwrap();
+    if let SearchQuery::Position(PositionPattern::Squares(map)) = q_down2 {
+        assert_eq!(map.keys().copied().collect::<Vec<_>>(), vec![Square::D2]);
+    } else {
+        panic!("Expected PositionPattern::Squares");
+    }
+
+    let q_left1 = QueryParser::parse_str("piece P on left 1 [d4, e5]").unwrap();
+    if let SearchQuery::Position(PositionPattern::MultiSquare { squares: sqs, .. }) = q_left1 {
+        assert_eq!(sqs, vec![Square::C4, Square::D5]);
+    } else {
+        panic!("Expected PositionPattern::MultiSquare");
+    }
+
+    let q_diag1 = QueryParser::parse_str("piece P on diagonal 1 d4").unwrap();
+    if let SearchQuery::Position(PositionPattern::MultiSquare { squares: sqs, .. }) = q_diag1 {
+        assert_eq!(sqs, vec![Square::C3, Square::E3, Square::C5, Square::E5]);
+    } else {
+        panic!("Expected PositionPattern::MultiSquare");
+    }
+
+    // 2. Composed directions: up 2 right 1 d4 -> e6 (knight hop)
+    let q_composed = QueryParser::parse_str("piece P on up 2 right 1 d4").unwrap();
+    if let SearchQuery::Position(PositionPattern::Squares(map)) = q_composed {
+        assert_eq!(map.keys().copied().collect::<Vec<_>>(), vec![Square::E6]);
+    } else {
+        panic!("Expected PositionPattern::Squares");
+    }
+
+    // 3. ray(up, d4) syntax
+    let q_ray = QueryParser::parse_str("piece P on ray(up, d4)").unwrap();
+    if let SearchQuery::Position(PositionPattern::MultiSquare { squares: sqs, .. }) = q_ray {
+        assert_eq!(sqs, vec![Square::D5, Square::D6, Square::D7, Square::D8]);
+    } else {
+        panic!("Expected PositionPattern::MultiSquare");
+    }
+
+    // 4. Directional moves on Opera game:
+    // 1. e4 (P--up 2) e5 2. Nf3 d6 3. d4 Bg4 ...
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris FRA"]
+[Date "1858.??.??"]
+[White "Paul Morphy"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"#;
+
+    // A. 1. e4 is a 2-step pawn advance up: path [P--up 2]
+    let q_pawn_up2 = QueryParser::parse_str("path [P--up 2]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_pawn_up2, opera_pgn).is_match);
+
+    // B. Standalone move filter: move piece P to up 2
+    let q_move_up2 = QueryParser::parse_str("move piece P to up 2").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_move_up2, opera_pgn).is_match);
+
+    // C. Queen move up in Opera game: 7. Qb3 (from f3 to b3 is horizontal, 5. Qxf3 is diagonal)
+    let q_queen_horiz = QueryParser::parse_str("move piece Q horizontal").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_queen_horiz, opera_pgn).is_match);
+
+    let q_queen_diag = QueryParser::parse_str("move piece Q diagonal").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_queen_diag, opera_pgn).is_match);
+
+    // D. Rook moving down the board (e.g. 17. Rd8# is down to 8th rank from d1)
+    let q_rook_up = QueryParser::parse_str("move piece R up").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_rook_up, opera_pgn).is_match);
+
+    // E. Path sequence with directional move tokens
+    let q_path_dirs = QueryParser::parse_str("path [P--up 2, ..., P--up 2]").unwrap();
+    // 1. e4 (P--up 2), gap, 3. d4 (P--up 2)
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_path_dirs, opera_pgn).is_match);
+}
+
+#[test]
+fn test_single_color_path_and_move_repetition_quantifiers() {
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris FRA"]
+[Date "1858.??.??"]
+[White "Paul Morphy"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"#;
+
+    // 1. Single color path: Morphy's sequence 1. e4, 2. Nf3, 3. d4 without writing opponent moves
+    let q_single = QueryParser::parse_str("path singlecolor [e4, Nf3, d4]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_single, opera_pgn).is_match);
+
+    // 2. White explicit single color path
+    let q_white = QueryParser::parse_str("path white [e4, Nf3, d4]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_white, opera_pgn).is_match);
+
+    // 3. Black explicit single color path: 1... e5 2... d6 3... bg4
+    let q_black = QueryParser::parse_str("path black [e5, d6, bg4]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_black, opera_pgn).is_match);
+
+    // 4. Single-color queen maneuvers: 5. Qxf3, 7. Qb3
+    // Morphy's Queen moves from f3 to b3 (with one white move Bc4 in between)
+    let q_queen_tour = QueryParser::parse_str("path white [Qxf3, ..., Qb3]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_queen_tour, opera_pgn).is_match);
+
+    // 5. Repetition quantifiers: e.g. piece moves with bounds `{1, 5}`
+    // White plays pawn moves: 1. e4, 3. d4 -> 2 pawn moves in first 3 turns
+    let q_rep = QueryParser::parse_str("path white [P--*{1, 3}]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_rep, opera_pgn).is_match);
+
+    // 6. Token repetition syntax in path: e.g. `Q--b3{1}`
+    let q_token_rep = QueryParser::parse_str("path [Qb3{1}]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_token_rep, opera_pgn).is_match);
+
+    // 7. DSL explain roundtrip check
+    let explained = crate::search::explain_query("path white [e4, Nf3, d4]", &q_white);
+    assert!(explained.canonical_dsl.contains("white"));
+}
+
+#[test]
+fn test_square_set_algebra_and_bitboard_engine() {
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris FRA"]
+[Date "1858.??.??"]
+[White "Paul Morphy"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"#;
+
+    // 1. Double attack check: attacks(R, k) >= 2 or attacks(R, k) >= 1
+    let q_double_attack = QueryParser::parse_str("attacks(R, k) >= 1").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_double_attack, opera_pgn).is_match);
+
+    // 2. Set Intersection: B [c4, g5] (Morphy has bishop on c4 and g5)
+    let q_bishops_on_sqs = QueryParser::parse_str("B [c4, g5] >= 2").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_bishops_on_sqs, opera_pgn).is_match);
+
+    // 3. Set Union: (N | B) [b5, g5] >= 2
+    let q_union = QueryParser::parse_str("(N | B) [b5, g5] >= 2").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_union, opera_pgn).is_match);
+
+    // 4. Set Difference: occupied \ [e4, d4]
+    let q_diff = QueryParser::parse_str("(occupied \\ [e4, d4]) count >= 30").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_diff, opera_pgn).is_match);
+
+    // 5. Set Complement: ~(occupied) (i.e. empty squares)
+    let q_comp = QueryParser::parse_str("~occupied count >= 32").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_comp, opera_pgn).is_match);
+
+    // 6. Set Size Comparison: attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8])
+    let q_control_dominance =
+        QueryParser::parse_str("attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8])")
+            .unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_control_dominance, opera_pgn).is_match);
+
+    // 7. Non-empty boolean truthiness
+    let q_truthiness = QueryParser::parse_str("B [c4, g5]").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_truthiness, opera_pgn).is_match);
+
+    // 8. Roundtripping to canonical DSL
+    let explained = crate::search::explain_query("attacks(R, k) >= 1", &q_double_attack);
+    assert!(explained.canonical_dsl.contains("attacks(R, k) >= 1"));
+}
+
+#[test]
+fn test_cql_path_specification_and_interleaved_filters() {
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris"]
+[Date "1858.??.??"]
+[Round "?"]
+[White "Morphy, Paul"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7
+8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7
+14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0"#;
+
+    // 1. Opera Game mating finish with SAN suffixes (+, #)
+    let q_mate_finish = QueryParser::parse_str("cqlpath { Qb8+ Nxb8 Rd8# }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_mate_finish, opera_pgn).is_match);
+
+    // 2. Opera Game mating finish with explicit keyword filters (check, mate)
+    let q_keyword_finish = QueryParser::parse_str("cqlpath { Qb8 check Nxb8 Rd8 mate }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_keyword_finish, opera_pgn).is_match);
+
+    // 3. Opening non-check moves assertion
+    let q_opening_not_check = QueryParser::parse_str("cqlpath { e4 not check e5 }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_opening_not_check, opera_pgn).is_match);
+
+    // 4. Repeated check chain with turnstile alias
+    let q_repeated = QueryParser::parse_str("turnstile { (e4 e5)+ }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_repeated, opera_pgn).is_match);
+
+    // 5. Interleaved general filter block in sequence
+    let q_filter_block =
+        QueryParser::parse_str("sequence { e4 { [p] on e7 } e5 { [p] on e5 } }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_filter_block, opera_pgn).is_match);
+}
+
+#[test]
+fn test_cql_line_specification_forward_backward_and_modifiers() {
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris"]
+[Date "1858.??.??"]
+[Round "?"]
+[White "Morphy, Paul"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7
+8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7
+14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0"#;
+
+    // 1. Canonical CQLi Forward line: check -> move previous capture -> mate
+    let q_forward_line =
+        QueryParser::parse_str("line --> check --> move previous capture --> mate").unwrap();
+    let res_forward = GameSearchEvaluator::evaluate_pgn(&q_forward_line, opera_pgn);
+    assert!(
+        res_forward.is_match,
+        "Forward line with check -> capture -> mate must match Opera Game"
+    );
+    assert!(res_forward.matching_plies.contains(&31));
+
+    // 2. Canonical CQLi Grouping chain with quantifier: ( check --> move previous capture )+
+    let q_group = QueryParser::parse_str("line --> ( check --> move previous capture )+").unwrap();
+    let res_group = GameSearchEvaluator::evaluate_pgn(&q_group, opera_pgn);
+    assert!(
+        res_group.is_match,
+        "Parenthesized chain group with + must match check -> capture sequence"
+    );
+
+    // 3. Move token transition in line: line --> Qb8+ --> Nxb8 --> Rd8#
+    let q_moves_line = QueryParser::parse_str("line --> Qb8+ --> Nxb8 --> Rd8#").unwrap();
+    let res_moves = GameSearchEvaluator::evaluate_pgn(&q_moves_line, opera_pgn);
+    assert!(
+        res_moves.is_match,
+        "Line with move tokens must match sequence"
+    );
+
+    // 4. Backward look-behind with lastposition modifier: mate and line lastposition <-- check*
+    let q_look_behind = QueryParser::parse_str("mate and line lastposition <-- check*").unwrap();
+    let res_look_behind = GameSearchEvaluator::evaluate_pgn(&q_look_behind, opera_pgn);
+    assert!(
+        res_look_behind.is_match,
+        "Mate with backward check look-behind must match"
+    );
+
+    // 5. Length restrictions and nestban deduplication: line 1 10 nestban --> check+
+    let q_check_streak = QueryParser::parse_str("line 1 10 nestban --> check+").unwrap();
+    let res_streak = GameSearchEvaluator::evaluate_pgn(&q_check_streak, opera_pgn);
+    assert!(
+        res_streak.is_match,
+        "Check streak with range and nestban must match"
+    );
+
+    // 6. Singlecolor modifier
+    let q_single_color = QueryParser::parse_str("line singlecolor --> check+").unwrap();
+    let res_single_color = GameSearchEvaluator::evaluate_pgn(&q_single_color, opera_pgn);
+    assert!(res_single_color.is_match, "Single color line must match");
+
+    // 7. Parse error on mixed directional arrows
+    let mixed_err = QueryParser::parse_str("line --> check <-- mate").unwrap_err();
+    assert!(mixed_err.message.contains("Mixing '-->' and '<--'"));
+
+    // 8. Backward compatibility check: legacy SCID line [e4 e5 Nf3 d6]
+    let q_legacy = QueryParser::parse_str("line [e4 e5 Nf3 d6]").unwrap();
+    let res_legacy = GameSearchEvaluator::evaluate_pgn(&q_legacy, opera_pgn);
+    assert!(
+        res_legacy.is_match,
+        "Legacy SCID bracketed line must still match consecutively"
+    );
+
+    // 9. Backward compatibility check: path [e4 ... Rd8#]
+    let q_path = QueryParser::parse_str("path [e4 ... Rd8#]").unwrap();
+    let res_path = GameSearchEvaluator::evaluate_pgn(&q_path, opera_pgn);
+    assert!(
+        res_path.is_match,
+        "SCID path must continue to work unchanged"
+    );
+
+    // 10. Backward compatibility check: cqlpath { Qb8+ Nxb8 Rd8# }
+    let q_cqlpath = QueryParser::parse_str("cqlpath { Qb8+ Nxb8 Rd8# }").unwrap();
+    let res_cqlpath = GameSearchEvaluator::evaluate_pgn(&q_cqlpath, opera_pgn);
+    assert!(
+        res_cqlpath.is_match,
+        "CQL 6.2 cqlpath must continue to work unchanged"
+    );
+}
+
+#[test]
+fn test_query_semantic_validation_contradictions() {
+    // 1. User's exact case: wtm + move previous from Q (impossible) vs wtm + move previous from q (valid)
+    let err_wtm_prev_white = QueryParser::parse_str(
+        r#"
+        white == "Alexander2magnus"
+        wtm
+        mate
+        move previous from Q
+    "#,
+    )
+    .unwrap_err();
+    assert!(err_wtm_prev_white
+        .message
+        .contains("previous move was played by Black"));
+
+    let q_wtm_prev_black = QueryParser::parse_str(
+        r#"
+        white == "Alexander2magnus"
+        wtm
+        mate
+        move previous from q
+    "#,
+    );
+    assert!(
+        q_wtm_prev_black.is_ok(),
+        "Valid query with wtm and previous Black move must succeed"
+    );
+
+    // 2. btm + move previous from q (impossible) vs btm + move previous from Q (valid)
+    let err_btm_prev_black = QueryParser::parse_str("btm and move previous from q").unwrap_err();
+    assert!(err_btm_prev_black
+        .message
+        .contains("previous move was played by White"));
+
+    let q_btm_prev_white = QueryParser::parse_str("btm and move previous from Q");
+    assert!(q_btm_prev_white.is_ok());
+
+    // 3. Current move contradiction: wtm + move from q (Black cannot move on White turn)
+    let err_wtm_cur_black = QueryParser::parse_str("wtm and move from q").unwrap_err();
+    assert!(err_wtm_cur_black
+        .message
+        .contains("Black cannot play a move when it is wtm (White to move)"));
+
+    // 4. Current move contradiction: btm + move from Q (White cannot move on Black turn)
+    let err_btm_cur_white = QueryParser::parse_str("btm and move from Q").unwrap_err();
+    assert!(err_btm_cur_white
+        .message
+        .contains("White cannot play a move when it is btm (Black to move)"));
+
+    // 5. Conflicting turn assertions: wtm and btm
+    let err_conflicting_turns = QueryParser::parse_str("wtm and btm").unwrap_err();
+    assert!(err_conflicting_turns
+        .message
+        .contains("Contradictory turn assertions"));
+
+    // 6. Conflicting board states: mate and not check
+    let err_mate_not_check = QueryParser::parse_str("mate and not check").unwrap_err();
+    assert!(err_mate_not_check
+        .message
+        .contains("'mate' requires 'check'"));
+
+    // 7. Conflicting board states: stalemate and check
+    let err_stalemate_check = QueryParser::parse_str("stalemate and check").unwrap_err();
+    assert!(err_stalemate_check
+        .message
+        .contains("'stalemate' requires that the king is NOT in check"));
+
+    // 8. Conflicting board states: mate and stalemate
+    let err_mate_stalemate = QueryParser::parse_str("mate and stalemate").unwrap_err();
+    assert!(err_mate_stalemate
+        .message
+        .contains("'mate' and 'stalemate' are mutually exclusive"));
+
+    // 9. King adjacency: Kd4 and kd5 (adjacent kings)
+    let err_adjacent_kings = QueryParser::parse_str("Kd4 and kd5").unwrap_err();
+    assert!(err_adjacent_kings.message.contains("adjacent"));
+
+    let err_adjacent_kings_diag = QueryParser::parse_str("Kd4 and ke5").unwrap_err();
+    assert!(err_adjacent_kings_diag.message.contains("adjacent"));
+
+    let err_adjacent_kings_rank = QueryParser::parse_str("Kd4 and ke4").unwrap_err();
+    assert!(err_adjacent_kings_rank.message.contains("adjacent"));
+
+    // Legal separated kings must parse cleanly
+    let ok_kings_separated = QueryParser::parse_str("Kd4 and kd6");
+    assert!(ok_kings_separated.is_ok());
+
+    let ok_kings_far = QueryParser::parse_str("Ke1 and ke8");
+    assert!(ok_kings_far.is_ok());
+
+    // 10. Conflicting piece placements on same square
+    let err_same_square = QueryParser::parse_str("Kd4 and Qd4").unwrap_err();
+    assert!(err_same_square
+        .message
+        .contains("Contradictory piece placement on square d4"));
+
+    // 11. Pawns on impossible ranks (rank 1 or 8)
+    let err_pawn_rank_1 = QueryParser::parse_str("Pd1").unwrap_err();
+    assert!(err_pawn_rank_1
+        .message
+        .contains("White pawn cannot exist on rank 1"));
+
+    let err_pawn_rank_8 = QueryParser::parse_str("pe8").unwrap_err();
+    assert!(err_pawn_rank_8
+        .message
+        .contains("Black pawn cannot exist on rank 8"));
+
+    let ok_pawn_rank_2 = QueryParser::parse_str("Pd2 and pe7");
+    assert!(ok_pawn_rank_2.is_ok());
+
+    // 12. Direct-check turn contradiction: Qd4 and kd5 and wtm (impossible) vs btm (valid)
+    let err_direct_check_wtm = QueryParser::parse_str("Qd4 and kd5 and wtm").unwrap_err();
+    assert!(err_direct_check_wtm
+        .message
+        .contains("directly attacked by White Queen on d4, but turn is 'wtm"));
+
+    let ok_direct_check_btm = QueryParser::parse_str("Qd4 and kd5 and btm");
+    assert!(
+        ok_direct_check_btm.is_ok(),
+        "Qd4 and kd5 with btm is a valid check position"
+    );
+
+    // 13. Direct check with 'not check' assertion contradiction
+    let err_direct_check_not_check =
+        QueryParser::parse_str("Qd4 and kd5 and btm and not check").unwrap_err();
+    assert!(err_direct_check_not_check
+        .message
+        .contains("in direct check from White Queen on d4, but 'not check' was asserted"));
+
+    // 14. Knight unblockable direct check on attacker turn
+    let err_knight_check_wtm = QueryParser::parse_str("Nc3 and kd5 and wtm").unwrap_err();
+    assert!(err_knight_check_wtm
+        .message
+        .contains("directly attacked by White Knight on c3, but turn is 'wtm"));
+
+    // 15. Pawn direct check on attacker turn
+    let err_pawn_check_wtm = QueryParser::parse_str("Pe4 and kd5 and wtm").unwrap_err();
+    assert!(err_pawn_check_wtm
+        .message
+        .contains("directly attacked by White Pawn on e4, but turn is 'wtm"));
+
+    // 16. Black attacking White king with btm
+    let err_black_queen_check_btm = QueryParser::parse_str("qd4 and Kd5 and btm").unwrap_err();
+    assert!(err_black_queen_check_btm
+        .message
+        .contains("directly attacked by Black Queen on d4, but turn is 'btm"));
+
+    // 17. Multiple Kings of the same color
+    let err_multiple_white_kings = QueryParser::parse_str("Ke1 and Ke8").unwrap_err();
+    assert!(err_multiple_white_kings
+        .message
+        .contains("multiple White Kings"));
+
+    // 18. Impossible King count (K == 0 or K > 1)
+    let err_king_count_0 = QueryParser::parse_str("K == 0").unwrap_err();
+    assert!(err_king_count_0.message.contains("King count cannot be 0"));
+
+    let err_king_count_2 = QueryParser::parse_str("K == 2").unwrap_err();
+    assert!(err_king_count_2.message.contains("King count cannot be 2"));
+
+    // 19. Impossible Queen count (Q > 9)
+    let err_queen_count_10 = QueryParser::parse_str("Q == 10").unwrap_err();
+    assert!(err_queen_count_10
+        .message
+        .contains("Queen count cannot be 10"));
+
+    // 20. Impossible Pawn count (P > 8)
+    let err_pawn_count_9 = QueryParser::parse_str("P == 9").unwrap_err();
+    assert!(err_pawn_count_9.message.contains("Pawn count cannot be 9"));
+
+    // 21. Impossible Rook count (R > 10)
+    let err_rook_count_11 = QueryParser::parse_str("R >= 11").unwrap_err();
+    assert!(err_rook_count_11
+        .message
+        .contains("Rook count cannot be 11"));
+
+    // 22. Promotion + Pawn cumulative overflow: 9 Queens + 1 Pawn = 9 pawns needed (impossible)
+    let err_promo_pawn_overflow = QueryParser::parse_str("Q == 9 and P == 1").unwrap_err();
+    assert!(err_promo_pawn_overflow
+        .message
+        .contains("requires 8 promoted pieces but also has 1 unpromoted pawns"));
+
+    let err_total_pieces_overflow = QueryParser::parse_str("Q == 9 and P == 8").unwrap_err();
+    assert!(err_total_pieces_overflow
+        .message
+        .contains("total pieces (maximum is 16)"));
+
+    // 23. Valid promotion configuration: 9 Queens and 0 Pawns
+    let ok_promo_9_queens = QueryParser::parse_str("Q == 9 and P == 0");
+    assert!(
+        ok_promo_9_queens.is_ok(),
+        "9 Queens with 0 Pawns is a valid theoretical promotion maximum"
+    );
+
+    // 24. Castling rights vs King/Rook placement
+    let err_castling_king_moved =
+        QueryParser::parse_str("castling(white, kingside) and Kd4").unwrap_err();
+    assert!(err_castling_king_moved
+        .message
+        .contains("White castling rights require White King on e1"));
+
+    let err_castling_rook_missing =
+        QueryParser::parse_str("castling(white, kingside) and Bh1").unwrap_err();
+    assert!(err_castling_rook_missing
+        .message
+        .contains("White kingside castling requires a White Rook on h1"));
+
+    // 25. Castling move while in check
+    let err_castle_out_of_check = QueryParser::parse_str("check and move O-O").unwrap_err();
+    assert!(err_castle_out_of_check
+        .message
+        .contains("castling is illegal while the King is currently in check"));
+
+    // 26. Ply vs Turn arithmetic contradiction
+    let err_ply_turn_contradiction = QueryParser::parse_str("wtm and ply == 10").unwrap_err();
+    assert!(err_ply_turn_contradiction
+        .message
+        .contains("ply 10 is Black to move (even ply), but 'wtm' was asserted"));
+
+    // 27. Move number vs Ply arithmetic contradiction
+    let err_move_ply_contradiction =
+        QueryParser::parse_str("move_number == 5 and ply == 12").unwrap_err();
+    assert!(err_move_ply_contradiction
+        .message
+        .contains("Move 5 corresponds to ply 9 (wtm) or ply 10 (btm), but ply was asserted as 12"));
+
+    let ok_move_ply_match = QueryParser::parse_str("wtm and move_number == 5 and ply == 9");
+    assert!(ok_move_ply_match.is_ok());
+
+    // 28. Bishop color distribution promotion overflow
+    let err_light_bishops_promo =
+        QueryParser::parse_str("white_light_bishops == 2 and P == 8").unwrap_err();
+    assert!(err_light_bishops_promo
+        .message
+        .contains("requires 1 promoted pieces but also has 8 unpromoted pawns"));
+
+    // 29. Triple Check impossibility
+    let err_triple_check = QueryParser::parse_str("Ke1 and qe2 and qd1 and qf1").unwrap_err();
+    assert!(err_triple_check
+        .message
+        .contains("Triple check is impossible"));
+}
+
+#[test]
+fn test_cqli_direction_spatial_shifts_and_rotations() {
+    use crate::search::squares::SquareSetEvaluator;
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. Test parsing of CQL / CQLi spatial shift expressions
+    let q1 = QueryParser::parse_str("northwest 2 Q & up 1 k & R").unwrap();
+    let q2 = QueryParser::parse_str("right 1 k & _").unwrap();
+    assert!(matches!(q1, SearchQuery::SquareSet(_)));
+    assert!(matches!(q2, SearchQuery::SquareSet(_)));
+
+    // 2. Test full CQLi query: mate + flipcolor rotate90 { northwest 2 Q & up 1 k & R \n right 1 k & _ }
+    let cql_query = r#"
+        mate
+        flipcolor rotate90 {
+            northwest 2 Q & up 1 k & R
+            right 1 k & _
+        }
+    "#;
+    let parsed_cql = QueryParser::parse_str(cql_query).unwrap();
+    assert!(matches!(parsed_cql, SearchQuery::And(_)));
+
+    // 3. Test Evaluation on a concrete position:
+    // White Queen on g6, White Rook on e8, Black King on e7, White Pawn on c6, f7 empty
+    let fen_str = "4R3/4k3/2P3Q1/8/8/8/8/K7 b - - 0 1";
+    let fen: Fen = fen_str.parse().unwrap();
+    let pos: Chess = fen.into_position(CastlingMode::Chess960).unwrap();
+
+    // Check individual shift evaluations
+    let eval1 = SquareSetEvaluator::eval_expr(
+        &SquareSetExpr::Intersection(
+            Box::new(SquareSetExpr::Shift {
+                direction: Direction::NorthWest,
+                min_dist: 2,
+                max_dist: 2,
+                expr: Box::new(SquareSetExpr::Piece(SquareContent::Piece(
+                    shakmaty::Piece {
+                        color: Color::White,
+                        role: shakmaty::Role::Queen,
+                    },
+                ))),
+            }),
+            Box::new(SquareSetExpr::Intersection(
+                Box::new(SquareSetExpr::Shift {
+                    direction: Direction::Up,
+                    min_dist: 1,
+                    max_dist: 1,
+                    expr: Box::new(SquareSetExpr::Piece(SquareContent::Piece(
+                        shakmaty::Piece {
+                            color: Color::Black,
+                            role: shakmaty::Role::King,
+                        },
+                    ))),
+                }),
+                Box::new(SquareSetExpr::Piece(SquareContent::Piece(
+                    shakmaty::Piece {
+                        color: Color::White,
+                        role: shakmaty::Role::Rook,
+                    },
+                ))),
+            )),
+        ),
+        &pos,
+        &std::collections::HashMap::new(),
+    );
+    assert!(!eval1.is_empty(), "Square e8 must match the intersection");
+
+    // Match full CQL query using matches_single_ply
+    let is_matched = crate::search::evaluator::matches_single_ply(&parsed_cql, &pos, 0, None);
+    assert!(is_matched, "The CQLi query must match the mating geometry!");
+}
+
+#[test]
+fn test_move_capture_parameter_logic() {
+    use crate::search::evaluator::GameSearchEvaluator;
+    use crate::search::query::*;
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. Test parsing of various capture parameter syntaxes
+    let q1 = QueryParser::parse_str("move from R to d5 capture p").unwrap();
+    if let SearchQuery::Move(ref pat) = q1 {
+        assert_eq!(pat.is_capture, Some(true));
+        assert!(pat.captured_pieces.is_some());
+        assert_eq!(
+            pat.captured_pieces.as_ref().unwrap(),
+            &vec![SquareContent::Piece(shakmaty::Piece {
+                color: Color::Black,
+                role: shakmaty::Role::Pawn,
+            })]
+        );
+    } else {
+        panic!("Expected Move query");
+    }
+
+    let q2 = QueryParser::parse_str("legal capture Q count >= 1").unwrap();
+    if let SearchQuery::Move(ref pat) = q2 {
+        assert!(pat.is_legal);
+        assert_eq!(pat.is_capture, Some(true));
+        assert_eq!(
+            pat.captured_pieces.as_ref().unwrap(),
+            &vec![SquareContent::Piece(shakmaty::Piece {
+                color: Color::White,
+                role: shakmaty::Role::Queen,
+            })]
+        );
+        assert_eq!(
+            pat.count_predicate,
+            Some((ComparisonOp::GreaterThanOrEqual, 1))
+        );
+    } else {
+        panic!("Expected Move query");
+    }
+
+    let q3 = QueryParser::parse_str("move capture [n, b]").unwrap();
+    if let SearchQuery::Move(ref pat) = q3 {
+        assert_eq!(pat.is_capture, Some(true));
+        let caps = pat.captured_pieces.as_ref().unwrap();
+        assert_eq!(caps.len(), 2);
+    } else {
+        panic!("Expected Move query");
+    }
+
+    // 2. Test evaluation against concrete PGN game (Opera Game)
+    // In Morphy's Opera Game:
+    // Move 4: dxe5 (White pawn captures Black pawn)
+    // Move 4... Bxf3 (Black bishop captures White knight)
+    // Move 5: Qxf3 (White queen captures Black bishop)
+    // Move 10: Nxb5 (White knight captures Black pawn)
+    // Move 13: Rxd7 (White rook captures Black knight on d7)
+    // Move 15: Bxd7+ (White bishop captures Black knight on d7)
+    // Move 16: Qb8+ Nxb8 (Black knight captures White Queen)
+    // Move 17: Rd8#
+
+    // Morphy's Queen was captured by Black Knight on b8
+    let q_cap_queen = QueryParser::parse_str("move capture Q").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_cap_queen, OPERA_GAME).is_match);
+
+    let q_black_cap_queen = QueryParser::parse_str("move black capture Q").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_black_cap_queen, OPERA_GAME).is_match);
+
+    let q_white_cap_queen = QueryParser::parse_str("move white capture q").unwrap();
+    // In Opera Game, Black Queen was never captured!
+    assert!(!GameSearchEvaluator::evaluate_pgn(&q_white_cap_queen, OPERA_GAME).is_match);
+
+    // Morphy captured Black Bishop with Queen: `move from Q capture b`
+    let q_queen_cap_bishop = QueryParser::parse_str("move from Q capture b").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_queen_cap_bishop, OPERA_GAME).is_match);
+
+    // 3. Test en passant capture matching
+    let ep_pgn = r#"[Event "EP Test"]
+[Site "?"]
+[Date "2024.01.01"]
+[Round "?"]
+[White "P1"]
+[Black "P2"]
+[Result "*"]
+
+1. e4 Nf6 2. e5 d5 3. exd6 *
+"#;
+    let q_ep_cap_p = QueryParser::parse_str("move en_passant capture p").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_ep_cap_p, ep_pgn).is_match);
+
+    let q_ep_cap_r = QueryParser::parse_str("move en_passant capture r").unwrap();
+    assert!(!GameSearchEvaluator::evaluate_pgn(&q_ep_cap_r, ep_pgn).is_match);
+
+    // 4. Test legal move capture counts in a static position
+    // White: Queen on d1, Rook on d4, King on e1. Black: Pawn on d5, Knight on e4, King on e6.
+    let pos_fen = "8/8/4k3/3p4/3Rn3/8/8/3QK3 w - - 0 1";
+    let fen: Fen = pos_fen.parse().unwrap();
+    let pos: Chess = fen.into_position(CastlingMode::Chess960).unwrap();
+
+    let q_legal_cap_p = QueryParser::parse_str("legal capture p count == 1").unwrap(); // Rxd5
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_legal_cap_p,
+        &pos,
+        0,
+        None
+    ));
+
+    let q_legal_cap_n = QueryParser::parse_str("legal capture n count == 1").unwrap(); // Rxe4
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_legal_cap_n,
+        &pos,
+        0,
+        None
+    ));
+
+    let q_legal_cap_b = QueryParser::parse_str("legal capture b count == 0").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_legal_cap_b,
+        &pos,
+        0,
+        None
+    ));
+
+    // 5. Test flipcolor transformation with capture parameter
+    let q_flip = QueryParser::parse_str("flipcolor { move capture p }").unwrap();
+    // Under flipcolor, `capture p` (black pawn) becomes `capture P` (white pawn)
+    // In Kasparov - Topalov, Kasparov's white pawns were captured by Black
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_flip, KASPAROV_TOPALOV).is_match);
+
+    // 6. Test explain / round-trip
+    let dsl_str = q1.to_dsl();
+    assert!(dsl_str.contains("capture p"));
+}
+
+#[test]
+fn test_bracket_set_comparisons() {
+    use crate::search::query::*;
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. Test parsing set-to-set comparisons
+    let q1 = QueryParser::parse_str("[Aa] == [KkPp]").unwrap();
+    assert!(matches!(
+        q1,
+        SearchQuery::SquareSet(SetPredicate::SetComparison {
+            op: ComparisonOp::Equal,
+            ..
+        })
+    ));
+
+    let q2 = QueryParser::parse_str("[Aa] == []").unwrap();
+    assert!(matches!(
+        q2,
+        SearchQuery::SquareSet(SetPredicate::SetComparison {
+            op: ComparisonOp::Equal,
+            ..
+        })
+    ));
+
+    let q3 = QueryParser::parse_str("[Qq] > [Rr]").unwrap();
+    assert!(matches!(
+        q3,
+        SearchQuery::SquareSet(SetPredicate::SetComparison {
+            op: ComparisonOp::GreaterThan,
+            ..
+        })
+    ));
+
+    let q4 = QueryParser::parse_str("[Aa] != [KkPp]").unwrap();
+    assert!(matches!(
+        q4,
+        SearchQuery::SquareSet(SetPredicate::SetComparison {
+            op: ComparisonOp::NotEqual,
+            ..
+        })
+    ));
+
+    // 2. Evaluate on pure King & Pawn endgame: White K on e2, P on e4; Black K on e7, P on d5
+    let kp_fen = "8/4k3/8/3p4/4P3/8/4K3/8 w - - 0 1";
+    let fen: Fen = kp_fen.parse().unwrap();
+    let pos_kp: Chess = fen.into_position(CastlingMode::Chess960).unwrap();
+
+    // All pieces on board are Kings and Pawns
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q1, &pos_kp, 0, None
+    ));
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q4, &pos_kp, 0, None
+    ));
+
+    // No queens on board -> [Qq] == []
+    let q_no_queens = QueryParser::parse_str("[Qq] == []").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_no_queens,
+        &pos_kp,
+        0,
+        None
+    ));
+
+    // Board is not empty -> [Aa] == [] is false
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q2, &pos_kp, 0, None
+    ));
+
+    // 2 Kings == 2 Pawns -> [Kk] == [Pp]
+    let q_kings_eq_pawns = QueryParser::parse_str("[Kk] == [Pp]").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_kings_eq_pawns,
+        &pos_kp,
+        0,
+        None
+    ));
+
+    // 3. Evaluate on position with an added Knight on g4
+    let kpn_fen = "8/4k3/8/3p4/4P1N1/8/4K3/8 w - - 0 1";
+    let fen_kpn: Fen = kpn_fen.parse().unwrap();
+    let pos_kpn: Chess = fen_kpn.into_position(CastlingMode::Chess960).unwrap();
+
+    // Not a pure pawn endgame anymore
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q1, &pos_kpn, 0, None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q4, &pos_kpn, 0, None
+    ));
+
+    // More total pieces than kings & pawns -> [Aa] > [KkPp]
+    let q_more_pieces = QueryParser::parse_str("[Aa] > [KkPp]").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_more_pieces,
+        &pos_kpn,
+        0,
+        None
+    ));
+
+    // More knights than bishops -> [Nn] > [Bb]
+    let q_knights_gt_bishops = QueryParser::parse_str("[Nn] > [Bb]").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_knights_gt_bishops,
+        &pos_kpn,
+        0,
+        None
+    ));
+}
+
+#[test]
+fn test_parent_and_child_scoping() {
+    let pgn = r#"[Event "Fool's Mate"]
+[Site "?"]
+[Date "2024.01.01"]
+[Round "1"]
+[White "Player1"]
+[Black "Player2"]
+[Result "0-1"]
+
+1. f3 e5 2. g4 Qh4# 0-1
+"#;
+    // Plies in game:
+    // ply 0: start pos
+    // ply 1: 1. f3
+    // ply 2: 1... e5
+    // ply 3: 2. g4
+    // ply 4: 2... Qh4# (mate)
+
+    // Test 1: Checkmate position (ply 4) has parent with check == false and child == nothing
+    let q_mate_parent_not_check = QueryParser::parse_str("mate and parent { not check }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_mate_parent_not_check, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![4]);
+
+    // Test 2: Position before mate (ply 3: 2. g4) has child { mate }
+    let q_child_mate = QueryParser::parse_str("child { mate }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_child_mate, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![3]);
+
+    // Test 3: Grandchild mate from ply 2: child { child { mate } }
+    let q_grandchild_mate = QueryParser::parse_str("child { child { mate } }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_grandchild_mate, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![2]);
+
+    // Test 4: Nested parent at ply 4: parent { parent { wtm } }
+    // At ply 4 (btm after Qh4#), ply 3 was btm, ply 2 was wtm.
+    let q_parent_parent_wtm = QueryParser::parse_str("mate and parent { parent { wtm } }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_parent_parent_wtm, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![4]);
+
+    // Test 5: Child and parent combined
+    let q_child_and_parent = QueryParser::parse_str("parent { wtm } and child { mate }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_child_and_parent, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![3]);
+
+    // Test 6: Boundary conditions - ply 1 (1. f3) has parent at ply 0 (start pos, wtm)
+    let q_ply1_parent = QueryParser::parse_str("ply == 1 and parent { wtm }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_ply1_parent, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![1]);
+
+    // But ply 1 parent { parent { wtm } } does not exist because parent of parent of ply 1 is before start pos
+    let q_ply1_parent_parent =
+        QueryParser::parse_str("ply == 1 and parent { parent { wtm } }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_ply1_parent_parent, pgn);
+    assert!(!res.is_match);
+
+    // Final pos (ply 4) has no child
+    let q_end_child = QueryParser::parse_str("ply == 4 and child { btm }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_end_child, pgn);
+    assert!(!res.is_match);
+
+    // Test 7: ToDsl roundtrip
+    assert_eq!(
+        explain::ToDsl::to_dsl(&q_mate_parent_not_check),
+        "checkmate and parent { not check }"
+    );
+    assert_eq!(explain::ToDsl::to_dsl(&q_child_mate), "child { checkmate }");
+}
+
+#[test]
+fn test_play_and_leads_to_hypothetical_moves() {
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // Classic underpromotion study:
+    // White: King on g6, Pawn on h7, Pawn on f7.
+    // Black: King on h8.
+    // FEN: "7k/5P1P/6K1/8/8/8/8/8 w - - 0 1"
+    // White to move:
+    // - 1. f8=Q# -> Checkmate!
+    // - 1. f8=R# -> Checkmate!
+    // - 1. f8=B -> Stalemate!
+    // - 1. f8=N -> Stalemate!
+    let fen_str = "7k/5P1P/6K1/8/8/8/8/8 w - - 0 1";
+    let fen: Fen = fen_str.parse().unwrap();
+    let pos: Chess = fen.into_position(CastlingMode::Standard).unwrap();
+
+    // 1. Check stalemate on B promotion using `leads_to`
+    let q_b_stalemate = QueryParser::parse_str("legal promote B leads_to { stalemate }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_b_stalemate,
+        &pos,
+        0,
+        None
+    ));
+
+    // 2. Check stalemate on B promotion using `play`
+    let q_b_play_stalemate = QueryParser::parse_str("play promote B { stalemate }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_b_play_stalemate,
+        &pos,
+        0,
+        None
+    ));
+
+    // 3. Queen promotion does NOT lead to stalemate
+    let q_q_stalemate = QueryParser::parse_str("legal promote Q leads_to { stalemate }").unwrap();
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_q_stalemate,
+        &pos,
+        0,
+        None
+    ));
+
+    // 4. Queen promotion leads to mate
+    let q_q_mate = QueryParser::parse_str("play legal promote Q { mate }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_q_mate, &pos, 0, None
+    ));
+
+    // 5. Bishop promotion does NOT lead to mate
+    let q_b_mate = QueryParser::parse_str("play legal promote B { mate }").unwrap();
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_b_mate, &pos, 0, None
+    ));
+
+    // 6. Both conditions combined:
+    let q_combined = QueryParser::parse_str(
+        "legal promote B leads_to { stalemate } and legal promote Q leads_to { mate }",
+    )
+    .unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_combined,
+        &pos,
+        0,
+        None
+    ));
+
+    // 7. Test in full game timeline (Fool's mate):
+    // Position at ply 3 (2. g4) has legal Qh4 leading to mate:
+    let pgn = r#"[Event "Fool's Mate"]
+[Site "?"]
+[Date "2024.01.01"]
+[Round "1"]
+[White "Player1"]
+[Black "Player2"]
+[Result "0-1"]
+
+1. f3 e5 2. g4 Qh4# 0-1
+"#;
+    // At ply 3 (after 2. g4), Black has a legal move `Qh4` (or any legal move) that leads to checkmate:
+    let q_play_mate = QueryParser::parse_str("play legal { mate }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_play_mate, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![3]);
+
+    // Count exactly 1 legal move leading to mate at ply 3:
+    let q_unique_mate = QueryParser::parse_str("legal count == 1 leads_to { mate }").unwrap();
+    let res = GameSearchEvaluator::evaluate_pgn(&q_unique_mate, pgn);
+    assert!(res.is_match);
+    assert_eq!(res.matching_plies, vec![3]);
 }

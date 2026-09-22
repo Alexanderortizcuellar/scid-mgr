@@ -173,7 +173,7 @@ pub fn parse_square_or_piece(s: &str) -> Option<SquareOrPiece> {
         return Some(SquareOrPiece::Variable(s.to_string()));
     }
     let lower = s.to_lowercase();
-    if lower == "empty" || lower == "_" {
+    if lower == "empty" || lower == "_" || lower == "." {
         return Some(SquareOrPiece::Empty);
     }
     if let Ok(sq) = Square::from_str(&lower) {
@@ -459,6 +459,28 @@ pub fn parse_source_part(lhs: &str, pat: &mut crate::search::query::MovePattern)
     }
 }
 
+/// Parse direction identifier (strictly full words: "up", "down", "left", "right", "northeast", "northwest", "southeast", "southwest", "diagonal", "orthogonal", "vertical", "horizontal", "anydirection")
+pub fn parse_direction_ident(id: &str) -> Option<crate::search::query::Direction> {
+    use crate::search::query::Direction;
+    let lower = id.to_lowercase();
+    match lower.as_str() {
+        "up" | "north" => Some(Direction::Up),
+        "down" | "south" => Some(Direction::Down),
+        "left" | "west" => Some(Direction::Left),
+        "right" | "east" => Some(Direction::Right),
+        "northeast" => Some(Direction::NorthEast),
+        "northwest" => Some(Direction::NorthWest),
+        "southeast" => Some(Direction::SouthEast),
+        "southwest" => Some(Direction::SouthWest),
+        "diagonal" => Some(Direction::Diagonal),
+        "orthogonal" => Some(Direction::Orthogonal),
+        "vertical" => Some(Direction::Vertical),
+        "horizontal" => Some(Direction::Horizontal),
+        "anydirection" | "any_direction" => Some(Direction::AnyDirection),
+        _ => None,
+    }
+}
+
 /// Parse target destination square / piece / set into a MovePattern
 pub fn parse_target_part(rhs: &str, pat: &mut crate::search::query::MovePattern) {
     use crate::search::query::SquareContent;
@@ -514,12 +536,32 @@ pub fn parse_target_part(rhs: &str, pat: &mut crate::search::query::MovePattern)
         }
     }
 
-    // 3-character piece + square (e.g. "ph7", "Ph7", "qd8", "rd5")
+    // 3-character piece + square (e.g. "ph7", "Ph7", "qd8", "rd5", "ne5")
     if clean.len() == 3 {
         let (p_str, sq_str) = clean.split_at(1);
         if let Ok(sq) = Square::from_str(&sq_str.to_lowercase()) {
-            pat.to = Some(sq);
             if let Some((t_color, t_role)) = parse_piece_specifier(p_str) {
+                pat.to = Some(sq);
+                let content = match (t_color, t_role) {
+                    (Some(c), Some(r)) => {
+                        SquareContent::Piece(shakmaty::Piece { color: c, role: r })
+                    }
+                    (Some(c), None) => SquareContent::Color(c),
+                    (None, Some(r)) => SquareContent::Role(r),
+                    (None, None) => SquareContent::Occupied,
+                };
+                pat.to_pieces = Some(vec![content]);
+                return;
+            }
+        }
+    }
+
+    // 4-character piece + square (e.g. "wph7", "bpe4")
+    if clean.len() == 4 {
+        let (p_str, sq_str) = clean.split_at(2);
+        if let Ok(sq) = Square::from_str(&sq_str.to_lowercase()) {
+            if let Some((t_color, t_role)) = parse_piece_specifier(p_str) {
+                pat.to = Some(sq);
                 let content = match (t_color, t_role) {
                     (Some(c), Some(r)) => {
                         SquareContent::Piece(shakmaty::Piece { color: c, role: r })
@@ -543,6 +585,35 @@ pub fn parse_target_part(rhs: &str, pat: &mut crate::search::query::MovePattern)
             (None, None) => SquareContent::Occupied,
         };
         pat.to_pieces = Some(vec![content]);
+        return;
+    }
+
+    // Directional move targets (e.g. "up", "up 1", "up1", "right", "right 1", "diagonal", "orthogonal", "down 1")
+    let (dir_word, dist_part) = if let Some(space_idx) = clean.find(' ') {
+        (&clean[..space_idx], clean[space_idx + 1..].trim())
+    } else {
+        let split_pos = clean
+            .find(|c: char| c.is_ascii_digit())
+            .unwrap_or(clean.len());
+        (&clean[..split_pos], clean[split_pos..].trim())
+    };
+
+    if let Some(dir) = parse_direction_ident(dir_word) {
+        let (min_dist, max_dist) = if dist_part.is_empty() {
+            (1, None)
+        } else if let Some((p1, p2)) = dist_part
+            .split_once("..")
+            .or_else(|| dist_part.split_once(' '))
+        {
+            let d1 = p1.trim().parse::<usize>().unwrap_or(1);
+            let d2 = p2.trim().parse::<usize>().unwrap_or(7);
+            (d1, Some(d2))
+        } else if let Ok(d) = dist_part.parse::<usize>() {
+            (d, Some(d))
+        } else {
+            (1, None)
+        };
+        pat.direction = Some((dir, min_dist, max_dist));
         return;
     }
 
@@ -583,9 +654,9 @@ fn parse_quiet_move(clean: &str, pat: &mut crate::search::query::MovePattern) {
 
 /// Parse a single move pattern token inside a path/line expression
 /// Supports:
-/// - Standard SAN: "e4", "Nf3", "Bxh7+", "O-O", "O-O-O", "exd5"
+/// - Standard SAN: "e4", "Nf3", "Bxh7+", "O-O", "O-O-O", "exd5", "Nbd7", "Rad1"
 /// - Move separator `--`: "Nf3--g5", "h4--h5", "Ph6--h7", "P--h7", "b--g4", "N--[e4,d5]"
-/// - Captures `x` / `[x]`: "Pe7xd8", "P[x]d8", "P[x]a", "Bc2xh7", "Bxh7", "bxh7", "Bxph7", "Pxr", "pxN"
+/// - Captures `x` / `[x]`: "Pe7xd8", "P[x]d8", "P[x]a", "Bc2xh7", "Bxh7", "bxh7", "Bxph7", "Pxr", "pxN", "Nxb8"
 /// - Wildcards: "--" or "*" (any move), "A--" / "w--" (any white move), "a--" / "b--" (any black move)
 /// - Piece Wildcards: "R--" (white rook moves anywhere), "r--" (black rook moves anywhere), "P--", "p--"
 /// - Promotion Wildcards & Targets: "A--=Q", "P--=Q", "Pe7xd8=Q", "P[x]d8=Q", "P[x]a=Q", "Pxr=Q", "--=R", "--=\"RBN\""
@@ -593,119 +664,176 @@ pub fn parse_path_move_token(s: &str) -> Option<crate::search::query::MovePatter
     use crate::search::query::{MovePattern, SquareContent};
     use shakmaty::Role;
 
+    let has_check = s.trim().ends_with('+');
+    let has_mate = s.trim().ends_with('#');
+
     let clean = s.trim().trim_end_matches(['+', '#', '!', '?']);
     if clean.is_empty() {
         return None;
     }
 
-    // 1. Check for Castling moves
-    if clean.eq_ignore_ascii_case("o-o") {
-        return Some(MovePattern {
+    let mut pat = if clean.eq_ignore_ascii_case("o-o") {
+        MovePattern {
             san: Some("O-O".to_string()),
             role: Some(Role::King),
+            is_castle: Some(true),
             ..Default::default()
-        });
-    }
-    if clean.eq_ignore_ascii_case("o-o-o") {
-        return Some(MovePattern {
+        }
+    } else if clean.eq_ignore_ascii_case("o-o-o") {
+        MovePattern {
             san: Some("O-O-O".to_string()),
             role: Some(Role::King),
+            is_castle: Some(true),
             ..Default::default()
-        });
-    }
-
-    // 2. Pure Wildcard: "--", "*", or "_" (any move / any piece moves)
-    if clean == "--" || clean == "*" || clean == "_" {
-        return Some(MovePattern::default());
-    }
-
-    // 3. Promotions (with or without capture, source square, or wildcard)
-    if let Some((move_body, promo_part)) = clean.split_once('=') {
-        let mut pat = MovePattern::default();
-        parse_promotion_into_pattern(&mut pat, promo_part);
+        }
+    } else if clean == "--" || clean == "*" || clean == "_" {
+        MovePattern::default()
+    } else if let Some((move_body, promo_part)) = clean.split_once('=') {
+        let mut p = MovePattern::default();
+        parse_promotion_into_pattern(&mut p, promo_part);
 
         let body = move_body.trim();
         if body.is_empty() || body == "--" || body == "*" || body == "_" {
             // Any promotion to promo_part
         } else if body.to_lowercase().contains("[x]") || body.contains('x') || body.contains('X') {
-            parse_capture_move(body, &mut pat);
+            parse_capture_move(body, &mut p);
         } else if body.contains("--") || body.contains("->") {
-            parse_quiet_move(body, &mut pat);
+            parse_quiet_move(body, &mut p);
         } else if body == "A"
             || body.eq_ignore_ascii_case("w")
             || body.eq_ignore_ascii_case("white")
         {
-            pat.color = Some(Color::White);
+            p.color = Some(Color::White);
         } else if body == "a" || body.eq_ignore_ascii_case("black") {
-            pat.color = Some(Color::Black);
+            p.color = Some(Color::Black);
         } else {
-            parse_source_part(body, &mut pat);
+            parse_source_part(body, &mut p);
         }
 
-        pat.role = pat.role.or(Some(Role::Pawn));
-        return Some(pat);
-    }
-
-    // 4. Capture formats: e.g. "Pe7xd8", "P[x]d8", "P[x]a", "Bc2xh7", "Bxh7", "bxh7", "Bxph7", "Pxr", "pxN", "exd5"
-    if clean.to_lowercase().contains("[x]") || clean.contains('x') || clean.contains('X') {
-        let mut pat = MovePattern::default();
-        parse_capture_move(clean, &mut pat);
-        return Some(pat);
-    }
-
-    // 5. Move Separator `--` or `->` notation: "Ph6--h7", "P--h7", "Nf3--g5", "h4--h5", "b--g4", "N--[e4,d5]"
-    if clean.contains("--") || clean.contains("->") {
-        let mut pat = MovePattern::default();
-        parse_quiet_move(clean, &mut pat);
-        return Some(pat);
-    }
-
-    // 6. Bare 2-character square: "h7", "e4", "d5" -> any pawn move to this square
-    if clean.len() == 2 {
+        p.role = p.role.or(Some(Role::Pawn));
+        p
+    } else if clean.to_lowercase().contains("[x]") || clean.contains('x') || clean.contains('X') {
+        let mut p = MovePattern::default();
+        parse_capture_move(clean, &mut p);
+        p
+    } else if clean.contains("--") || clean.contains("->") {
+        let mut p = MovePattern::default();
+        parse_quiet_move(clean, &mut p);
+        p
+    } else if clean.len() == 2 {
         if let Ok(sq) = Square::from_str(&clean.to_lowercase()) {
-            return Some(MovePattern {
+            MovePattern {
                 to: Some(sq),
                 role: Some(Role::Pawn),
                 ..Default::default()
-            });
+            }
+        } else {
+            let mut p = MovePattern::default();
+            parse_source_part(clean, &mut p);
+            p
         }
-    }
-
-    // 7. Bare 3-character piece + square: "Ph7", "ph7", "Nf3", "nf3", "Kd4", "kd4"
-    if clean.len() == 3 {
+    } else if clean.len() == 3 {
         let (p_str, sq_str) = clean.split_at(1);
         if let Ok(sq) = Square::from_str(&sq_str.to_lowercase()) {
             if let Some((color, role)) = parse_piece_specifier(p_str) {
-                let mut pat = MovePattern {
+                let mut p = MovePattern {
                     to: Some(sq),
                     color,
                     role,
                     ..Default::default()
                 };
                 if let (Some(c), Some(r)) = (color, role) {
-                    pat.from_pieces = Some(vec![SquareContent::Piece(shakmaty::Piece {
+                    p.from_pieces = Some(vec![SquareContent::Piece(shakmaty::Piece {
                         color: c,
                         role: r,
                     })]);
-                } else if let Some(c) = color {
-                    pat.from_pieces = Some(vec![SquareContent::Color(c)]);
                 }
-                return Some(pat);
+                p
+            } else {
+                let mut p = MovePattern::default();
+                parse_source_part(clean, &mut p);
+                p
+            }
+        } else {
+            let mut p = MovePattern::default();
+            parse_source_part(clean, &mut p);
+            p
+        }
+    } else if clean.len() == 4 {
+        // Check for SAN disambiguated move: e.g. "Nbd7", "Rad1", "N5f3", "R1e2"
+        let ch0 = clean.chars().next().unwrap();
+        let ch1 = clean.chars().nth(1).unwrap();
+        let sq_part = &clean[2..];
+        let (col, role) = match ch0 {
+            'K' => (None, Some(Role::King)),
+            'Q' => (None, Some(Role::Queen)),
+            'R' => (None, Some(Role::Rook)),
+            'B' => (None, Some(Role::Bishop)),
+            'N' => (None, Some(Role::Knight)),
+            'P' => (None, Some(Role::Pawn)),
+            'k' => (Some(Color::Black), Some(Role::King)),
+            'q' => (Some(Color::Black), Some(Role::Queen)),
+            'r' => (Some(Color::Black), Some(Role::Rook)),
+            'b' => (Some(Color::Black), Some(Role::Bishop)),
+            'n' => (Some(Color::Black), Some(Role::Knight)),
+            'p' => (Some(Color::Black), Some(Role::Pawn)),
+            _ => (None, None),
+        };
+
+        if let (Some(r), Ok(to_sq)) = (role, Square::from_str(&sq_part.to_lowercase())) {
+            let mut p = MovePattern {
+                to: Some(to_sq),
+                color: col,
+                role: Some(r),
+                ..Default::default()
+            };
+            if let Some(f_idx) = file_char_to_idx(ch1) {
+                let file = File::new(f_idx);
+                let sqs: Vec<Square> = (0..8)
+                    .map(|rk| Square::from_coords(file, Rank::new(rk)))
+                    .collect();
+                p.from_squares = Some(sqs);
+            } else if let Some(r_idx) = rank_char_to_idx(ch1) {
+                let rank = Rank::new(r_idx);
+                let sqs: Vec<Square> = (0..8)
+                    .map(|fl| Square::from_coords(File::new(fl), rank))
+                    .collect();
+                p.from_squares = Some(sqs);
+            }
+            p
+        } else {
+            let mut p = MovePattern::default();
+            parse_source_part(clean, &mut p);
+            if p != MovePattern::default() {
+                p
+            } else {
+                MovePattern {
+                    san: Some(clean.to_string()),
+                    ..Default::default()
+                }
             }
         }
+    } else {
+        let mut p = MovePattern::default();
+        parse_source_part(clean, &mut p);
+        if p != MovePattern::default() {
+            p
+        } else {
+            MovePattern {
+                san: Some(clean.to_string()),
+                ..Default::default()
+            }
+        }
+    };
+
+    if has_check {
+        pat.is_check = Some(true);
+    }
+    if has_mate {
+        pat.is_checkmate = Some(true);
     }
 
-    // 8. General fallback: try source part or standard SAN
-    let mut pat = MovePattern::default();
-    parse_source_part(clean, &mut pat);
-    if pat != MovePattern::default() {
-        return Some(pat);
-    }
-
-    Some(MovePattern {
-        san: Some(clean.to_string()),
-        ..Default::default()
-    })
+    Some(pat)
 }
 
 fn parse_promotion_into_pattern(pat: &mut crate::search::query::MovePattern, promo_str: &str) {

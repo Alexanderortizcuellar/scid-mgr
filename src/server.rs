@@ -2274,6 +2274,41 @@ fn handle_command(
             }
         }
 
+        "explain_dsl" | "explain_cql" | "explain_query" | "explain" => {
+            let query_str = req
+                .params
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::search::parser::QueryParser::parse_str(query_str) {
+                Ok(parsed_query) => {
+                    let explanation =
+                        crate::search::explain::explain_query(query_str, &parsed_query);
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(
+                            serde_json::to_value(&explanation).unwrap_or(serde_json::json!({})),
+                        ),
+                        error: None,
+                    }
+                }
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: Some(serde_json::json!({
+                        "valid": false,
+                        "position": e.position,
+                        "line": e.line,
+                        "column": e.column,
+                        "snippet": e.snippet,
+                        "help": e.help,
+                    })),
+                    error: Some(format!("{}", e)),
+                },
+            }
+        }
+
         "search" | "search_query" | "query_search" | "dsl_search" | "cql_search" => {
             let query_str = match req
                 .params

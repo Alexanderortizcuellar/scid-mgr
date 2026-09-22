@@ -11,10 +11,10 @@ Welcome to the **SCID-MGR Search Engine & Query Language Manual**.
 | Chapter | Topic | Description & Key Features |
 | :--- | :--- | :--- |
 | **[01. Header Filters](./01_HEADER_FILTERS.md)** | Metadata & PGN Tags | Player names, ratings, ECO codes, dates, results, custom tags, regex matching. |
-| **[02. Piece Identifiers & Placement](./02_PIECE_IDENTIFIERS_AND_PLACEMENTS.md)** | Pieces, Squares & Boards | Piece symbols (`P`, `p`, `A`, `a`), compact placements (`Kd4`), square sets (`[c3, d5]`), ranges (`a1..h8`), FEN wildcards. |
+| **[02. Piece Identifiers & Placement](./02_PIECE_IDENTIFIERS_AND_PLACEMENTS.md)** | Pieces, Squares & Sets | Piece symbols (`P`, `p`, `A`, `a`), compact placements (`Kd4`), square sets (`[c3, d5]`), ranges (`a1..h8`), square set algebra (`&`, `\|`, `\`, `~`), FEN wildcards. |
 | **[03. Move & Path Patterns](./03_MOVE_AND_PATH_PATTERNS.md)** | Moves, Captures & Lines | Move separator (`--`), captures (`x`, `[x]`), promotions (`Pe7xd8=Q`, `P--=Q`, `A--=Q`), path gaps (`...`, `--*`, `--{min,max}`). |
 | **[04. Pawn Structures](./04_PAWN_STRUCTURES.md)** | Bitboard Pawn Analyzer | Passed pawns, isolated pawns, doubled pawns, backward pawns, and pawn islands. |
-| **[05. Tactical & Geometric Motifs](./05_TACTICAL_AND_GEOMETRIC_MOTIFS.md)** | Tactics & Board Geometry | Absolute/relative pins, forks, skewers, trapped pieces, outposts, attack rays, and square distance. |
+| **[05. Tactical & Geometric Motifs](./05_TACTICAL_AND_GEOMETRIC_MOTIFS.md)** | Tactics & Board Geometry | Absolute/relative pins, forks, skewers, trapped pieces, outposts, attacks/attackers, directional rays, between, square comparisons. |
 | **[06. Material & Power Balance](./06_MATERIAL_AND_POWER.md)** | Material & Piece Power | Piece counts, material point difference, opposite-colored bishops, and total/color power balances. |
 | **[07. Transformations & Symmetries](./07_TRANSFORMATION_AND_SYMMETRY.md)** | Board Transformations | Color flipping (`flipcolor`), vertical/horizontal/diagonal reflections, 90°/180°/270° rotations, all-symmetries (`flip:all`), variable bindings (`$var`). |
 | **[08. Boolean Logic & Timeline Filters](./08_BOOLEAN_LOGIC_AND_TIMELINE.md)** | Compound Logic & Timeline | `and`, `or`, `not`, ply ranges (`ply in 10..30`), occurrence counts (`occurrences >= 2`), comments, and NAGs. |
@@ -29,10 +29,12 @@ Welcome to the **SCID-MGR Search Engine & Query Language Manual**.
 player "Kasparov" and white_elo >= 2700 and date >= "2000" and result "1-0"
 ```
 
-### 2. Piece Placement & FEN Wildcards
+### 2. Piece Placement & Square Set Algebra
 ```text
 Kd4 and qd8 and Pa5 and [Qq] == 0
-fen "*/*/*/*ppA*/*/*/*/*"
+(N | B) [b5, g5] >= 2
+(occupied \ [e4, d4]) >= 30
+~occupied >= 32
 ```
 
 ### 3. Move & Sequence (Path) Search
@@ -49,8 +51,9 @@ passed_pawns white >= 1 and isolated black >= 1 and doubled_pawns == 0
 opposite_bishops and material_diff == 0
 ```
 
-### 5. Tactical Motif & Transformation Search
+### 5. Tactical Motif & Spatial Dominance Search
 ```text
 pin(bishop, knight, king)
+attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8])
 flipcolor { white "Carlsen" and fork(knight, queen, rook) }
 ```

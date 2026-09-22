@@ -1,6 +1,90 @@
-use shakmaty::{Color, Piece, Role, Square};
+use shakmaty::{Bitboard, Color, Piece, Role, Square};
 use std::collections::HashMap;
 use std::ops::Range;
+
+/// Square Set expression evaluating to a 64-bit Bitboard on a given chess position
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SquareSetExpr {
+    /// Board pieces: `B` (white bishops), `n` (black knights), `occupied`, `empty`, `white_pieces`, `black_pieces`
+    Piece(SquareContent),
+
+    /// Explicit squares/ranges: `[c1, f1]`, `[a1..h8]`, `light`, `dark`, `a-h1`
+    Squares(Bitboard),
+
+    /// Bound variable reference: `$target`, `$attacker`
+    Variable(String),
+
+    /// Set Intersection (A ∩ B): `A & B` or juxtaposition `A B` (e.g. `B [c1, f1]`)
+    Intersection(Box<SquareSetExpr>, Box<SquareSetExpr>),
+
+    /// Set Union (A ∪ B): `A | B` or `[N, B]`
+    Union(Box<SquareSetExpr>, Box<SquareSetExpr>),
+
+    /// Set Difference (A \ B): `A \ B` or `A - B` (e.g. `occupied \ [d4, e5]`)
+    Difference(Box<SquareSetExpr>, Box<SquareSetExpr>),
+
+    /// Set Complement (~A): all 64 squares not in A
+    Complement(Box<SquareSetExpr>),
+
+    /// Geometric / Attack targets: `attacks(attacker_set, target_set)`
+    /// Returns the subset of target_set that is attacked by any piece in attacker_set
+    Attacks {
+        attacker: Box<SquareSetExpr>,
+        target: Box<SquareSetExpr>,
+    },
+
+    /// Attack origins: `attackers(attacker_set, target_set)`
+    /// Returns the subset of attacker_set that attacks any piece in target_set
+    Attackers {
+        attacker: Box<SquareSetExpr>,
+        target: Box<SquareSetExpr>,
+    },
+
+    /// Directional ray expansion: `ray(up, d4)`, `ray(diagonal, [e4, d5])`
+    Ray {
+        direction: Direction,
+        origin: Box<SquareSetExpr>,
+    },
+
+    /// Squares strictly between two sets of pieces/squares: `between(sq1, sq2)`
+    Between {
+        from: Box<SquareSetExpr>,
+        to: Box<SquareSetExpr>,
+    },
+
+    /// Directional spatial shift / translation: `northwest 2 Q`, `up 1 k`, `right 1..3 [d4, e5]`
+    /// Shifts each square in `expr` by min_dist..=max_dist in the specified direction.
+    Shift {
+        direction: Direction,
+        min_dist: usize,
+        max_dist: usize,
+        expr: Box<SquareSetExpr>,
+    },
+}
+
+/// Set Predicate evaluated in SearchQuery
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetPredicate {
+    /// Non-empty boolean test: evaluates to `!set.is_empty()`
+    /// Example: `B [c1, f1]`, `attacks(R, k)`
+    NonEmpty(SquareSetExpr),
+
+    /// Count comparison against integer literal: `count(expr) op count`
+    /// Example: `attacks(R, k) >= 2`, `B [a1..h8] == 2`
+    CountComparison {
+        expr: SquareSetExpr,
+        op: ComparisonOp,
+        count: usize,
+    },
+
+    /// Set size comparison between two expressions: `count(left) op count(right)`
+    /// Example: `attacks(white, e4) > attacks(black, e4)`
+    SetComparison {
+        left: SquareSetExpr,
+        op: ComparisonOp,
+        right: SquareSetExpr,
+    },
+}
 
 /// Comparison operators for numeric and string matching
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +252,82 @@ pub enum PositionPattern {
     },
 }
 
+/// Compass and geometric board direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+    NorthEast,
+    NorthWest,
+    SouthEast,
+    SouthWest,
+    Diagonal,
+    Orthogonal,
+    Vertical,
+    Horizontal,
+    AnyDirection,
+}
+
+impl Direction {
+    pub fn delta_vectors(&self) -> &'static [(i32, i32)] {
+        match self {
+            Direction::Up => &[(0, 1)],
+            Direction::Down => &[(0, -1)],
+            Direction::Right => &[(1, 0)],
+            Direction::Left => &[(-1, 0)],
+            Direction::NorthEast => &[(1, 1)],
+            Direction::NorthWest => &[(-1, 1)],
+            Direction::SouthEast => &[(1, -1)],
+            Direction::SouthWest => &[(-1, -1)],
+            Direction::Vertical => &[(0, 1), (0, -1)],
+            Direction::Horizontal => &[(-1, 0), (1, 0)],
+            Direction::Orthogonal => &[(0, 1), (0, -1), (1, 0), (-1, 0)],
+            Direction::Diagonal => &[(1, 1), (-1, 1), (1, -1), (-1, -1)],
+            Direction::AnyDirection => &[
+                (0, 1),
+                (0, -1),
+                (1, 0),
+                (-1, 0),
+                (1, 1),
+                (-1, 1),
+                (1, -1),
+                (-1, -1),
+            ],
+        }
+    }
+
+    pub fn expand_square(&self, sq: Square, min_dist: usize, max_dist: usize) -> Vec<Square> {
+        let f = sq.file() as i32;
+        let r = sq.rank() as i32;
+        let mut out = Vec::new();
+        for &(df, dr) in self.delta_vectors() {
+            for step in min_dist..=max_dist {
+                let nf = f + (step as i32) * df;
+                let nr = r + (step as i32) * dr;
+                if (0..=7).contains(&nf) && (0..=7).contains(&nr) {
+                    out.push(Square::from_coords(
+                        shakmaty::File::new(nf as u32),
+                        shakmaty::Rank::new(nr as u32),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    pub fn expand_squares(&self, sqs: &[Square], min_dist: usize, max_dist: usize) -> Vec<Square> {
+        let mut out = Vec::new();
+        for &sq in sqs {
+            out.extend(self.expand_square(sq, min_dist, max_dist));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
 /// Pattern matching an individual move in a game or legal move analysis
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MovePattern {
@@ -193,12 +353,24 @@ pub struct MovePattern {
     pub color: Option<Color>,
     /// Whether the move is a capture
     pub is_capture: Option<bool>,
+    /// Captured piece specifiers (e.g. `capture p`, `capture [q, r]`, `capture black_pieces`)
+    pub captured_pieces: Option<Vec<SquareContent>>,
     /// Promotion piece role
     pub promotion: Option<Role>,
     /// Allowed promotion piece roles (for multi-piece underpromotions e.g. "RBN")
     pub promotions: Option<Vec<Role>>,
-    /// Whether the move gives check or checkmate
+    /// Whether the move gives check
     pub is_check: Option<bool>,
+    /// Whether the move gives checkmate (mate in 1)
+    pub is_checkmate: Option<bool>,
+    /// Whether the move is a castling move (O-O or O-O-O)
+    pub is_castle: Option<bool>,
+    /// Whether the move is an en passant capture
+    pub is_en_passant: Option<bool>,
+    /// Relative move direction constraint from source square (e.g. `up 1`, `right 1`, `diagonal`, `orthogonal`)
+    pub direction: Option<(Direction, usize, Option<usize>)>,
+    /// If true, queries the previous move that arrived at the current position instead of the departure move
+    pub is_previous: bool,
     /// If true, queries legal moves available in current position
     pub is_legal: bool,
     /// Count constraint on matching moves (e.g. `legal count == 0` or `move count >= 1`)
@@ -206,10 +378,15 @@ pub struct MovePattern {
 }
 
 /// An element in a sequential move path (move pattern or gap quantifier)
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathStep {
-    /// A move pattern to match at current ply
-    Move(MovePattern),
+    /// A move pattern to match at current ply, with optional repetition bounds (min, max)
+    Move {
+        pattern: MovePattern,
+        repeat_min: usize,
+        repeat_max: Option<usize>,
+    },
     /// An explicit gap / repetition quantifier between moves (min_plies, max_plies)
     Gap { min: usize, max: Option<usize> },
 }
@@ -223,10 +400,89 @@ pub struct PathPattern {
     pub moves: Vec<MovePattern>,
     /// Whether the moves must be strictly consecutive (ply by ply without gaps)
     pub consecutive: bool,
+    /// If Some, matches only moves by a single color (None = auto-detect from first matched move or White/Black if specified)
+    pub single_color: Option<Option<Color>>,
     /// Maximum allowed plies between matched moves (if not consecutive)
     pub max_gap_plies: Option<usize>,
     /// Start ply range where the sequence must begin
     pub start_ply_range: Option<Range<usize>>,
+}
+
+/// A constituent in a CQL 6.2 `cql_path` filter: either a Move, a Positional Filter, or a repeated chain
+#[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
+pub enum CqlPathConstituent {
+    /// Move constituent (e.g. `Bxh7+`, `kxh7`, `N--g5 check`, `e4 not check`)
+    Move(MovePattern),
+    /// Filter constituent evaluated against the current board state (e.g. `check`, `not check`, `{ attacks(N, q) }`)
+    Filter(Box<SearchQuery>),
+    /// Repetition of a constituent: `*`, `+`, `?`, or `{min, max}`
+    Repetition {
+        constituent: Box<CqlPathConstituent>,
+        min: usize,
+        max: Option<usize>,
+    },
+    /// A chain of constituents enclosed in parentheses `( C1 C2 ... )`
+    Chain(Vec<CqlPathConstituent>),
+}
+
+/// CQL 6.2 Path Pattern (`cql_path` / `cqlpath` / `turnstile` / `sequence`)
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CqlPathPattern {
+    /// Ordered list of constituents (moves and filters)
+    pub constituents: Vec<CqlPathConstituent>,
+    /// Optional single color constraint (e.g. `cql_path singlecolor { ... }`, `cql_path white { ... }`)
+    pub single_color: Option<Option<Color>>,
+    /// Optional start ply range
+    pub start_ply_range: Option<Range<usize>>,
+}
+
+impl CqlPathPattern {
+    pub fn requires_san_strings(&self) -> bool {
+        self.constituents.iter().any(|c| c.requires_san_strings())
+    }
+}
+
+/// Direction of transition in a CQLi line filter
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum LineDirection {
+    #[default]
+    Forward, // -->
+    Backward, // <--
+}
+
+/// CQLi Line Pattern (`line` / `cqlline` / `cql_line`)
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CqlLinePattern {
+    pub min_length: Option<usize>,
+    pub max_length: Option<usize>,
+    pub direction: LineDirection,
+    pub single_color: Option<Option<Color>>,
+    pub first_match: bool,
+    pub last_position: bool,
+    pub nest_ban: bool,
+    pub primary_only: bool,
+    pub start_ply_range: Option<Range<usize>>,
+    pub constituents: Vec<CqlPathConstituent>,
+}
+
+impl CqlLinePattern {
+    pub fn requires_san_strings(&self) -> bool {
+        self.constituents.iter().any(|c| c.requires_san_strings())
+    }
+}
+
+impl CqlPathConstituent {
+    pub fn requires_san_strings(&self) -> bool {
+        match self {
+            CqlPathConstituent::Move(m) => m.san.is_some(),
+            CqlPathConstituent::Filter(q) => q.requires_san_strings(),
+            CqlPathConstituent::Repetition { constituent, .. } => {
+                constituent.requires_san_strings()
+            }
+            CqlPathConstituent::Chain(subs) => subs.iter().any(|s| s.requires_san_strings()),
+        }
+    }
 }
 
 /// Hardware-accelerated bitboard material composition predicate
@@ -463,6 +719,21 @@ pub enum SearchQuery {
         domain: VariableDomain,
         query: Box<SearchQuery>,
     },
+    /// First-class Square Set predicate (non-empty, count comparison, or set size comparison)
+    SquareSet(SetPredicate),
+    /// Scopes evaluation to the parent position (ply - 1) before the current position
+    Parent(Box<SearchQuery>),
+    /// Scopes evaluation to the child position (ply + 1) after the current position
+    Child(Box<SearchQuery>),
+    /// Hypothetical move execution: simulates a matching legal/explicit move on a cloned board and evaluates outcome query
+    Play {
+        move_pattern: MovePattern,
+        outcome_query: Box<SearchQuery>,
+    },
+    /// CQL 6.2 Path Pattern with interleaved moves and positional state filters
+    CqlPath(CqlPathPattern),
+    /// CQLi Line Pattern with position/move transitions along arrows
+    CqlLine(CqlLinePattern),
 }
 
 impl SearchQuery {
@@ -485,6 +756,8 @@ impl SearchQuery {
                 subs.iter().all(|s| s.is_header_only())
             }
             SearchQuery::Not(sub)
+            | SearchQuery::Parent(sub)
+            | SearchQuery::Child(sub)
             | SearchQuery::PlyRange { query: sub, .. }
             | SearchQuery::Occurrences { query: sub, .. } => sub.is_header_only(),
             _ => false,
@@ -495,12 +768,19 @@ impl SearchQuery {
         match self {
             SearchQuery::Move(m) => m.san.is_some(),
             SearchQuery::Path(p) => p.moves.iter().any(|m| m.san.is_some()),
+            SearchQuery::CqlPath(p) => p.requires_san_strings(),
+            SearchQuery::CqlLine(p) => p.requires_san_strings(),
             SearchQuery::And(subs) | SearchQuery::Or(subs) => {
                 subs.iter().any(|s| s.requires_san_strings())
             }
             SearchQuery::Not(sub)
+            | SearchQuery::Parent(sub)
+            | SearchQuery::Child(sub)
             | SearchQuery::PlyRange { query: sub, .. }
             | SearchQuery::Occurrences { query: sub, .. }
+            | SearchQuery::Play {
+                outcome_query: sub, ..
+            }
             | SearchQuery::VariableBinding { query: sub, .. } => sub.requires_san_strings(),
             SearchQuery::Symmetric { query: sub, .. } => sub.requires_san_strings(),
             _ => false,
@@ -514,8 +794,13 @@ impl SearchQuery {
                 subs.iter().any(|s| s.has_header_predicates())
             }
             SearchQuery::Not(sub)
+            | SearchQuery::Parent(sub)
+            | SearchQuery::Child(sub)
             | SearchQuery::PlyRange { query: sub, .. }
             | SearchQuery::Occurrences { query: sub, .. }
+            | SearchQuery::Play {
+                outcome_query: sub, ..
+            }
             | SearchQuery::VariableBinding { query: sub, .. } => sub.has_header_predicates(),
             SearchQuery::Symmetric { query: sub, .. } => sub.has_header_predicates(),
             _ => false,
@@ -525,19 +810,26 @@ impl SearchQuery {
     pub fn can_stream_early_exit(&self) -> bool {
         match self {
             SearchQuery::Position(_)
+            | SearchQuery::SquareSet(_)
             | SearchQuery::Pawn(_)
             | SearchQuery::Tactical(_)
             | SearchQuery::Material(_)
             | SearchQuery::Power(_) => true,
-            SearchQuery::Move(m) => !m.is_legal && m.count_predicate.is_none() && m.san.is_none(),
+            SearchQuery::Move(m) => {
+                m.is_previous && !m.is_legal && m.count_predicate.is_none() && m.san.is_none()
+            }
             SearchQuery::PlyRange { query: sub, .. } => sub.can_stream_early_exit(),
             SearchQuery::Or(subs) => subs.iter().all(|s| s.can_stream_early_exit()),
             SearchQuery::And(subs) => subs.iter().all(|s| match s {
                 SearchQuery::Position(_)
+                | SearchQuery::SquareSet(_)
                 | SearchQuery::Pawn(_)
                 | SearchQuery::Tactical(_)
                 | SearchQuery::Material(_)
                 | SearchQuery::Power(_) => true,
+                SearchQuery::Move(m) => {
+                    m.is_previous && !m.is_legal && m.count_predicate.is_none() && m.san.is_none()
+                }
                 SearchQuery::PlyRange { query: sub, .. } => sub.can_stream_early_exit(),
                 _ => false,
             }),

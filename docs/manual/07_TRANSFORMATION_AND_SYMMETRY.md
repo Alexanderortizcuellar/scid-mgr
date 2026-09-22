@@ -70,3 +70,15 @@ flip:all {
     fen "8/8/8/8/8/8/4P3/8 w - - 0 1"
 }
 ```
+
+### 4. Chained Symmetries & Mating Matrix (`flipcolor rotate90 { ... }`)
+```cql
+mate
+flipcolor rotate90 {
+    northwest 2 Q & up 1 k & R
+    right 1 k & _
+}
+```
+* Chains `flipcolor` (both player perspectives) with `rotate90` (all 4 board rotations: 0°, 90°, 180°, 270°).
+* Accurately tests all 8 orientations of this Queen + Rook mating net.
+

@@ -1,10 +1,11 @@
-use shakmaty::{Color, Role};
+use shakmaty::{Bitboard, Color, Role};
 
 use super::annotation::AnnotationPredicate;
 use super::query::{
-    ComparisonOp, HeaderPredicate, MaterialPredicate, MovePattern, PathPattern, PathStep,
-    PawnPredicate, PieceMatcher, PositionPattern, PowerPredicate, SearchQuery, SquareContent,
-    SquareOrPiece, TacticalPredicate, VariableDomain,
+    ComparisonOp, CqlLinePattern, CqlPathConstituent, CqlPathPattern, HeaderPredicate,
+    LineDirection, MaterialPredicate, MovePattern, PathPattern, PathStep, PawnPredicate,
+    PieceMatcher, PositionPattern, PowerPredicate, SearchQuery, SetPredicate, SquareContent,
+    SquareOrPiece, SquareSetExpr, TacticalPredicate, VariableDomain,
 };
 use super::transform::BoardSymmetry;
 
@@ -127,6 +128,80 @@ impl ToDsl for SquareContent {
                     })
                     .collect();
                 format!("[^{chars}]")
+            }
+        }
+    }
+}
+
+impl ToDsl for SquareSetExpr {
+    fn to_dsl(&self) -> String {
+        match self {
+            SquareSetExpr::Piece(content) => content.to_dsl(),
+            SquareSetExpr::Squares(bb) => {
+                if *bb == Bitboard::LIGHT_SQUARES {
+                    "light".to_string()
+                } else if *bb == Bitboard::DARK_SQUARES {
+                    "dark".to_string()
+                } else {
+                    let sqs: Vec<String> = bb.into_iter().map(|s| format!("{s}")).collect();
+                    if sqs.len() == 1 {
+                        sqs[0].clone()
+                    } else {
+                        format!("[{}]", sqs.join(", "))
+                    }
+                }
+            }
+            SquareSetExpr::Variable(v) => format!("${v}"),
+            SquareSetExpr::Intersection(left, right) => {
+                format!("({} & {})", left.to_dsl(), right.to_dsl())
+            }
+            SquareSetExpr::Union(left, right) => {
+                format!("({} | {})", left.to_dsl(), right.to_dsl())
+            }
+            SquareSetExpr::Difference(left, right) => {
+                format!("({} \\ {})", left.to_dsl(), right.to_dsl())
+            }
+            SquareSetExpr::Complement(inner) => {
+                format!("~({})", inner.to_dsl())
+            }
+            SquareSetExpr::Attacks { attacker, target } => {
+                format!("attacks({}, {})", attacker.to_dsl(), target.to_dsl())
+            }
+            SquareSetExpr::Attackers { attacker, target } => {
+                format!("attackers({}, {})", attacker.to_dsl(), target.to_dsl())
+            }
+            SquareSetExpr::Ray { direction, origin } => {
+                format!("ray({:?}, {})", direction, origin.to_dsl())
+            }
+            SquareSetExpr::Between { from, to } => {
+                format!("between({}, {})", from.to_dsl(), to.to_dsl())
+            }
+            SquareSetExpr::Shift {
+                direction,
+                min_dist,
+                max_dist,
+                expr,
+            } => {
+                let dir_str = format!("{:?}", direction).to_lowercase();
+                if min_dist == max_dist {
+                    format!("({} {} {})", dir_str, min_dist, expr.to_dsl())
+                } else {
+                    format!("({} {}..{} {})", dir_str, min_dist, max_dist, expr.to_dsl())
+                }
+            }
+        }
+    }
+}
+
+impl ToDsl for SetPredicate {
+    fn to_dsl(&self) -> String {
+        match self {
+            SetPredicate::NonEmpty(expr) => expr.to_dsl(),
+            SetPredicate::CountComparison { expr, op, count } => {
+                format!("{} {} {count}", expr.to_dsl(), op.to_dsl())
+            }
+            SetPredicate::SetComparison { left, op, right } => {
+                format!("{} {} {}", left.to_dsl(), op.to_dsl(), right.to_dsl())
             }
         }
     }
@@ -297,6 +372,9 @@ impl ToDsl for PositionPattern {
                     BoardSymmetry::HorizontalMirror => "flip:horizontal",
                     BoardSymmetry::VerticalMirror => "flip:vertical",
                     BoardSymmetry::Rotate180 => "flip:rotate180",
+                    BoardSymmetry::Rotate90 => "rotate90",
+                    BoardSymmetry::Rotate270 => "rotate270",
+                    BoardSymmetry::AllRotations => "rotate90",
                     BoardSymmetry::ColorInvert => "flipcolor",
                     BoardSymmetry::ColorInvertHorizontal => "flipcolor:horizontal",
                     BoardSymmetry::AnySpatialSymmetry => "flip:spatial",
@@ -324,6 +402,10 @@ impl ToDsl for MovePattern {
             parts.push("legal".to_string());
         } else {
             parts.push("move".to_string());
+        }
+
+        if self.is_previous {
+            parts.push("previous".to_string());
         }
 
         if let Some(color) = self.color {
@@ -376,9 +458,55 @@ impl ToDsl for MovePattern {
             }
         }
 
+        if let Some((dir, min, max_opt)) = self.direction {
+            let dir_name = match dir {
+                crate::search::query::Direction::Up => "up",
+                crate::search::query::Direction::Down => "down",
+                crate::search::query::Direction::Left => "left",
+                crate::search::query::Direction::Right => "right",
+                crate::search::query::Direction::NorthEast => "northeast",
+                crate::search::query::Direction::NorthWest => "northwest",
+                crate::search::query::Direction::SouthEast => "southeast",
+                crate::search::query::Direction::SouthWest => "southwest",
+                crate::search::query::Direction::Diagonal => "diagonal",
+                crate::search::query::Direction::Orthogonal => "orthogonal",
+                crate::search::query::Direction::Vertical => "vertical",
+                crate::search::query::Direction::Horizontal => "horizontal",
+                crate::search::query::Direction::AnyDirection => "anydirection",
+            };
+            if let Some(max) = max_opt {
+                if max == min {
+                    parts.push(format!("{dir_name} {min}"));
+                } else {
+                    parts.push(format!("{dir_name} {min} {max}"));
+                }
+            } else {
+                parts.push(dir_name.to_string());
+            }
+        }
+
+        if let Some(is_castle) = self.is_castle {
+            if is_castle {
+                parts.push("castle".to_string());
+            }
+        }
+        if let Some(is_ep) = self.is_en_passant {
+            if is_ep {
+                parts.push("en_passant".to_string());
+            }
+        }
         if let Some(is_cap) = self.is_capture {
             if is_cap {
-                parts.push("capture".to_string());
+                if let Some(ref cap_pcs) = self.captured_pieces {
+                    if cap_pcs.len() == 1 {
+                        parts.push(format!("capture {}", cap_pcs[0].to_dsl()));
+                    } else {
+                        let pcs: Vec<String> = cap_pcs.iter().map(|p| p.to_dsl()).collect();
+                        parts.push(format!("capture [{}]", pcs.join(" ")));
+                    }
+                } else {
+                    parts.push("capture".to_string());
+                }
             } else {
                 parts.push("not capture".to_string());
             }
@@ -397,6 +525,11 @@ impl ToDsl for MovePattern {
                 parts.push("check".to_string());
             }
         }
+        if let Some(is_mate) = self.is_checkmate {
+            if is_mate {
+                parts.push("mate".to_string());
+            }
+        }
         if let Some((op, cnt)) = self.count_predicate {
             parts.push(format!("count {} {cnt}", op.to_dsl()));
         }
@@ -411,7 +544,25 @@ impl ToDsl for PathPattern {
         if !self.steps.is_empty() {
             for step in &self.steps {
                 match step {
-                    PathStep::Move(m) => steps_dsl.push(m.to_dsl()),
+                    PathStep::Move {
+                        pattern,
+                        repeat_min,
+                        repeat_max,
+                    } => {
+                        let m_str = pattern.to_dsl();
+                        match (repeat_min, repeat_max) {
+                            (1, Some(1)) => steps_dsl.push(m_str),
+                            (min, Some(max)) if min == max => {
+                                steps_dsl.push(format!("{m_str}{{{min}}}"));
+                            }
+                            (min, Some(max)) => {
+                                steps_dsl.push(format!("{m_str}{{{min},{max}}}"));
+                            }
+                            (min, None) => {
+                                steps_dsl.push(format!("{m_str}{{{min},}}"));
+                            }
+                        }
+                    }
                     PathStep::Gap { min, max } => match (min, max) {
                         (0, None) => steps_dsl.push("...".to_string()),
                         (1, None) => steps_dsl.push("--+".to_string()),
@@ -435,14 +586,134 @@ impl ToDsl for PathPattern {
         }
 
         let body = steps_dsl.join(" ");
+        let color_qualifier = match self.single_color {
+            Some(Some(Color::White)) => " white",
+            Some(Some(Color::Black)) => " black",
+            Some(None) => " singlecolor",
+            None => "",
+        };
+
         if let Some(range) = &self.start_ply_range {
             format!(
-                "path from ply {} to {} {{ {body} }}",
+                "path{color_qualifier} from ply {} to {} {{ {body} }}",
                 range.start, range.end
             )
         } else {
-            format!("path {{ {body} }}")
+            format!("path{color_qualifier} {{ {body} }}")
         }
+    }
+}
+
+impl ToDsl for CqlPathConstituent {
+    fn to_dsl(&self) -> String {
+        match self {
+            CqlPathConstituent::Move(m) => m.to_dsl(),
+            CqlPathConstituent::Filter(q) => format!("{{ {} }}", q.to_dsl()),
+            CqlPathConstituent::Chain(subs) => {
+                let inner = subs
+                    .iter()
+                    .map(|s| s.to_dsl())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("( {inner} )")
+            }
+            CqlPathConstituent::Repetition {
+                constituent,
+                min,
+                max,
+            } => {
+                let inner = constituent.to_dsl();
+                match (min, max) {
+                    (0, None) => format!("{inner}*"),
+                    (1, None) => format!("{inner}+"),
+                    (0, Some(1)) => format!("{inner}?"),
+                    (min_val, Some(max_val)) if min_val == max_val => {
+                        format!("{inner}{{{min_val}}}")
+                    }
+                    (min_val, Some(max_val)) => format!("{inner}{{{min_val},{max_val}}}"),
+                    (min_val, None) => format!("{inner}{{{min_val},}}"),
+                }
+            }
+        }
+    }
+}
+
+impl ToDsl for CqlPathPattern {
+    fn to_dsl(&self) -> String {
+        let body = self
+            .constituents
+            .iter()
+            .map(|c| c.to_dsl())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let color_qualifier = match self.single_color {
+            Some(Some(Color::White)) => " white",
+            Some(Some(Color::Black)) => " black",
+            Some(None) => " singlecolor",
+            None => "",
+        };
+
+        if let Some(range) = &self.start_ply_range {
+            format!(
+                "cql_path{color_qualifier} from ply {} to {} {{ {body} }}",
+                range.start, range.end
+            )
+        } else {
+            format!("cql_path{color_qualifier} {{ {body} }}")
+        }
+    }
+}
+
+impl ToDsl for CqlLinePattern {
+    fn to_dsl(&self) -> String {
+        let arrow = match self.direction {
+            LineDirection::Forward => "-->",
+            LineDirection::Backward => "<--",
+        };
+
+        let mut parts = vec!["line".to_string()];
+
+        if let (Some(min), Some(max)) = (self.min_length, self.max_length) {
+            if min == max {
+                parts.push(format!("{min}"));
+            } else {
+                parts.push(format!("{min} {max}"));
+            }
+        } else if let Some(min) = self.min_length {
+            parts.push(format!("{min}"));
+        }
+
+        if self.first_match {
+            parts.push("firstmatch".to_string());
+        }
+        if self.last_position {
+            parts.push("lastposition".to_string());
+        }
+        if self.nest_ban {
+            parts.push("nestban".to_string());
+        }
+
+        match self.single_color {
+            Some(Some(Color::White)) => parts.push("white".to_string()),
+            Some(Some(Color::Black)) => parts.push("black".to_string()),
+            Some(None) => parts.push("singlecolor".to_string()),
+            None => {}
+        }
+
+        let body = self
+            .constituents
+            .iter()
+            .map(|c| c.to_dsl())
+            .collect::<Vec<_>>()
+            .join(&format!(" {arrow} "));
+
+        if !body.is_empty() {
+            parts.push(arrow.to_string());
+            parts.push(body);
+        }
+
+        parts.join(" ")
     }
 }
 
@@ -754,6 +1025,23 @@ impl ToDsl for SearchQuery {
                     format!("not {inner}")
                 }
             }
+            SearchQuery::Parent(sub) => {
+                format!("parent {{ {} }}", sub.to_dsl())
+            }
+            SearchQuery::Child(sub) => {
+                format!("child {{ {} }}", sub.to_dsl())
+            }
+            SearchQuery::Play {
+                move_pattern,
+                outcome_query,
+            } => {
+                let move_dsl = move_pattern.to_dsl();
+                if move_dsl.is_empty() {
+                    format!("legal leads_to {{ {} }}", outcome_query.to_dsl())
+                } else {
+                    format!("{move_dsl} leads_to {{ {} }}", outcome_query.to_dsl())
+                }
+            }
             SearchQuery::Header(h) => h.to_dsl(),
             SearchQuery::Position(p) => p.to_dsl(),
             SearchQuery::Pawn(p) => p.to_dsl(),
@@ -768,6 +1056,9 @@ impl ToDsl for SearchQuery {
                     BoardSymmetry::HorizontalMirror => "flip:horizontal",
                     BoardSymmetry::VerticalMirror => "flip:vertical",
                     BoardSymmetry::Rotate180 => "flip:rotate180",
+                    BoardSymmetry::Rotate90 => "rotate90",
+                    BoardSymmetry::Rotate270 => "rotate270",
+                    BoardSymmetry::AllRotations => "rotate90",
                     BoardSymmetry::ColorInvert => "flipcolor",
                     BoardSymmetry::ColorInvertHorizontal => "flipcolor:horizontal",
                     BoardSymmetry::AnySpatialSymmetry => "flip:spatial",
@@ -791,6 +1082,9 @@ impl ToDsl for SearchQuery {
                     format!("occurrences >={min} {{ {} }}", query.to_dsl())
                 }
             }
+            SearchQuery::SquareSet(s) => s.to_dsl(),
+            SearchQuery::CqlPath(p) => p.to_dsl(),
+            SearchQuery::CqlLine(p) => p.to_dsl(),
             SearchQuery::VariableBinding {
                 var_name,
                 domain,
@@ -878,6 +1172,9 @@ fn symmetry_label(sym: BoardSymmetry) -> &'static str {
         BoardSymmetry::HorizontalMirror => "Horizontal Mirror (flip:horizontal)",
         BoardSymmetry::VerticalMirror => "Vertical Mirror (flip:vertical)",
         BoardSymmetry::Rotate180 => "180° Board Rotation (flip:rotate180)",
+        BoardSymmetry::Rotate90 => "90° Board Rotation (rotate90)",
+        BoardSymmetry::Rotate270 => "270° Board Rotation (rotate270)",
+        BoardSymmetry::AllRotations => "All Rotations (0°, 90°, 180°, 270°)",
         BoardSymmetry::ColorInvertHorizontal => "Color Invert + Horizontal Mirror",
         BoardSymmetry::AnySpatialSymmetry => "Spatial Symmetry",
         BoardSymmetry::AnyTotalSymmetry => "Total Symmetry",

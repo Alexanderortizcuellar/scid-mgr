@@ -4,7 +4,9 @@ use std::str::FromStr;
 use super::helpers::{parse_piece_specifier, parse_square_or_piece};
 use super::lexer::{ParseError, Token};
 use super::QueryParser;
-use crate::search::query::{PieceMatcher, SearchQuery, TacticalPredicate};
+use crate::search::query::{
+    PieceMatcher, SearchQuery, SetPredicate, SquareSetExpr, TacticalPredicate,
+};
 
 impl<'a> QueryParser<'a> {
     pub(crate) fn parse_piece_matcher_arg(&mut self) -> Result<Vec<PieceMatcher>, ParseError> {
@@ -684,11 +686,9 @@ impl<'a> QueryParser<'a> {
             let is_bracket = matches!(self.peek(), Some(Token::LBracket));
             self.advance();
 
-            let first_token = self.expect_ident()?;
-            if let Some(Token::Comma) = self.peek() {
-                self.advance();
-            }
-            let second_token = self.expect_ident()?;
+            let attacker = self.parse_square_set_expr()?;
+            self.expect_token(Token::Comma)?;
+            let target = self.parse_square_set_expr()?;
 
             if is_bracket {
                 self.expect_token(Token::RBracket)?;
@@ -696,17 +696,45 @@ impl<'a> QueryParser<'a> {
                 self.expect_token(Token::RParen)?;
             }
 
-            let attacker = parse_square_or_piece(&first_token).ok_or_else(|| {
-                ParseError::new(format!("Invalid attacker in attacks: {}", first_token), pos)
-            })?;
-            let target = parse_square_or_piece(&second_token).ok_or_else(|| {
-                ParseError::new(format!("Invalid target in attacks: {}", second_token), pos)
-            })?;
+            let expr = SquareSetExpr::Attacks {
+                attacker: Box::new(attacker),
+                target: Box::new(target),
+            };
 
-            return Ok(SearchQuery::Tactical(TacticalPredicate::Attacks {
-                attacker,
-                target,
-            }));
+            let is_cmp = matches!(
+                self.peek(),
+                Some(
+                    Token::Eq
+                        | Token::Neq
+                        | Token::Gt
+                        | Token::Gte
+                        | Token::Lt
+                        | Token::Lte
+                        | Token::Colon
+                )
+            );
+
+            if self.match_ident("count") || is_cmp {
+                let op = self.parse_comparison_op();
+                if let Some(Token::Number(n)) = self.peek() {
+                    let count = *n as usize;
+                    self.advance();
+                    return Ok(SearchQuery::SquareSet(SetPredicate::CountComparison {
+                        expr,
+                        op,
+                        count,
+                    }));
+                } else if self.is_square_set_atom_start() {
+                    let right_expr = self.parse_square_set_expr()?;
+                    return Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
+                        left: expr,
+                        op,
+                        right: right_expr,
+                    }));
+                }
+            }
+
+            return Ok(SearchQuery::SquareSet(SetPredicate::NonEmpty(expr)));
         }
 
         // Direct syntax: attacks $n k, attacks N to q, attacks N against k (or attacks N k)
@@ -815,6 +843,12 @@ impl<'a> QueryParser<'a> {
                     self.advance();
                     if let Some((c, r)) = parse_piece_specifier(&s_clone) {
                         list.push(PieceMatcher::new(c, r));
+                    } else if s_clone.len() > 1 {
+                        for ch in s_clone.chars() {
+                            if let Some((c, r)) = parse_piece_specifier(&ch.to_string()) {
+                                list.push(PieceMatcher::new(c, r));
+                            }
+                        }
                     }
                 } else {
                     self.advance();
