@@ -14,7 +14,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QPlainTextEdit, QTextEdit, QComboBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
     QSpinBox, QGroupBox, QRadioButton, QButtonGroup, QMessageBox,
-    QProgressBar, QApplication, QDialog, QTabWidget, QDialogButtonBox
+    QProgressBar, QApplication, QDialog, QTabWidget, QDialogButtonBox,
+    QListWidget, QListWidgetItem
 )
 
 from ..backend_client import BackendClient
@@ -409,14 +410,51 @@ class CqlSearchWidget(QWidget):
         self.btn_jump_match.clicked.connect(self.jump_to_match_ply)
         nav_bar.addWidget(self.btn_jump_match)
 
-        right_layout.addLayout(nav_bar)
+        # Right Bottom: Tabbed panel with Legal Moves & Game PGN
+        self.right_tabs = QTabWidget()
 
-        # Game Text Viewer
+        # Tab 1: Legal Moves & Hypothetical Candidate Outcomes
+        legal_tab = QWidget()
+        legal_layout = QVBoxLayout(legal_tab)
+        legal_layout.setContentsMargins(4, 4, 4, 4)
+        legal_layout.setSpacing(4)
+
+        self.lbl_legal_summary = QLabel("Legal Moves: 0")
+        self.lbl_legal_summary.setStyleSheet("font-weight: bold; font-size: 11px; color: #444;")
+        legal_layout.addWidget(self.lbl_legal_summary)
+
+        self.list_legal_moves = QListWidget()
+        self.list_legal_moves.setStyleSheet("""
+            QListWidget {
+                background-color: #ffffff;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-family: Consolas, "Courier New", monospace;
+                font-size: 11px;
+            }
+            QListWidget::item {
+                padding: 4px 6px;
+                border-bottom: 1px solid #f0f0f0;
+                border-radius: 3px;
+            }
+            QListWidget::item:selected {
+                background-color: #e0f2fe;
+                color: #0369a1;
+            }
+        """)
+        self.list_legal_moves.itemClicked.connect(self.on_legal_move_clicked)
+        legal_layout.addWidget(self.list_legal_moves, stretch=1)
+
+        self.right_tabs.addTab(legal_tab, "⚡ Legal Moves")
+
+        # Tab 2: Full Game PGN Viewer
         self.txt_pgn = QTextEdit()
         self.txt_pgn.setReadOnly(True)
         self.txt_pgn.setFont(QFont("Consolas, Courier New, monospace", 9))
         self.txt_pgn.setStyleSheet("background-color: #ffffff; color: #222; border: 1px solid #ddd; border-radius: 4px;")
-        right_layout.addWidget(self.txt_pgn, stretch=1)
+        self.right_tabs.addTab(self.txt_pgn, "📜 Game PGN")
+
+        right_layout.addWidget(self.right_tabs, stretch=1)
 
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 3)
@@ -426,8 +464,10 @@ class CqlSearchWidget(QWidget):
 
         self.table_results.installEventFilter(self)
         self.txt_pgn.installEventFilter(self)
+        self.list_legal_moves.installEventFilter(self)
 
         self.update_board_display(chess.Board())
+        self.update_legal_moves_display(chess.Board(), None)
 
     def eventFilter(self, obj, event):
         if event.type() == event.KeyPress:
@@ -695,7 +735,9 @@ class CqlSearchWidget(QWidget):
         self.game_positions = [chess.Board()]
         self.lbl_ply.setText("Ply: 0")
         self.lbl_ply.setStyleSheet("font-weight: bold; color: #333;")
+        self.lbl_board_title.setText("Position Preview")
         self.update_board_display(chess.Board())
+        self.update_legal_moves_display(chess.Board(), None)
 
     def on_result_row_selected(self):
         row = self.table_results.currentRow()
@@ -769,6 +811,7 @@ class CqlSearchWidget(QWidget):
         clamped = max(0, min(ply, len(self.game_positions) - 1))
         self.current_ply_index = clamped
         self.current_board = self.game_positions[clamped]
+        self.lbl_board_title.setText("Position Preview")
 
         # Highlight status if at matching ply
         is_match = clamped in self.current_plies_list
@@ -780,6 +823,109 @@ class CqlSearchWidget(QWidget):
             self.lbl_ply.setStyleSheet("font-weight: bold; color: #333;")
 
         self.update_board_display(self.current_board)
+
+        played_move = self.game_moves[clamped] if clamped < len(self.game_moves) else None
+        self.update_legal_moves_display(self.current_board, played_move)
+
+    def update_legal_moves_display(self, board: chess.Board, played_move: Optional[chess.Move] = None):
+        self.list_legal_moves.clear()
+        if not board:
+            self.lbl_legal_summary.setText("Legal Moves: 0")
+            return
+
+        legal_moves = list(board.legal_moves)
+        turn_str = "White to move" if board.turn == chess.WHITE else "Black to move"
+
+        def move_sort_key(mv: chess.Move):
+            is_played = (mv == played_move)
+            b = board.copy()
+            b.push(mv)
+            is_mate = b.is_checkmate()
+            is_stale = b.is_stalemate()
+            is_chk = b.is_check()
+            return (
+                0 if is_played else (1 if is_mate else (2 if is_stale else (3 if is_chk else 4))),
+                board.san(mv)
+            )
+
+        sorted_moves = sorted(legal_moves, key=move_sort_key)
+
+        mates_count = 0
+        stalemates_count = 0
+        checks_count = 0
+
+        for mv in sorted_moves:
+            san = board.san(mv)
+            b = board.copy()
+            b.push(mv)
+            is_mate = b.is_checkmate()
+            is_stale = b.is_stalemate()
+            is_chk = b.is_check()
+            is_played = (mv == played_move)
+
+            if is_mate:
+                mates_count += 1
+            if is_stale:
+                stalemates_count += 1
+            if is_chk:
+                checks_count += 1
+
+            tags = []
+            if is_played:
+                tags.append("🟢 PLAYED")
+            if is_mate:
+                tags.append("👑 MATE")
+            elif is_stale:
+                tags.append("⚖️ STALEMATE")
+            elif is_chk:
+                tags.append("⚡ CHECK")
+
+            tag_str = f" [{', '.join(tags)}]" if tags else ""
+            item_text = f"{san:<8} ({mv.uci()}){tag_str}"
+            item = QListWidgetItem(item_text)
+
+            # Color coding
+            if is_played:
+                item.setBackground(QColor("#dcfce7"))  # light green
+                item.setForeground(QColor("#15803d"))  # dark green
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            elif is_mate:
+                item.setBackground(QColor("#fee2e2"))  # light red
+                item.setForeground(QColor("#b91c1c"))  # dark red/crimson
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            elif is_stale:
+                item.setBackground(QColor("#fef3c7"))  # amber
+                item.setForeground(QColor("#b45309"))  # dark amber
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            elif is_chk:
+                item.setForeground(QColor("#1d4ed8"))  # blue
+
+            item.setData(Qt.UserRole, mv)
+            self.list_legal_moves.addItem(item)
+
+        played_str = f" | Played: <b style='color: #15803d;'>{board.san(played_move)}</b>" if played_move and played_move in board.legal_moves else ""
+        mate_str = f" | <span style='color: #b91c1c; font-weight: bold;'>👑 Mates: {mates_count}</span>" if mates_count > 0 else ""
+        stale_str = f" | <span style='color: #b45309; font-weight: bold;'>⚖️ Stalemates: {stalemates_count}</span>" if stalemates_count > 0 else ""
+
+        self.lbl_legal_summary.setText(
+            f"<b>{turn_str}</b> | <b>{len(legal_moves)}</b> legal move(s){played_str}{mate_str}{stale_str}"
+        )
+        self.right_tabs.setTabText(0, f"⚡ Legal Moves ({len(legal_moves)})")
+
+    def on_legal_move_clicked(self, item: QListWidgetItem):
+        mv = item.data(Qt.UserRole)
+        if mv and self.current_board and mv in self.current_board.legal_moves:
+            hyp_board = self.current_board.copy()
+            hyp_board.push(mv)
+            self.update_board_display(hyp_board)
+            san = self.current_board.san(mv)
+            self.lbl_board_title.setText(f"💡 Hypothetical: {san} ({mv.uci()}) [Use nav arrow to return]")
 
     def go_first_move(self):
         self.set_ply(0)
