@@ -526,6 +526,78 @@ pub fn evaluate_with_timeline_env(
                             matching_plies: anchored_matches,
                         }
                     }
+                    SearchQuery::Not(box_sub)
+                        if has_positional && !matching_plies_set.is_empty() && !box_sub.is_header_only() =>
+                    {
+                        let mut not_matches = Vec::new();
+                        for &pos_ply in &matching_plies_set {
+                            let sub_matches = match &**box_sub {
+                                SearchQuery::Move(move_pattern) => {
+                                    if move_pattern.is_previous {
+                                        pos_ply > 0
+                                            && pos_ply <= moves.len()
+                                            && PathMatcher::match_move(
+                                                move_pattern,
+                                                &positions[pos_ply - 1],
+                                                &moves[pos_ply - 1],
+                                            )
+                                    } else if move_pattern.is_legal || move_pattern.count_predicate.is_some() {
+                                        if pos_ply < positions.len() {
+                                            let legal_moves = positions[pos_ply].legal_moves();
+                                            let matching_count = legal_moves
+                                                .iter()
+                                                .filter(|m| PathMatcher::match_legal_move(m, &positions[pos_ply], move_pattern))
+                                                .count();
+                                            if let Some((op, count)) = move_pattern.count_predicate {
+                                                match op {
+                                                    crate::search::query::ComparisonOp::Equal => matching_count == count,
+                                                    crate::search::query::ComparisonOp::NotEqual => matching_count != count,
+                                                    crate::search::query::ComparisonOp::GreaterThan => matching_count > count,
+                                                    crate::search::query::ComparisonOp::GreaterThanOrEqual => matching_count >= count,
+                                                    crate::search::query::ComparisonOp::LessThan => matching_count < count,
+                                                    crate::search::query::ComparisonOp::LessThanOrEqual => matching_count <= count,
+                                                    _ => matching_count == count,
+                                                }
+                                            } else {
+                                                matching_count > 0
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    } else if pos_ply < moves.len() {
+                                        PathMatcher::match_move(
+                                            move_pattern,
+                                            &positions[pos_ply],
+                                            &moves[pos_ply],
+                                        )
+                                    } else {
+                                        false
+                                    }
+                                }
+                                _ => {
+                                    if pos_ply < positions.len() {
+                                        let last_mv = if pos_ply > 0 && pos_ply <= moves.len() {
+                                            Some((&positions[pos_ply - 1], &moves[pos_ply - 1]))
+                                        } else {
+                                            None
+                                        };
+                                        matches_single_ply(box_sub, &positions[pos_ply], pos_ply, last_mv)
+                                    } else {
+                                        false
+                                    }
+                                }
+                            };
+                            if !sub_matches {
+                                not_matches.push(pos_ply);
+                            }
+                        }
+                        let is_match = !not_matches.is_empty();
+                        QueryMatchResult {
+                            is_match,
+                            match_count: not_matches.len(),
+                            matching_plies: not_matches,
+                        }
+                    }
                     _ => evaluate_with_timeline_env(q, headers, positions, moves, env),
                 };
 

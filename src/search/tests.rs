@@ -3288,3 +3288,39 @@ fn test_play_and_leads_to_hypothetical_moves() {
     assert!(res.is_match);
     assert_eq!(res.matching_plies, vec![3]);
 }
+
+#[test]
+fn test_play_and_not_move_missed_mate_regression() {
+    let pgn = r#"[Event "Live Chess"]
+[Site "Chess.com"]
+[Date "2024.01.30"]
+[Round "-"]
+[White "frenllelzarraga"]
+[Black "IamDiablo"]
+[Result "1-0"]
+
+1. c4 c5 2. Nc3 d6 3. e3 e5 4. d4 cxd4 5. exd4 exd4 6. Qxd4 Nc6 7. Qd1 Be6 8. a3 Qb6
+9. Nd5 Bxd5 10. cxd5 O-O-O 11. dxc6 Qxc6 12. Be2 Re8 13. Nf3 Nf6 14. O-O g5 15. Nd4 Qe4
+16. Bf3 Qh4 17. Qc2+ Kb8 18. Nb5 Rc8 19. Qd2 Ng4 20. Bxg4 Qxg4 21. Qxg5 Qc4 22. a4 a6
+23. Nc3 h6 24. Qe3 h5 25. Rd1 Bh6 26. Qd3 Qg4 27. Qxd6+ Ka8 28. Bxh6 Rcd8 29. Qf4 Rxd1+
+30. Rxd1 Qg6 31. Bg5 Rg8 32. h4 f6 33. Qxf6 Qc2 34. Rd8+ Rxd8 35. Qxd8+ Ka7 36. Be3+ b6
+37. Qxb6+ Ka8 38. Qa7# 1-0"#;
+
+    // 1. A legal Queen move delivers checkmate at ply 74 (Qa7#):
+    let q_play_q_mate = QueryParser::parse_str("play from Q { mate }").unwrap();
+    let res1 = GameSearchEvaluator::evaluate_pgn(&q_play_q_mate, pgn);
+    assert!(res1.is_match);
+    assert_eq!(res1.matching_plies, vec![74]);
+
+    // 2. The move actually played at ply 74 WAS from Q (Qa7#), so `and move from Q` MUST match:
+    let q_played_q = QueryParser::parse_str("play from Q { mate } and move from Q").unwrap();
+    let res2 = GameSearchEvaluator::evaluate_pgn(&q_played_q, pgn);
+    assert!(res2.is_match);
+    assert_eq!(res2.matching_plies, vec![74]);
+
+    // 3. Since Move 75 was from Q, `and not move from Q` MUST NOT match:
+    let q_missed = QueryParser::parse_str("play from Q { mate } and not move from Q").unwrap();
+    let res3 = GameSearchEvaluator::evaluate_pgn(&q_missed, pgn);
+    assert!(!res3.is_match, "Should NOT match when the played move was indeed from Q");
+}
+
