@@ -6,6 +6,17 @@ use super::query::{
     SquareContent, SquareOrPiece, SquareSetExpr, TacticalPredicate,
 };
 
+/// Board pattern shift mode across files and/or ranks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShiftMode {
+    /// Shift horizontally across files (df in -7..=7, dr = 0)
+    Horizontal,
+    /// Shift vertically across ranks (df = 0, dr in -7..=7)
+    Vertical,
+    /// Shift both horizontally and vertically (df in -7..=7, dr in -7..=7)
+    All,
+}
+
 /// Board and geometric transformation symmetries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BoardSymmetry {
@@ -15,6 +26,10 @@ pub enum BoardSymmetry {
     HorizontalMirror,
     /// Vertical flip (rank mirror: 1 <-> 8, 2 <-> 7, etc.)
     VerticalMirror,
+    /// Main diagonal reflection along a1-h8 ((f, r) -> (r, f))
+    MainDiagonal,
+    /// Anti-diagonal reflection along a8-h1 ((f, r) -> (7-r, 7-f))
+    AntiDiagonal,
     /// 180-degree board rotation (both horizontal and vertical)
     Rotate180,
     /// 90-degree clockwise board rotation
@@ -27,9 +42,9 @@ pub enum BoardSymmetry {
     ColorInvert,
     /// Color inversion with horizontal mirror
     ColorInvertHorizontal,
-    /// Any of the 4 spatial transformations (Identity, Horizontal, Vertical, Rotate180)
+    /// Any of the 8 spatial transformations (D4 group: Identity, Horizontal, Vertical, MainDiagonal, AntiDiagonal, Rotate90, Rotate180, Rotate270)
     AnySpatialSymmetry,
-    /// Any of the 8 total symmetries (spatial + color inverted)
+    /// Any of the 10 total symmetries (spatial + color inverted)
     AnyTotalSymmetry,
 }
 
@@ -40,6 +55,8 @@ impl BoardSymmetry {
             BoardSymmetry::Identity => vec![BoardSymmetry::Identity],
             BoardSymmetry::HorizontalMirror => vec![BoardSymmetry::HorizontalMirror],
             BoardSymmetry::VerticalMirror => vec![BoardSymmetry::VerticalMirror],
+            BoardSymmetry::MainDiagonal => vec![BoardSymmetry::MainDiagonal],
+            BoardSymmetry::AntiDiagonal => vec![BoardSymmetry::AntiDiagonal],
             BoardSymmetry::Rotate180 => vec![BoardSymmetry::Rotate180],
             BoardSymmetry::Rotate90 => vec![BoardSymmetry::Rotate90],
             BoardSymmetry::Rotate270 => vec![BoardSymmetry::Rotate270],
@@ -58,16 +75,20 @@ impl BoardSymmetry {
                 BoardSymmetry::Identity,
                 BoardSymmetry::HorizontalMirror,
                 BoardSymmetry::VerticalMirror,
-                BoardSymmetry::Rotate180,
+                BoardSymmetry::MainDiagonal,
+                BoardSymmetry::AntiDiagonal,
                 BoardSymmetry::Rotate90,
+                BoardSymmetry::Rotate180,
                 BoardSymmetry::Rotate270,
             ],
             BoardSymmetry::AnyTotalSymmetry => vec![
                 BoardSymmetry::Identity,
                 BoardSymmetry::HorizontalMirror,
                 BoardSymmetry::VerticalMirror,
-                BoardSymmetry::Rotate180,
+                BoardSymmetry::MainDiagonal,
+                BoardSymmetry::AntiDiagonal,
                 BoardSymmetry::Rotate90,
+                BoardSymmetry::Rotate180,
                 BoardSymmetry::Rotate270,
                 BoardSymmetry::ColorInvert,
                 BoardSymmetry::ColorInvertHorizontal,
@@ -84,6 +105,8 @@ impl BoardSymmetry {
             BoardSymmetry::Identity => (f, r),
             BoardSymmetry::HorizontalMirror => (7 - f, r),
             BoardSymmetry::VerticalMirror => (f, 7 - r),
+            BoardSymmetry::MainDiagonal => (r, f),
+            BoardSymmetry::AntiDiagonal => (7 - r, 7 - f),
             BoardSymmetry::Rotate180 => (7 - f, 7 - r),
             BoardSymmetry::Rotate90 => (r, 7 - f),
             BoardSymmetry::Rotate270 => (7 - r, f),
@@ -213,13 +236,35 @@ impl BoardSymmetry {
             ));
         }
 
-        let mut transformed_ranks = Vec::with_capacity(8);
-        for rank_str in ranks {
-            let mut transformed_rank = String::new();
+        let mut grid: [[Option<char>; 8]; 8] = [[None; 8]; 8];
+        for (r_idx, rank_str) in ranks.iter().enumerate() {
+            let rank = 7 - r_idx;
+            let mut file = 0;
             for ch in rank_str.chars() {
-                if ch.is_ascii_digit() {
-                    transformed_rank.push(ch);
+                if let Some(digit) = ch.to_digit(10) {
+                    file += digit as usize;
+                } else if file < 8 {
+                    grid[rank][file] = Some(ch);
+                    file += 1;
                 } else {
+                    return Err(format!("FEN rank {} exceeds 8 files", rank + 1));
+                }
+            }
+            if file != 8 {
+                return Err(format!(
+                    "FEN rank {} does not total 8 files (got {})",
+                    rank + 1,
+                    file
+                ));
+            }
+        }
+
+        let mut new_grid: [[Option<char>; 8]; 8] = [[None; 8]; 8];
+        for r in 0..8 {
+            for f in 0..8 {
+                if let Some(ch) = grid[r][f] {
+                    let sq = Square::from_coords(File::new(f as u32), Rank::new(r as u32));
+                    let new_sq = self.transform_square(sq);
                     let new_ch = match self {
                         BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal => {
                             if ch.is_ascii_uppercase() {
@@ -230,33 +275,31 @@ impl BoardSymmetry {
                         }
                         _ => ch,
                     };
-                    transformed_rank.push(new_ch);
+                    new_grid[new_sq.rank() as usize][new_sq.file() as usize] = Some(new_ch);
                 }
             }
-            transformed_ranks.push(transformed_rank);
         }
 
-        // Horizontal flip: reverse files inside each rank
-        if matches!(
-            self,
-            BoardSymmetry::HorizontalMirror
-                | BoardSymmetry::Rotate180
-                | BoardSymmetry::ColorInvertHorizontal
-        ) {
-            for rank in &mut transformed_ranks {
-                *rank = rank.chars().rev().collect();
+        let mut transformed_ranks = Vec::with_capacity(8);
+        for r_idx in 0..8 {
+            let rank = 7 - r_idx;
+            let mut rank_str = String::new();
+            let mut empty_count = 0;
+            for file in 0..8 {
+                if let Some(ch) = new_grid[rank][file] {
+                    if empty_count > 0 {
+                        rank_str.push_str(&empty_count.to_string());
+                        empty_count = 0;
+                    }
+                    rank_str.push(ch);
+                } else {
+                    empty_count += 1;
+                }
             }
-        }
-
-        // Vertical flip / ColorInvert: reverse rank order (Rank 8 <-> Rank 1)
-        if matches!(
-            self,
-            BoardSymmetry::VerticalMirror
-                | BoardSymmetry::Rotate180
-                | BoardSymmetry::ColorInvert
-                | BoardSymmetry::ColorInvertHorizontal
-        ) {
-            transformed_ranks.reverse();
+            if empty_count > 0 {
+                rank_str.push_str(&empty_count.to_string());
+            }
+            transformed_ranks.push(rank_str);
         }
 
         Ok(transformed_ranks.join("/"))
@@ -773,6 +816,10 @@ impl BoardSymmetry {
             SearchQuery::CqlLine(cql_line) => {
                 SearchQuery::CqlLine(self.transform_cql_line_pattern(cql_line))
             }
+            SearchQuery::Initial(sub) => SearchQuery::Initial(Box::new(self.transform_query(sub))),
+            SearchQuery::Terminal(sub) => {
+                SearchQuery::Terminal(Box::new(self.transform_query(sub)))
+            }
             other => other.clone(),
         }
     }
@@ -971,6 +1018,32 @@ impl BoardSymmetry {
                 Direction::SouthWest => Direction::NorthWest,
                 other => other,
             },
+            BoardSymmetry::MainDiagonal => match dir {
+                Direction::Up => Direction::Right,
+                Direction::Down => Direction::Left,
+                Direction::Left => Direction::Down,
+                Direction::Right => Direction::Up,
+                Direction::NorthEast => Direction::NorthEast,
+                Direction::SouthWest => Direction::SouthWest,
+                Direction::NorthWest => Direction::SouthEast,
+                Direction::SouthEast => Direction::NorthWest,
+                Direction::Vertical => Direction::Horizontal,
+                Direction::Horizontal => Direction::Vertical,
+                other => other,
+            },
+            BoardSymmetry::AntiDiagonal => match dir {
+                Direction::Up => Direction::Left,
+                Direction::Down => Direction::Right,
+                Direction::Left => Direction::Up,
+                Direction::Right => Direction::Down,
+                Direction::NorthEast => Direction::SouthWest,
+                Direction::SouthWest => Direction::NorthEast,
+                Direction::NorthWest => Direction::NorthWest,
+                Direction::SouthEast => Direction::SouthEast,
+                Direction::Vertical => Direction::Horizontal,
+                Direction::Horizontal => Direction::Vertical,
+                other => other,
+            },
             BoardSymmetry::Rotate180 | BoardSymmetry::ColorInvertHorizontal => match dir {
                 Direction::Up => Direction::Down,
                 Direction::Down => Direction::Up,
@@ -1068,17 +1141,19 @@ impl BoardSymmetry {
         }
     }
 
-    /// Transform a move pattern under this symmetry
+    /// Transform a move pattern under geometric or color symmetry
     pub fn transform_move_pattern(
         &self,
         pat: &super::query::MovePattern,
     ) -> super::query::MovePattern {
         let mut new_pat = pat.clone();
-        if matches!(
-            self,
-            BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal
-        ) {
-            new_pat.color = pat.color.map(|c| c.other());
+        if let Some(color) = pat.color {
+            new_pat.color = match self {
+                BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal => {
+                    Some(color.other())
+                }
+                _ => Some(color),
+            };
         }
         if let Some(from_sq) = pat.from {
             new_pat.from = Some(self.transform_square(from_sq));
@@ -1118,6 +1193,461 @@ impl BoardSymmetry {
             );
         }
         new_pat
+    }
+}
+
+/// Shift a square by (df, dr). Returns None if square falls outside 8x8 board.
+pub fn shift_square(sq: Square, df: i8, dr: i8) -> Option<Square> {
+    let f = sq.file() as i8 + df;
+    let r = sq.rank() as i8 + dr;
+    if (0..8).contains(&f) && (0..8).contains(&r) {
+        Some(Square::from_coords(
+            File::new(f as u32),
+            Rank::new(r as u32),
+        ))
+    } else {
+        None
+    }
+}
+
+/// Shift a piece placement across files and/or ranks.
+pub fn shift_piece_placement(placement: &str, df: i8, dr: i8) -> Option<String> {
+    if df == 0 && dr == 0 {
+        return Some(placement.to_string());
+    }
+    let ranks: Vec<&str> = placement.split('/').collect();
+    if ranks.len() != 8 {
+        return None;
+    }
+
+    let mut new_grid: [[Option<char>; 8]; 8] = [[None; 8]; 8];
+    for (r_idx, rank_str) in ranks.iter().enumerate() {
+        let rank = 7 - r_idx;
+        let mut file = 0;
+        for ch in rank_str.chars() {
+            if let Some(digit) = ch.to_digit(10) {
+                file += digit as usize;
+            } else if file < 8 {
+                let sq = Square::from_coords(File::new(file as u32), Rank::new(rank as u32));
+                if let Some(shifted_sq) = shift_square(sq, df, dr) {
+                    new_grid[shifted_sq.rank() as usize][shifted_sq.file() as usize] = Some(ch);
+                } else {
+                    // Piece falls off board
+                    return None;
+                }
+                file += 1;
+            } else {
+                return None;
+            }
+        }
+    }
+
+    let mut transformed_ranks = Vec::with_capacity(8);
+    for r_idx in 0..8 {
+        let rank = 7 - r_idx;
+        let mut rank_str = String::new();
+        let mut empty_count = 0;
+        for file in 0..8 {
+            if let Some(ch) = new_grid[rank][file] {
+                if empty_count > 0 {
+                    rank_str.push_str(&empty_count.to_string());
+                    empty_count = 0;
+                }
+                rank_str.push(ch);
+            } else {
+                empty_count += 1;
+            }
+        }
+        if empty_count > 0 {
+            rank_str.push_str(&empty_count.to_string());
+        }
+        transformed_ranks.push(rank_str);
+    }
+
+    Some(transformed_ranks.join("/"))
+}
+
+/// Shift a FEN string by (df, dr).
+pub fn shift_fen(fen_str: &str, df: i8, dr: i8) -> Option<String> {
+    let parts: Vec<&str> = fen_str.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let shifted_placement = shift_piece_placement(parts[0], df, dr)?;
+    if parts.len() == 1 {
+        return Some(shifted_placement);
+    }
+    let rest = parts[1..].join(" ");
+    Some(format!("{shifted_placement} {rest}"))
+}
+
+/// Shift a MovePattern by (df, dr).
+pub fn shift_move_pattern(
+    m: &super::query::MovePattern,
+    df: i8,
+    dr: i8,
+) -> Option<super::query::MovePattern> {
+    let mut new_m = m.clone();
+    if let Some(from) = m.from {
+        new_m.from = Some(shift_square(from, df, dr)?);
+    }
+    if let Some(to) = m.to {
+        new_m.to = Some(shift_square(to, df, dr)?);
+    }
+    if let Some(ref sqs) = m.from_squares {
+        let mut shifted = Vec::with_capacity(sqs.len());
+        for &sq in sqs {
+            shifted.push(shift_square(sq, df, dr)?);
+        }
+        new_m.from_squares = Some(shifted);
+    }
+    if let Some(ref sqs) = m.to_squares {
+        let mut shifted = Vec::with_capacity(sqs.len());
+        for &sq in sqs {
+            shifted.push(shift_square(sq, df, dr)?);
+        }
+        new_m.to_squares = Some(shifted);
+    }
+    Some(new_m)
+}
+
+/// Shift a PositionPattern by (df, dr).
+pub fn shift_position_pattern(pat: &PositionPattern, df: i8, dr: i8) -> Option<PositionPattern> {
+    match pat {
+        PositionPattern::ExactFen(fen) => shift_fen(fen, df, dr).map(PositionPattern::ExactFen),
+        PositionPattern::PiecePlacement(placement) => {
+            shift_piece_placement(placement, df, dr).map(PositionPattern::PiecePlacement)
+        }
+        PositionPattern::Squares(map) => {
+            let mut new_map = HashMap::new();
+            for (&sq, content) in map {
+                let shifted_sq = shift_square(sq, df, dr)?;
+                new_map.insert(shifted_sq, content.clone());
+            }
+            Some(PositionPattern::Squares(new_map))
+        }
+        PositionPattern::PieceCount {
+            content,
+            squares,
+            op,
+            count,
+        } => {
+            let new_squares = if let Some(sqs) = squares {
+                let mut shifted_sqs = Vec::with_capacity(sqs.len());
+                for &sq in sqs {
+                    shifted_sqs.push(shift_square(sq, df, dr)?);
+                }
+                Some(shifted_sqs)
+            } else {
+                None
+            };
+            Some(PositionPattern::PieceCount {
+                content: content.clone(),
+                squares: new_squares,
+                op: *op,
+                count: *count,
+            })
+        }
+        PositionPattern::MultiSquare { content, squares } => {
+            let mut shifted_sqs = Vec::with_capacity(squares.len());
+            for &sq in squares {
+                shifted_sqs.push(shift_square(sq, df, dr)?);
+            }
+            Some(PositionPattern::MultiSquare {
+                content: content.clone(),
+                squares: shifted_sqs,
+            })
+        }
+        PositionPattern::Attack { from, to } => Some(PositionPattern::Attack {
+            from: shift_square(*from, df, dr)?,
+            to: shift_square(*to, df, dr)?,
+        }),
+        PositionPattern::IsAttacked { square, by_color } => Some(PositionPattern::IsAttacked {
+            square: shift_square(*square, df, dr)?,
+            by_color: *by_color,
+        }),
+        PositionPattern::VariableSquareFilter { var_name, squares } => {
+            let mut shifted_sqs = Vec::with_capacity(squares.len());
+            for &sq in squares {
+                shifted_sqs.push(shift_square(sq, df, dr)?);
+            }
+            Some(PositionPattern::VariableSquareFilter {
+                var_name: var_name.clone(),
+                squares: shifted_sqs,
+            })
+        }
+        other => Some(other.clone()),
+    }
+}
+
+/// Shift a SquareSetExpr by (df, dr).
+pub fn shift_square_set_expr(expr: &SquareSetExpr, df: i8, dr: i8) -> Option<SquareSetExpr> {
+    match expr {
+        SquareSetExpr::Squares(bb) => {
+            let mut new_bb = Bitboard::EMPTY;
+            for sq in *bb {
+                if let Some(shifted) = shift_square(sq, df, dr) {
+                    new_bb.add(shifted);
+                }
+            }
+            Some(SquareSetExpr::Squares(new_bb))
+        }
+        SquareSetExpr::Intersection(left, right) => Some(SquareSetExpr::Intersection(
+            Box::new(shift_square_set_expr(left, df, dr)?),
+            Box::new(shift_square_set_expr(right, df, dr)?),
+        )),
+        SquareSetExpr::Union(left, right) => Some(SquareSetExpr::Union(
+            Box::new(shift_square_set_expr(left, df, dr)?),
+            Box::new(shift_square_set_expr(right, df, dr)?),
+        )),
+        SquareSetExpr::Difference(left, right) => Some(SquareSetExpr::Difference(
+            Box::new(shift_square_set_expr(left, df, dr)?),
+            Box::new(shift_square_set_expr(right, df, dr)?),
+        )),
+        SquareSetExpr::Complement(inner) => Some(SquareSetExpr::Complement(Box::new(
+            shift_square_set_expr(inner, df, dr)?,
+        ))),
+        SquareSetExpr::Attacks { attacker, target } => Some(SquareSetExpr::Attacks {
+            attacker: Box::new(shift_square_set_expr(attacker, df, dr)?),
+            target: Box::new(shift_square_set_expr(target, df, dr)?),
+        }),
+        SquareSetExpr::Attackers { attacker, target } => Some(SquareSetExpr::Attackers {
+            attacker: Box::new(shift_square_set_expr(attacker, df, dr)?),
+            target: Box::new(shift_square_set_expr(target, df, dr)?),
+        }),
+        SquareSetExpr::Ray { direction, origin } => Some(SquareSetExpr::Ray {
+            direction: *direction,
+            origin: Box::new(shift_square_set_expr(origin, df, dr)?),
+        }),
+        SquareSetExpr::Between { from, to } => Some(SquareSetExpr::Between {
+            from: Box::new(shift_square_set_expr(from, df, dr)?),
+            to: Box::new(shift_square_set_expr(to, df, dr)?),
+        }),
+        SquareSetExpr::Shift {
+            direction,
+            min_dist,
+            max_dist,
+            expr,
+        } => Some(SquareSetExpr::Shift {
+            direction: *direction,
+            min_dist: *min_dist,
+            max_dist: *max_dist,
+            expr: Box::new(shift_square_set_expr(expr, df, dr)?),
+        }),
+        other => Some(other.clone()),
+    }
+}
+
+/// Shift a SetPredicate by (df, dr).
+pub fn shift_set_predicate(pred: &SetPredicate, df: i8, dr: i8) -> Option<SetPredicate> {
+    match pred {
+        SetPredicate::NonEmpty(expr) => {
+            shift_square_set_expr(expr, df, dr).map(SetPredicate::NonEmpty)
+        }
+        SetPredicate::CountComparison { expr, op, count } => shift_square_set_expr(expr, df, dr)
+            .map(|e| SetPredicate::CountComparison {
+                expr: e,
+                op: *op,
+                count: *count,
+            }),
+        SetPredicate::SetComparison { left, op, right } => {
+            let s_left = shift_square_set_expr(left, df, dr)?;
+            let s_right = shift_square_set_expr(right, df, dr)?;
+            Some(SetPredicate::SetComparison {
+                left: s_left,
+                op: *op,
+                right: s_right,
+            })
+        }
+    }
+}
+
+/// Shift a TacticalPredicate by (df, dr).
+pub fn shift_tactical_predicate(
+    pred: &TacticalPredicate,
+    df: i8,
+    dr: i8,
+) -> Option<TacticalPredicate> {
+    match pred {
+        TacticalPredicate::Outpost { piece, square } => {
+            let shifted_sq = if let Some(sq) = square {
+                Some(shift_square(*sq, df, dr)?)
+            } else {
+                None
+            };
+            Some(TacticalPredicate::Outpost {
+                piece: *piece,
+                square: shifted_sq,
+            })
+        }
+        TacticalPredicate::Distance {
+            sq1,
+            sq2,
+            op,
+            distance,
+        } => {
+            let shift_sop = |sop: &SquareOrPiece| -> Option<SquareOrPiece> {
+                match sop {
+                    SquareOrPiece::Square(sq) => {
+                        shift_square(*sq, df, dr).map(SquareOrPiece::Square)
+                    }
+                    other => Some(other.clone()),
+                }
+            };
+            Some(TacticalPredicate::Distance {
+                sq1: shift_sop(sq1)?,
+                sq2: shift_sop(sq2)?,
+                op: *op,
+                distance: *distance,
+            })
+        }
+        TacticalPredicate::Attacks { attacker, target } => {
+            let shift_sop = |sop: &SquareOrPiece| -> Option<SquareOrPiece> {
+                match sop {
+                    SquareOrPiece::Square(sq) => {
+                        shift_square(*sq, df, dr).map(SquareOrPiece::Square)
+                    }
+                    other => Some(other.clone()),
+                }
+            };
+            Some(TacticalPredicate::Attacks {
+                attacker: shift_sop(attacker)?,
+                target: shift_sop(target)?,
+            })
+        }
+        other => Some(other.clone()),
+    }
+}
+
+/// Shift an entire SearchQuery across files and/or ranks.
+pub fn shift_query(query: &SearchQuery, df: i8, dr: i8) -> Option<SearchQuery> {
+    if df == 0 && dr == 0 {
+        return Some(query.clone());
+    }
+    match query {
+        SearchQuery::Position(pos) => {
+            shift_position_pattern(pos, df, dr).map(SearchQuery::Position)
+        }
+        SearchQuery::Move(m) => shift_move_pattern(m, df, dr).map(SearchQuery::Move),
+        SearchQuery::Path(path) => {
+            let mut new_moves = Vec::with_capacity(path.moves.len());
+            for m in &path.moves {
+                new_moves.push(shift_move_pattern(m, df, dr)?);
+            }
+            let mut new_steps = Vec::with_capacity(path.steps.len());
+            for s in &path.steps {
+                match s {
+                    super::query::PathStep::Move {
+                        pattern,
+                        repeat_min,
+                        repeat_max,
+                    } => {
+                        new_steps.push(super::query::PathStep::Move {
+                            pattern: shift_move_pattern(pattern, df, dr)?,
+                            repeat_min: *repeat_min,
+                            repeat_max: *repeat_max,
+                        });
+                    }
+                    super::query::PathStep::Gap { min, max } => {
+                        new_steps.push(super::query::PathStep::Gap {
+                            min: *min,
+                            max: *max,
+                        });
+                    }
+                }
+            }
+            let mut new_path = path.clone();
+            new_path.moves = new_moves;
+            new_path.steps = new_steps;
+            Some(SearchQuery::Path(new_path))
+        }
+        SearchQuery::SquareSet(set_pred) => {
+            shift_set_predicate(set_pred, df, dr).map(SearchQuery::SquareSet)
+        }
+        SearchQuery::Tactical(tac) => {
+            shift_tactical_predicate(tac, df, dr).map(SearchQuery::Tactical)
+        }
+        SearchQuery::And(subs) => {
+            let mut shifted_subs = Vec::with_capacity(subs.len());
+            for s in subs {
+                shifted_subs.push(shift_query(s, df, dr)?);
+            }
+            Some(SearchQuery::And(shifted_subs))
+        }
+        SearchQuery::Or(subs) => {
+            let mut shifted_subs = Vec::new();
+            for s in subs {
+                if let Some(shifted) = shift_query(s, df, dr) {
+                    shifted_subs.push(shifted);
+                }
+            }
+            if shifted_subs.is_empty() {
+                None
+            } else if shifted_subs.len() == 1 {
+                Some(shifted_subs.pop().unwrap())
+            } else {
+                Some(SearchQuery::Or(shifted_subs))
+            }
+        }
+        SearchQuery::Not(sub) => shift_query(sub, df, dr).map(|s| SearchQuery::Not(Box::new(s))),
+        SearchQuery::Parent(sub) => {
+            shift_query(sub, df, dr).map(|s| SearchQuery::Parent(Box::new(s)))
+        }
+        SearchQuery::Child(sub) => {
+            shift_query(sub, df, dr).map(|s| SearchQuery::Child(Box::new(s)))
+        }
+        SearchQuery::Play {
+            move_pattern,
+            outcome_query,
+        } => {
+            let shifted_move = shift_move_pattern(move_pattern, df, dr)?;
+            let shifted_outcome = shift_query(outcome_query, df, dr)?;
+            Some(SearchQuery::Play {
+                move_pattern: shifted_move,
+                outcome_query: Box::new(shifted_outcome),
+            })
+        }
+        SearchQuery::PlyRange { range, query } => {
+            shift_query(query, df, dr).map(|q| SearchQuery::PlyRange {
+                range: range.clone(),
+                query: Box::new(q),
+            })
+        }
+        SearchQuery::Occurrences { min, max, query } => {
+            shift_query(query, df, dr).map(|q| SearchQuery::Occurrences {
+                min: *min,
+                max: *max,
+                query: Box::new(q),
+            })
+        }
+        SearchQuery::Symmetric { query, symmetry } => {
+            shift_query(query, df, dr).map(|q| SearchQuery::Symmetric {
+                query: Box::new(q),
+                symmetry: *symmetry,
+            })
+        }
+        SearchQuery::Shift { mode, query } => {
+            shift_query(query, df, dr).map(|q| SearchQuery::Shift {
+                mode: *mode,
+                query: Box::new(q),
+            })
+        }
+        SearchQuery::Initial(query) => {
+            shift_query(query, df, dr).map(|q| SearchQuery::Initial(Box::new(q)))
+        }
+        SearchQuery::Terminal(query) => {
+            shift_query(query, df, dr).map(|q| SearchQuery::Terminal(Box::new(q)))
+        }
+        SearchQuery::VariableBinding {
+            var_name,
+            domain,
+            query,
+        } => shift_query(query, df, dr).map(|q| SearchQuery::VariableBinding {
+            var_name: var_name.clone(),
+            domain: domain.clone(),
+            query: Box::new(q),
+        }),
+        other => Some(other.clone()),
     }
 }
 

@@ -1049,4 +1049,58 @@ impl<'a> QueryParser<'a> {
         }
         false
     }
+
+    pub(crate) fn has_square_set_operator_ahead(&self) -> bool {
+        let mut idx = 0;
+        let mut paren_depth = 0;
+        let mut bracket_depth = 0;
+        let mut brace_depth = 0;
+
+        while let Some((_, tok)) = self.tokens.get(self.pos + idx) {
+            match tok {
+                Token::LParen => paren_depth += 1,
+                Token::RParen => {
+                    if paren_depth == 0 {
+                        break;
+                    }
+                    paren_depth -= 1;
+                }
+                Token::LBracket => bracket_depth += 1,
+                Token::RBracket => {
+                    if bracket_depth == 0 {
+                        break;
+                    }
+                    bracket_depth -= 1;
+                }
+                Token::LBrace => brace_depth += 1,
+                Token::RBrace => {
+                    if brace_depth == 0 {
+                        break;
+                    }
+                    brace_depth -= 1;
+                }
+                Token::Pipe | Token::Ampersand | Token::Backslash
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                {
+                    return true;
+                }
+                Token::Ident(ref s)
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                {
+                    let s_low = s.to_lowercase();
+                    if s_low == "and"
+                        || s_low == "or"
+                        || s_low == "xor"
+                        || s_low == "leads_to"
+                        || s_low == "leadsto"
+                    {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            idx += 1;
+        }
+        false
+    }
 }

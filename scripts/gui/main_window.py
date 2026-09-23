@@ -160,18 +160,14 @@ class MainWindow(QMainWindow):
         if self.client.is_running():
             self.client.send_request("save")
 
-    def import_pgn(self, pgn_path: str, scid_exe: Optional[str] = None):
+    def import_pgn(self, pgn_path: str):
         if not self.client.is_running():
             QMessageBox.warning(self, "Backend Offline", "Start backend and open a database first.")
             return
 
         file_size_mb = os.path.getsize(pgn_path) / (1024 * 1024)
         params = {"pgn_path": pgn_path}
-        if scid_exe:
-            params["scid_exe"] = scid_exe
-            self.status_bar.showMessage(f"Importing {os.path.basename(pgn_path)} with SCID C++ engine (~5s)...")
-        else:
-            self.status_bar.showMessage(f"Importing {os.path.basename(pgn_path)} ({file_size_mb:.1f} MB)...")
+        self.status_bar.showMessage(f"Importing {os.path.basename(pgn_path)} ({file_size_mb:.1f} MB)...")
 
         self.import_progress_dialog = QProgressDialog(
             f"Importing {os.path.basename(pgn_path)}...\nStarting ingest engine...",

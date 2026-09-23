@@ -375,6 +375,13 @@ impl<'a> QueryParser<'a> {
 
         // 4. Bracketed piece lists without 'piece' keyword: e.g. `[B, b] >= 1`, `[Q, R] on [d1, e1]`
         if let Some(Token::LBracket) = self.peek() {
+            if self.has_square_set_operator_ahead() {
+                let saved_pos = self.pos;
+                if let Ok(sq) = self.parse_square_set_query() {
+                    return Ok(sq);
+                }
+                self.pos = saved_pos;
+            }
             return self.parse_piece_on_square();
         }
 
@@ -464,18 +471,46 @@ impl<'a> QueryParser<'a> {
                     return self.parse_piece_on_square();
                 }
                 "white_pieces" | "white_piece" => {
+                    if self.has_square_set_operator_ahead() {
+                        let saved_pos = self.pos;
+                        if let Ok(sq) = self.parse_square_set_query() {
+                            return Ok(sq);
+                        }
+                        self.pos = saved_pos;
+                    }
                     self.advance();
                     return self.parse_piece_count_or_squares(SquareContent::Color(Color::White));
                 }
                 "black_pieces" | "black_piece" => {
+                    if self.has_square_set_operator_ahead() {
+                        let saved_pos = self.pos;
+                        if let Ok(sq) = self.parse_square_set_query() {
+                            return Ok(sq);
+                        }
+                        self.pos = saved_pos;
+                    }
                     self.advance();
                     return self.parse_piece_count_or_squares(SquareContent::Color(Color::Black));
                 }
                 "occupied" | "any_piece" => {
+                    if self.has_square_set_operator_ahead() {
+                        let saved_pos = self.pos;
+                        if let Ok(sq) = self.parse_square_set_query() {
+                            return Ok(sq);
+                        }
+                        self.pos = saved_pos;
+                    }
                     self.advance();
                     return self.parse_piece_count_or_squares(SquareContent::Occupied);
                 }
                 "empty" => {
+                    if self.has_square_set_operator_ahead() {
+                        let saved_pos = self.pos;
+                        if let Ok(sq) = self.parse_square_set_query() {
+                            return Ok(sq);
+                        }
+                        self.pos = saved_pos;
+                    }
                     self.advance();
                     return self.parse_piece_count_or_squares(SquareContent::Empty);
                 }
@@ -890,19 +925,28 @@ impl<'a> QueryParser<'a> {
                     self.advance();
                     return self.parse_occurrences_expr();
                 }
-                "flipcolor" | "flip_color" | "fliphorizontal" | "flip_horizontal"
-                | "flipvertical" | "flip_vertical" | "rotate90" | "rotate_90" | "rot90"
-                | "rotate180" | "rotate_180" | "rot180" | "rotate270" | "rotate_270" | "rot270"
-                | "rotate" | "rot" | "all_rotations" => {
+                "flipcolor" | "flip_color" | "invertcolor" | "invert_color" | "fliphorizontal"
+                | "flip_horizontal" | "flip_h" | "flipvertical" | "flip_vertical" | "flip_v"
+                | "flipmaindiagonal" | "flip_main_diagonal" | "flip_diag" | "flipdiagonal"
+                | "flip_diagonal" | "flipantidiagonal" | "flip_anti_diagonal" | "flip_antidiag"
+                | "rotate90" | "rotate_90" | "rot90" | "rotate180" | "rotate_180" | "rot180"
+                | "rotate270" | "rotate_270" | "rot270" | "rotate" | "rot" | "all_rotations" => {
                     let sym = match key.as_str() {
-                        "flipcolor" | "flip_color" => {
+                        "flipcolor" | "flip_color" | "invertcolor" | "invert_color" => {
                             crate::search::transform::BoardSymmetry::ColorInvert
                         }
-                        "fliphorizontal" | "flip_horizontal" => {
+                        "fliphorizontal" | "flip_horizontal" | "flip_h" => {
                             crate::search::transform::BoardSymmetry::HorizontalMirror
                         }
-                        "flipvertical" | "flip_vertical" => {
+                        "flipvertical" | "flip_vertical" | "flip_v" => {
                             crate::search::transform::BoardSymmetry::VerticalMirror
+                        }
+                        "flipmaindiagonal" | "flip_main_diagonal" | "flip_diag"
+                        | "flipdiagonal" | "flip_diagonal" => {
+                            crate::search::transform::BoardSymmetry::MainDiagonal
+                        }
+                        "flipantidiagonal" | "flip_anti_diagonal" | "flip_antidiag" => {
+                            crate::search::transform::BoardSymmetry::AntiDiagonal
                         }
                         "rotate90" | "rotate_90" | "rot90" | "rotate" | "rot" | "all_rotations" => {
                             crate::search::transform::BoardSymmetry::AllRotations
@@ -940,51 +984,232 @@ impl<'a> QueryParser<'a> {
                 }
                 "symmetry" | "flip" => {
                     self.advance();
-                    let _ = self.parse_comparison_op();
-                    let mode_str = self.expect_ident()?;
-                    let sym = match mode_str.to_lowercase().as_str() {
-                        "horizontal" | "h" | "lr" => {
-                            crate::search::transform::BoardSymmetry::HorizontalMirror
-                        }
-                        "vertical" | "v" | "ud" => {
-                            crate::search::transform::BoardSymmetry::VerticalMirror
-                        }
-                        "rotate" | "rot" | "180" => {
-                            crate::search::transform::BoardSymmetry::Rotate180
-                        }
-                        "color" | "c" => crate::search::transform::BoardSymmetry::ColorInvert,
-                        "color_horizontal" => {
-                            crate::search::transform::BoardSymmetry::ColorInvertHorizontal
-                        }
-                        "spatial" => crate::search::transform::BoardSymmetry::AnySpatialSymmetry,
-                        "any" | "all" => crate::search::transform::BoardSymmetry::AnyTotalSymmetry,
-                        _ => {
-                            return Err(ParseError::new(
-                                format!("Unknown symmetry mode: {}", mode_str),
-                                pos,
-                            ));
-                        }
+                    let mut sym = if key == "flip" {
+                        crate::search::transform::BoardSymmetry::HorizontalMirror
+                    } else {
+                        crate::search::transform::BoardSymmetry::AnySpatialSymmetry
                     };
-                    if let Some(Token::LParen) | Some(Token::LBrace) = self.peek() {
-                        let is_brace = matches!(self.peek(), Some(Token::LBrace));
+
+                    if matches!(self.peek(), Some(Token::Colon) | Some(Token::Eq)) {
                         self.advance();
-                        let sub_query = self.parse_or_expr()?;
-                        if is_brace {
-                            if let Some(Token::RBrace) = self.peek() {
-                                self.advance();
+                        let mode_str = self.expect_ident()?;
+                        sym = match mode_str.to_lowercase().as_str() {
+                            "horizontal" | "h" | "lr" => {
+                                crate::search::transform::BoardSymmetry::HorizontalMirror
                             }
-                        } else if let Some(Token::RParen) = self.peek() {
+                            "vertical" | "v" | "ud" => {
+                                crate::search::transform::BoardSymmetry::VerticalMirror
+                            }
+                            "maindiagonal" | "main_diagonal" | "diagonal" | "diag" => {
+                                crate::search::transform::BoardSymmetry::MainDiagonal
+                            }
+                            "antidiagonal" | "anti_diagonal" | "antidiag" => {
+                                crate::search::transform::BoardSymmetry::AntiDiagonal
+                            }
+                            "rotate" | "rot" | "180" | "rotate180" => {
+                                crate::search::transform::BoardSymmetry::Rotate180
+                            }
+                            "90" | "rotate90" => crate::search::transform::BoardSymmetry::Rotate90,
+                            "270" | "rotate270" => {
+                                crate::search::transform::BoardSymmetry::Rotate270
+                            }
+                            "color" | "c" => crate::search::transform::BoardSymmetry::ColorInvert,
+                            "color_horizontal" => {
+                                crate::search::transform::BoardSymmetry::ColorInvertHorizontal
+                            }
+                            "spatial" => {
+                                crate::search::transform::BoardSymmetry::AnySpatialSymmetry
+                            }
+                            "any" | "all" => {
+                                crate::search::transform::BoardSymmetry::AnyTotalSymmetry
+                            }
+                            _ => {
+                                return Err(ParseError::new(
+                                    format!("Unknown symmetry mode: {}", mode_str),
+                                    pos,
+                                ));
+                            }
+                        };
+                    } else if let Some(Token::Ident(ref id)) = self.peek() {
+                        let id_low = id.to_lowercase();
+                        let matched_sym = match id_low.as_str() {
+                            "horizontal" | "h" | "lr" => {
+                                Some(crate::search::transform::BoardSymmetry::HorizontalMirror)
+                            }
+                            "vertical" | "v" | "ud" => {
+                                Some(crate::search::transform::BoardSymmetry::VerticalMirror)
+                            }
+                            "maindiagonal" | "main_diagonal" | "diagonal" | "diag" => {
+                                Some(crate::search::transform::BoardSymmetry::MainDiagonal)
+                            }
+                            "antidiagonal" | "anti_diagonal" | "antidiag" => {
+                                Some(crate::search::transform::BoardSymmetry::AntiDiagonal)
+                            }
+                            "rotate" | "rot" | "180" | "rotate180" => {
+                                Some(crate::search::transform::BoardSymmetry::Rotate180)
+                            }
+                            "90" | "rotate90" => {
+                                Some(crate::search::transform::BoardSymmetry::Rotate90)
+                            }
+                            "270" | "rotate270" => {
+                                Some(crate::search::transform::BoardSymmetry::Rotate270)
+                            }
+                            "color" | "c" => {
+                                Some(crate::search::transform::BoardSymmetry::ColorInvert)
+                            }
+                            "color_horizontal" => {
+                                Some(crate::search::transform::BoardSymmetry::ColorInvertHorizontal)
+                            }
+                            "spatial" => {
+                                Some(crate::search::transform::BoardSymmetry::AnySpatialSymmetry)
+                            }
+                            "any" | "all" => {
+                                Some(crate::search::transform::BoardSymmetry::AnyTotalSymmetry)
+                            }
+                            _ => None,
+                        };
+                        if let Some(s) = matched_sym {
+                            self.advance();
+                            sym = s;
+                        }
+                    }
+
+                    let sub_query = if let Some(Token::LBrace) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RBrace) = self.peek() {
                             self.advance();
                         }
-                        return Ok(SearchQuery::Symmetric {
-                            query: Box::new(sub_query),
-                            symmetry: sym,
-                        });
+                        q
+                    } else if let Some(Token::LParen) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RParen) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else {
+                        self.parse_primary_expr()?
+                    };
+                    return Ok(SearchQuery::Symmetric {
+                        query: Box::new(sub_query),
+                        symmetry: sym,
+                    });
+                }
+                "shifthorizontal" | "shift_horizontal" | "shift_h" | "shiftvertical"
+                | "shift_vertical" | "shift_v" | "shift" | "shift_all" | "shiftall" => {
+                    self.advance();
+                    let mut mode = match key.as_str() {
+                        "shifthorizontal" | "shift_horizontal" | "shift_h" => {
+                            crate::search::transform::ShiftMode::Horizontal
+                        }
+                        "shiftvertical" | "shift_vertical" | "shift_v" => {
+                            crate::search::transform::ShiftMode::Vertical
+                        }
+                        _ => crate::search::transform::ShiftMode::All,
+                    };
+
+                    if matches!(self.peek(), Some(Token::Colon) | Some(Token::Eq)) {
+                        self.advance();
+                        let mode_str = self.expect_ident()?;
+                        mode = match mode_str.to_lowercase().as_str() {
+                            "horizontal" | "h" | "files" => {
+                                crate::search::transform::ShiftMode::Horizontal
+                            }
+                            "vertical" | "v" | "ranks" => {
+                                crate::search::transform::ShiftMode::Vertical
+                            }
+                            "all" | "any" | "both" => crate::search::transform::ShiftMode::All,
+                            _ => {
+                                return Err(ParseError::new(
+                                    format!("Unknown shift mode: {}", mode_str),
+                                    pos,
+                                ));
+                            }
+                        };
+                    } else if let Some(Token::Ident(ref id)) = self.peek() {
+                        let id_low = id.to_lowercase();
+                        let matched_mode = match id_low.as_str() {
+                            "horizontal" | "h" | "files" => {
+                                Some(crate::search::transform::ShiftMode::Horizontal)
+                            }
+                            "vertical" | "v" | "ranks" => {
+                                Some(crate::search::transform::ShiftMode::Vertical)
+                            }
+                            "all" | "any" | "both" => {
+                                Some(crate::search::transform::ShiftMode::All)
+                            }
+                            _ => None,
+                        };
+                        if let Some(m) = matched_mode {
+                            self.advance();
+                            mode = m;
+                        }
                     }
-                    return Err(ParseError::new(
-                        "Expected '(' after symmetry".to_string(),
-                        pos,
-                    ));
+
+                    let sub_query = if let Some(Token::LBrace) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RBrace) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else if let Some(Token::LParen) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RParen) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else {
+                        self.parse_primary_expr()?
+                    };
+                    return Ok(SearchQuery::Shift {
+                        mode,
+                        query: Box::new(sub_query),
+                    });
+                }
+                "initial" => {
+                    self.advance();
+                    let sub_query = if let Some(Token::LBrace) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RBrace) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else if let Some(Token::LParen) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RParen) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else {
+                        self.parse_primary_expr()?
+                    };
+                    return Ok(SearchQuery::Initial(Box::new(sub_query)));
+                }
+                "terminal" => {
+                    self.advance();
+                    let sub_query = if let Some(Token::LBrace) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RBrace) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else if let Some(Token::LParen) = self.peek() {
+                        self.advance();
+                        let q = self.parse_or_expr()?;
+                        if let Some(Token::RParen) = self.peek() {
+                            self.advance();
+                        }
+                        q
+                    } else {
+                        self.parse_primary_expr()?
+                    };
+                    return Ok(SearchQuery::Terminal(Box::new(sub_query)));
                 }
                 "comment" | "comment_contains" => {
                     self.advance();
@@ -1245,6 +1470,13 @@ impl<'a> QueryParser<'a> {
                         return Ok(SearchQuery::Position(PositionPattern::Squares(map)));
                     }
                     if helpers::parse_piece_specifier(&ident_str).is_some() {
+                        if self.has_square_set_operator_ahead() {
+                            let saved_pos = self.pos;
+                            if let Ok(sq) = self.parse_square_set_query() {
+                                return Ok(sq);
+                            }
+                            self.pos = saved_pos;
+                        }
                         return self.parse_piece_on_square();
                     }
                 }

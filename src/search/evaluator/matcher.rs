@@ -301,6 +301,37 @@ pub fn evaluate_with_timeline_env(
                 matching_plies: child_plies,
             }
         }
+        SearchQuery::Initial(sub_query) => {
+            if positions.is_empty() {
+                return QueryMatchResult::default();
+            }
+            let sub_res = evaluate_with_timeline_env(sub_query, headers, positions, moves, env);
+            if sub_res.matching_plies.contains(&0) {
+                QueryMatchResult {
+                    is_match: true,
+                    match_count: 1,
+                    matching_plies: vec![0],
+                }
+            } else {
+                QueryMatchResult::default()
+            }
+        }
+        SearchQuery::Terminal(sub_query) => {
+            if positions.is_empty() {
+                return QueryMatchResult::default();
+            }
+            let terminal_ply = positions.len() - 1;
+            let sub_res = evaluate_with_timeline_env(sub_query, headers, positions, moves, env);
+            if sub_res.matching_plies.contains(&terminal_ply) {
+                QueryMatchResult {
+                    is_match: true,
+                    match_count: 1,
+                    matching_plies: vec![terminal_ply],
+                }
+            } else {
+                QueryMatchResult::default()
+            }
+        }
         SearchQuery::Play {
             move_pattern,
             outcome_query,
@@ -416,6 +447,7 @@ pub fn evaluate_with_timeline_env(
             let mut is_first_positional = true;
             let mut matching_plies_set: Vec<usize> = Vec::new();
             let mut has_positional = false;
+            let mut game_level_plies: Vec<usize> = Vec::new();
 
             for q in sub_queries {
                 let res = match q {
@@ -527,7 +559,9 @@ pub fn evaluate_with_timeline_env(
                         }
                     }
                     SearchQuery::Not(box_sub)
-                        if has_positional && !matching_plies_set.is_empty() && !box_sub.is_header_only() =>
+                        if has_positional
+                            && !matching_plies_set.is_empty()
+                            && !box_sub.is_header_only() =>
                     {
                         let mut not_matches = Vec::new();
                         for &pos_ply in &matching_plies_set {
@@ -541,14 +575,23 @@ pub fn evaluate_with_timeline_env(
                                                 &positions[pos_ply - 1],
                                                 &moves[pos_ply - 1],
                                             )
-                                    } else if move_pattern.is_legal || move_pattern.count_predicate.is_some() {
+                                    } else if move_pattern.is_legal
+                                        || move_pattern.count_predicate.is_some()
+                                    {
                                         if pos_ply < positions.len() {
                                             let legal_moves = positions[pos_ply].legal_moves();
                                             let matching_count = legal_moves
                                                 .iter()
-                                                .filter(|m| PathMatcher::match_legal_move(m, &positions[pos_ply], move_pattern))
+                                                .filter(|m| {
+                                                    PathMatcher::match_legal_move(
+                                                        m,
+                                                        &positions[pos_ply],
+                                                        move_pattern,
+                                                    )
+                                                })
                                                 .count();
-                                            if let Some((op, count)) = move_pattern.count_predicate {
+                                            if let Some((op, count)) = move_pattern.count_predicate
+                                            {
                                                 match op {
                                                     crate::search::query::ComparisonOp::Equal => matching_count == count,
                                                     crate::search::query::ComparisonOp::NotEqual => matching_count != count,
@@ -581,7 +624,12 @@ pub fn evaluate_with_timeline_env(
                                         } else {
                                             None
                                         };
-                                        matches_single_ply(box_sub, &positions[pos_ply], pos_ply, last_mv)
+                                        matches_single_ply(
+                                            box_sub,
+                                            &positions[pos_ply],
+                                            pos_ply,
+                                            last_mv,
+                                        )
                                     } else {
                                         false
                                     }
@@ -604,7 +652,8 @@ pub fn evaluate_with_timeline_env(
                 if !res.is_match {
                     return QueryMatchResult::default();
                 }
-                if q.is_header_only() {
+                if q.is_game_level_assertion() {
+                    game_level_plies.extend(res.matching_plies);
                     continue;
                 }
                 has_positional = true;
@@ -621,6 +670,10 @@ pub fn evaluate_with_timeline_env(
 
             let final_plies = if has_positional {
                 matching_plies_set
+            } else if !game_level_plies.is_empty() {
+                game_level_plies.sort_unstable();
+                game_level_plies.dedup();
+                game_level_plies
             } else {
                 vec![0]
             };
@@ -690,6 +743,49 @@ pub fn evaluate_with_timeline_env(
                 if res.is_match {
                     any_match = true;
                     all_plies.extend(res.matching_plies);
+                }
+            }
+
+            all_plies.sort_unstable();
+            all_plies.dedup();
+            QueryMatchResult {
+                is_match: any_match,
+                match_count: all_plies.len(),
+                matching_plies: all_plies,
+            }
+        }
+        SearchQuery::Shift {
+            mode,
+            query: sub_query,
+        } => {
+            let offsets: Vec<(i8, i8)> = match mode {
+                crate::search::transform::ShiftMode::Horizontal => {
+                    (-7..=7).map(|df| (df, 0)).collect()
+                }
+                crate::search::transform::ShiftMode::Vertical => {
+                    (-7..=7).map(|dr| (0, dr)).collect()
+                }
+                crate::search::transform::ShiftMode::All => {
+                    let mut v = Vec::with_capacity(15 * 15);
+                    for df in -7..=7 {
+                        for dr in -7..=7 {
+                            v.push((df, dr));
+                        }
+                    }
+                    v
+                }
+            };
+
+            let mut any_match = false;
+            let mut all_plies = Vec::new();
+
+            for (df, dr) in offsets {
+                if let Some(shifted) = crate::search::transform::shift_query(sub_query, df, dr) {
+                    let res = evaluate_with_timeline_env(&shifted, headers, positions, moves, env);
+                    if res.is_match {
+                        any_match = true;
+                        all_plies.extend(res.matching_plies);
+                    }
                 }
             }
 
@@ -872,6 +968,17 @@ pub fn matches_single_ply(
             // Standalone single-ply evaluation has no forward/future position available
             false
         }
+        SearchQuery::Initial(sub) => {
+            if ply == 0 {
+                matches_single_ply(sub, pos, ply, last_move)
+            } else {
+                false
+            }
+        }
+        SearchQuery::Terminal(_) => {
+            // Standalone single-ply without full game length cannot determine terminal position
+            false
+        }
         SearchQuery::Play {
             move_pattern,
             outcome_query,
@@ -948,6 +1055,33 @@ pub fn matches_single_ply(
             symmetries.into_iter().any(|sym| {
                 let transformed = sym.transform_query(sub);
                 matches_single_ply(&transformed, pos, ply, last_move)
+            })
+        }
+        SearchQuery::Shift { mode, query: sub } => {
+            let offsets: Vec<(i8, i8)> = match mode {
+                crate::search::transform::ShiftMode::Horizontal => {
+                    (-7..=7).map(|df| (df, 0)).collect()
+                }
+                crate::search::transform::ShiftMode::Vertical => {
+                    (-7..=7).map(|dr| (0, dr)).collect()
+                }
+                crate::search::transform::ShiftMode::All => {
+                    let mut v = Vec::with_capacity(15 * 15);
+                    for df in -7..=7 {
+                        for dr in -7..=7 {
+                            v.push((df, dr));
+                        }
+                    }
+                    v
+                }
+            };
+
+            offsets.into_iter().any(|(df, dr)| {
+                if let Some(shifted) = crate::search::transform::shift_query(sub, df, dr) {
+                    matches_single_ply(&shifted, pos, ply, last_move)
+                } else {
+                    false
+                }
             })
         }
         _ => false,

@@ -371,6 +371,8 @@ impl ToDsl for PositionPattern {
                 let sym_str = match symmetry {
                     BoardSymmetry::HorizontalMirror => "flip:horizontal",
                     BoardSymmetry::VerticalMirror => "flip:vertical",
+                    BoardSymmetry::MainDiagonal => "flip:maindiagonal",
+                    BoardSymmetry::AntiDiagonal => "flip:antidiagonal",
                     BoardSymmetry::Rotate180 => "flip:rotate180",
                     BoardSymmetry::Rotate90 => "rotate90",
                     BoardSymmetry::Rotate270 => "rotate270",
@@ -1055,6 +1057,8 @@ impl ToDsl for SearchQuery {
                 let sym_str = match symmetry {
                     BoardSymmetry::HorizontalMirror => "flip:horizontal",
                     BoardSymmetry::VerticalMirror => "flip:vertical",
+                    BoardSymmetry::MainDiagonal => "flip:maindiagonal",
+                    BoardSymmetry::AntiDiagonal => "flip:antidiagonal",
                     BoardSymmetry::Rotate180 => "flip:rotate180",
                     BoardSymmetry::Rotate90 => "rotate90",
                     BoardSymmetry::Rotate270 => "rotate270",
@@ -1066,6 +1070,14 @@ impl ToDsl for SearchQuery {
                     BoardSymmetry::Identity => "flip:none",
                 };
                 format!("{sym_str} {{ {} }}", query.to_dsl())
+            }
+            SearchQuery::Shift { mode, query } => {
+                let mode_str = match mode {
+                    crate::search::transform::ShiftMode::Horizontal => "shifthorizontal",
+                    crate::search::transform::ShiftMode::Vertical => "shiftvertical",
+                    crate::search::transform::ShiftMode::All => "shift",
+                };
+                format!("{mode_str} {{ {} }}", query.to_dsl())
             }
             SearchQuery::PlyRange { range, query } => {
                 format!(
@@ -1100,6 +1112,8 @@ impl ToDsl for SearchQuery {
                 };
                 format!("piece ${var_name} in {domain_str} {{ {} }}", query.to_dsl())
             }
+            SearchQuery::Initial(q) => format!("initial {{ {} }}", q.to_dsl()),
+            SearchQuery::Terminal(q) => format!("terminal {{ {} }}", q.to_dsl()),
         }
     }
 }
@@ -1145,7 +1159,10 @@ fn collect_fens(query: &SearchQuery, out: &mut Vec<String>) {
         | SearchQuery::PlyRange { query: sub, .. }
         | SearchQuery::Occurrences { query: sub, .. }
         | SearchQuery::VariableBinding { query: sub, .. }
-        | SearchQuery::Symmetric { query: sub, .. } => {
+        | SearchQuery::Symmetric { query: sub, .. }
+        | SearchQuery::Shift { query: sub, .. }
+        | SearchQuery::Initial(sub)
+        | SearchQuery::Terminal(sub) => {
             collect_fens(sub, out);
         }
         _ => {}
@@ -1160,7 +1177,10 @@ fn contains_symmetry(query: &SearchQuery) -> bool {
         SearchQuery::Not(sub)
         | SearchQuery::PlyRange { query: sub, .. }
         | SearchQuery::Occurrences { query: sub, .. }
-        | SearchQuery::VariableBinding { query: sub, .. } => contains_symmetry(sub),
+        | SearchQuery::VariableBinding { query: sub, .. }
+        | SearchQuery::Shift { query: sub, .. }
+        | SearchQuery::Initial(sub)
+        | SearchQuery::Terminal(sub) => contains_symmetry(sub),
         _ => false,
     }
 }
@@ -1171,6 +1191,8 @@ fn symmetry_label(sym: BoardSymmetry) -> &'static str {
         BoardSymmetry::ColorInvert => "Color Inverted (flipcolor)",
         BoardSymmetry::HorizontalMirror => "Horizontal Mirror (flip:horizontal)",
         BoardSymmetry::VerticalMirror => "Vertical Mirror (flip:vertical)",
+        BoardSymmetry::MainDiagonal => "Main Diagonal Reflection (flip:maindiagonal)",
+        BoardSymmetry::AntiDiagonal => "Anti-Diagonal Reflection (flip:antidiagonal)",
         BoardSymmetry::Rotate180 => "180° Board Rotation (flip:rotate180)",
         BoardSymmetry::Rotate90 => "90° Board Rotation (rotate90)",
         BoardSymmetry::Rotate270 => "270° Board Rotation (rotate270)",

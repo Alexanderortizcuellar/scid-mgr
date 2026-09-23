@@ -1569,7 +1569,51 @@ impl<'a> QueryParser<'a> {
             pos,
         ))
     }
+}
 
+fn is_move_clause_keyword(s: &str) -> bool {
+    let s_low = s.to_lowercase();
+    matches!(
+        s_low.as_str(),
+        "legal"
+            | "from"
+            | "to"
+            | "piece"
+            | "promote"
+            | "promotion"
+            | "promotes"
+            | "check"
+            | "is_check"
+            | "mate"
+            | "checkmate"
+            | "is_mate"
+            | "is_checkmate"
+            | "prev"
+            | "previous"
+            | "castle"
+            | "castling"
+            | "o-o"
+            | "o-o-o"
+            | "oo"
+            | "ooo"
+            | "short"
+            | "long"
+            | "en_passant"
+            | "ep"
+            | "count"
+            | "capture"
+            | "is_capture"
+            | "and"
+            | "or"
+            | "not"
+            | "leads_to"
+            | "leadsto"
+            | "wtm"
+            | "btm"
+    ) || super::helpers::parse_direction_ident(&s_low).is_some()
+}
+
+impl<'a> QueryParser<'a> {
     pub(crate) fn parse_move_filter(
         &mut self,
         is_legal_init: bool,
@@ -1658,37 +1702,7 @@ impl<'a> QueryParser<'a> {
                                 pattern.captured_pieces = pcs_opt;
                             } else if let Some(Token::Ident(ref s)) = self.peek() {
                                 let s_low = s.to_lowercase();
-                                let is_keyword = matches!(
-                                    s_low.as_str(),
-                                    "legal"
-                                        | "from"
-                                        | "to"
-                                        | "promote"
-                                        | "promotion"
-                                        | "promotes"
-                                        | "check"
-                                        | "is_check"
-                                        | "mate"
-                                        | "checkmate"
-                                        | "is_mate"
-                                        | "is_checkmate"
-                                        | "prev"
-                                        | "previous"
-                                        | "castle"
-                                        | "castling"
-                                        | "o-o"
-                                        | "o-o-o"
-                                        | "oo"
-                                        | "ooo"
-                                        | "short"
-                                        | "long"
-                                        | "en_passant"
-                                        | "ep"
-                                        | "count"
-                                        | "capture"
-                                        | "is_capture"
-                                ) || super::helpers::parse_direction_ident(&s_low)
-                                    .is_some();
+                                let is_keyword = is_move_clause_keyword(&s_low);
 
                                 if !is_keyword {
                                     if s_low == "piece" {
@@ -1726,27 +1740,58 @@ impl<'a> QueryParser<'a> {
                                     }
                                     if let Token::Ident(ref s) = inner_tok {
                                         let s_clone = s.clone();
+                                        let s_pos = self.current_pos();
                                         self.advance();
-                                        for ch in s_clone.chars() {
-                                            match ch.to_ascii_uppercase() {
-                                                'Q' => roles.push(shakmaty::Role::Queen),
-                                                'R' => roles.push(shakmaty::Role::Rook),
-                                                'B' => roles.push(shakmaty::Role::Bishop),
-                                                'N' => roles.push(shakmaty::Role::Knight),
-                                                _ => {}
+                                        let s_low = s_clone.to_lowercase();
+                                        match s_low.as_str() {
+                                            "queen" => roles.push(shakmaty::Role::Queen),
+                                            "rook" => roles.push(shakmaty::Role::Rook),
+                                            "bishop" => roles.push(shakmaty::Role::Bishop),
+                                            "knight" => roles.push(shakmaty::Role::Knight),
+                                            _ => {
+                                                for ch in s_clone.chars() {
+                                                    match ch.to_ascii_uppercase() {
+                                                        'Q' => roles.push(shakmaty::Role::Queen),
+                                                        'R' => roles.push(shakmaty::Role::Rook),
+                                                        'B' => roles.push(shakmaty::Role::Bishop),
+                                                        'N' => roles.push(shakmaty::Role::Knight),
+                                                        _ => {
+                                                            return Err(ParseError::new(
+                                                                format!(
+                                                                    "Invalid promotion piece '{}' in bracket set. Expected Q, R, B, N or role names.",
+                                                                    ch
+                                                                ),
+                                                                s_pos,
+                                                            ));
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     } else {
-                                        self.advance();
+                                        return Err(ParseError::new(
+                                            format!(
+                                                "Expected promotion piece or ']', found {:?}",
+                                                inner_tok
+                                            ),
+                                            self.current_pos(),
+                                        ));
                                     }
+                                }
+                                if roles.is_empty() {
+                                    return Err(ParseError::new(
+                                        "Empty promotion piece list '[]'".to_string(),
+                                        self.current_pos(),
+                                    ));
                                 }
                                 if roles.len() == 1 {
                                     pattern.promotion = Some(roles[0]);
-                                } else if !roles.is_empty() {
+                                } else {
                                     pattern.promotions = Some(roles);
                                 }
                             } else if let Some(Token::StringLit(ref s)) = self.peek() {
                                 let s_clone = s.clone();
+                                let s_pos = self.current_pos();
                                 self.advance();
                                 let mut roles = Vec::new();
                                 for ch in s_clone.chars() {
@@ -1755,34 +1800,31 @@ impl<'a> QueryParser<'a> {
                                         'R' => roles.push(shakmaty::Role::Rook),
                                         'B' => roles.push(shakmaty::Role::Bishop),
                                         'N' => roles.push(shakmaty::Role::Knight),
-                                        _ => {}
+                                        _ => {
+                                            return Err(ParseError::new(
+                                                format!(
+                                                    "Invalid promotion piece '{}' in string. Expected Q, R, B, N.",
+                                                    ch
+                                                ),
+                                                s_pos,
+                                            ));
+                                        }
                                     }
+                                }
+                                if roles.is_empty() {
+                                    return Err(ParseError::new(
+                                        "Empty promotion piece string".to_string(),
+                                        self.current_pos(),
+                                    ));
                                 }
                                 if roles.len() == 1 {
                                     pattern.promotion = Some(roles[0]);
-                                } else if !roles.is_empty() {
+                                } else {
                                     pattern.promotions = Some(roles);
                                 }
                             } else if let Some(Token::Ident(ref s)) = self.peek() {
                                 let s_low = s.to_lowercase();
-                                if matches!(
-                                    s_low.as_str(),
-                                    "count"
-                                        | "check"
-                                        | "is_check"
-                                        | "mate"
-                                        | "checkmate"
-                                        | "is_mate"
-                                        | "is_checkmate"
-                                        | "from"
-                                        | "to"
-                                        | "piece"
-                                        | "capture"
-                                        | "is_capture"
-                                        | "legal"
-                                        | "leads_to"
-                                        | "leadsto"
-                                ) {
+                                if is_move_clause_keyword(&s_low) {
                                     // bare promote -> any promotion
                                     pattern.promotions = Some(vec![
                                         shakmaty::Role::Queen,
@@ -1792,6 +1834,7 @@ impl<'a> QueryParser<'a> {
                                     ]);
                                 } else {
                                     let s_clone = s.clone();
+                                    let s_pos = self.current_pos();
                                     self.advance();
                                     let mut roles = Vec::new();
                                     match s_low.as_str() {
@@ -1806,7 +1849,15 @@ impl<'a> QueryParser<'a> {
                                                     'R' => roles.push(shakmaty::Role::Rook),
                                                     'B' => roles.push(shakmaty::Role::Bishop),
                                                     'N' => roles.push(shakmaty::Role::Knight),
-                                                    _ => {}
+                                                    _ => {
+                                                        return Err(ParseError::new(
+                                                            format!(
+                                                                "Invalid promotion piece '{}'. Expected Q, R, B, N or role names (e.g. Queen, Rook).",
+                                                                s_clone
+                                                            ),
+                                                            s_pos,
+                                                        ));
+                                                    }
                                                 }
                                             }
                                         }
@@ -1816,12 +1867,13 @@ impl<'a> QueryParser<'a> {
                                     } else if !roles.is_empty() {
                                         pattern.promotions = Some(roles);
                                     } else {
-                                        pattern.promotions = Some(vec![
-                                            shakmaty::Role::Queen,
-                                            shakmaty::Role::Rook,
-                                            shakmaty::Role::Bishop,
-                                            shakmaty::Role::Knight,
-                                        ]);
+                                        return Err(ParseError::new(
+                                            format!(
+                                                "Invalid promotion piece '{}'. Expected Q, R, B, N or role names (e.g. Queen, Rook).",
+                                                s_clone
+                                            ),
+                                            s_pos,
+                                        ));
                                     }
                                 }
                             } else {

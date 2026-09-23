@@ -190,75 +190,84 @@ impl<'a> QueryParser<'a> {
             }
         }
 
-        self.match_ident("on");
-        self.match_ident("in");
+        let has_on_in = self.match_ident("on") || self.match_ident("in");
+        let has_square_ahead = self.is_square_set_atom_start();
 
-        let squares = self.parse_square_set()?;
-        let final_squares: Vec<Square> = match square_filter {
-            Some(filter) => squares
-                .into_iter()
-                .filter(|sq| filter.contains(sq))
-                .collect(),
-            None => squares,
-        };
+        if has_on_in || has_square_ahead {
+            let squares = self.parse_square_set()?;
+            let final_squares: Vec<Square> = match square_filter {
+                Some(filter) => squares
+                    .into_iter()
+                    .filter(|sq| filter.contains(sq))
+                    .collect(),
+                None => squares,
+            };
 
-        let is_cmp_after_sq = matches!(
-            self.peek(),
-            Some(
-                Token::Eq
-                    | Token::Neq
-                    | Token::Gt
-                    | Token::Gte
-                    | Token::Lt
-                    | Token::Lte
-                    | Token::Colon
-            )
-        );
-        if self.match_ident("count") || is_cmp_after_sq {
-            let op = self.parse_comparison_op();
-            if let Some(Token::Number(n)) = self.peek() {
-                let count = *n as usize;
-                self.advance();
-                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
-                    content,
-                    squares: Some(final_squares),
-                    op,
-                    count,
-                }));
-            } else if self.is_square_set_atom_start() {
-                let right_expr = self.parse_square_set_expr()?;
-                let mut bb = Bitboard::EMPTY;
-                for sq in final_squares {
-                    bb.add(sq);
+            let is_cmp_after_sq = matches!(
+                self.peek(),
+                Some(
+                    Token::Eq
+                        | Token::Neq
+                        | Token::Gt
+                        | Token::Gte
+                        | Token::Lt
+                        | Token::Lte
+                        | Token::Colon
+                )
+            );
+            if self.match_ident("count") || is_cmp_after_sq {
+                let op = self.parse_comparison_op();
+                if let Some(Token::Number(n)) = self.peek() {
+                    let count = *n as usize;
+                    self.advance();
+                    return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                        content,
+                        squares: Some(final_squares),
+                        op,
+                        count,
+                    }));
+                } else if self.is_square_set_atom_start() {
+                    let right_expr = self.parse_square_set_expr()?;
+                    let mut bb = Bitboard::EMPTY;
+                    for sq in final_squares {
+                        bb.add(sq);
+                    }
+                    let left_expr = SquareSetExpr::Intersection(
+                        Box::new(SquareSetExpr::Piece(content)),
+                        Box::new(SquareSetExpr::Squares(bb)),
+                    );
+                    return Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
+                        left: left_expr,
+                        op,
+                        right: right_expr,
+                    }));
+                } else {
+                    let count = self.expect_number()? as usize;
+                    return Ok(SearchQuery::Position(PositionPattern::PieceCount {
+                        content,
+                        squares: Some(final_squares),
+                        op,
+                        count,
+                    }));
                 }
-                let left_expr = SquareSetExpr::Intersection(
-                    Box::new(SquareSetExpr::Piece(content)),
-                    Box::new(SquareSetExpr::Squares(bb)),
-                );
-                return Ok(SearchQuery::SquareSet(SetPredicate::SetComparison {
-                    left: left_expr,
-                    op,
-                    right: right_expr,
-                }));
-            } else {
-                let count = self.expect_number()? as usize;
-                return Ok(SearchQuery::Position(PositionPattern::PieceCount {
-                    content,
-                    squares: Some(final_squares),
-                    op,
-                    count,
-                }));
             }
-        }
 
-        if final_squares.len() == 1 {
-            let mut map = HashMap::new();
-            map.insert(final_squares[0], content);
-            Ok(SearchQuery::Position(PositionPattern::Squares(map)))
+            if final_squares.len() == 1 {
+                let mut map = HashMap::new();
+                map.insert(final_squares[0], content);
+                Ok(SearchQuery::Position(PositionPattern::Squares(map)))
+            } else {
+                Ok(SearchQuery::Position(PositionPattern::MultiSquare {
+                    content,
+                    squares: final_squares,
+                }))
+            }
         } else {
+            let all_sqs =
+                square_filter.unwrap_or_else(|| (!shakmaty::Bitboard::EMPTY).into_iter().collect());
             Ok(SearchQuery::Position(PositionPattern::MultiSquare {
                 content,
-                squares: final_squares,
+                squares: all_sqs,
             }))
         }
     }

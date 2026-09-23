@@ -64,16 +64,23 @@
 //! ```
 
 pub mod benchmark;
+pub mod cli;
 pub mod db;
 pub mod pgn_db;
-pub mod pgn_utils;
+pub mod pgn_io;
 pub mod position_index;
 pub mod position_search;
 pub mod search;
 pub mod server;
-pub mod test_suite;
 pub mod tree_index;
-pub mod zero_copy_ingest;
+
+// Backward-compatibility module aliases
+pub mod pgn_utils {
+    pub use crate::pgn_io::*;
+}
+pub mod zero_copy_ingest {
+    pub use crate::pgn_io::*;
+}
 
 // Public re-exports for ergonomic library consumption
 pub use benchmark::{BenchmarkItem, BenchmarkReport};

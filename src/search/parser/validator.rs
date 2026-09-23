@@ -43,7 +43,10 @@ pub fn validate_query_semantics(query: &SearchQuery, pos: usize) -> Result<(), P
             outcome_query: sub, ..
         }
         | SearchQuery::VariableBinding { query: sub, .. }
-        | SearchQuery::Symmetric { query: sub, .. } => {
+        | SearchQuery::Symmetric { query: sub, .. }
+        | SearchQuery::Shift { query: sub, .. }
+        | SearchQuery::Initial(sub)
+        | SearchQuery::Terminal(sub) => {
             validate_query_semantics(sub, pos)?;
         }
         _ => {}

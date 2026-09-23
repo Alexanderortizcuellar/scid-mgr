@@ -702,6 +702,11 @@ pub enum SearchQuery {
         query: Box<SearchQuery>,
         symmetry: super::transform::BoardSymmetry,
     },
+    /// Evaluates subquery translated across the board (files, ranks, or both)
+    Shift {
+        mode: super::transform::ShiftMode,
+        query: Box<SearchQuery>,
+    },
     /// Restricts position/move searches to a specific ply range (e.g. 1..20 for opening)
     PlyRange {
         range: Range<usize>,
@@ -725,6 +730,10 @@ pub enum SearchQuery {
     Parent(Box<SearchQuery>),
     /// Scopes evaluation to the child position (ply + 1) after the current position
     Child(Box<SearchQuery>),
+    /// Scopes evaluation to the initial position (ply 0) of each game
+    Initial(Box<SearchQuery>),
+    /// Scopes evaluation to the terminal (final) position of each game
+    Terminal(Box<SearchQuery>),
     /// Hypothetical move execution: simulates a matching legal/explicit move on a cloned board and evaluates outcome query
     Play {
         move_pattern: MovePattern,
@@ -758,8 +767,24 @@ impl SearchQuery {
             SearchQuery::Not(sub)
             | SearchQuery::Parent(sub)
             | SearchQuery::Child(sub)
+            | SearchQuery::Initial(sub)
+            | SearchQuery::Terminal(sub)
             | SearchQuery::PlyRange { query: sub, .. }
-            | SearchQuery::Occurrences { query: sub, .. } => sub.is_header_only(),
+            | SearchQuery::Occurrences { query: sub, .. }
+            | SearchQuery::Shift { query: sub, .. } => sub.is_header_only(),
+            _ => false,
+        }
+    }
+
+    pub fn is_game_level_assertion(&self) -> bool {
+        match self {
+            SearchQuery::Header(_) => true,
+            SearchQuery::Occurrences { .. } => true,
+            SearchQuery::Initial(_) => true,
+            SearchQuery::Terminal(_) => true,
+            SearchQuery::And(subs) => subs.iter().all(|s| s.is_game_level_assertion()),
+            SearchQuery::Or(subs) => subs.iter().all(|s| s.is_game_level_assertion()),
+            SearchQuery::Not(sub) => sub.is_game_level_assertion(),
             _ => false,
         }
     }
@@ -776,13 +801,17 @@ impl SearchQuery {
             SearchQuery::Not(sub)
             | SearchQuery::Parent(sub)
             | SearchQuery::Child(sub)
+            | SearchQuery::Initial(sub)
+            | SearchQuery::Terminal(sub)
             | SearchQuery::PlyRange { query: sub, .. }
             | SearchQuery::Occurrences { query: sub, .. }
             | SearchQuery::Play {
                 outcome_query: sub, ..
             }
             | SearchQuery::VariableBinding { query: sub, .. } => sub.requires_san_strings(),
-            SearchQuery::Symmetric { query: sub, .. } => sub.requires_san_strings(),
+            SearchQuery::Symmetric { query: sub, .. } | SearchQuery::Shift { query: sub, .. } => {
+                sub.requires_san_strings()
+            }
             _ => false,
         }
     }
@@ -796,13 +825,17 @@ impl SearchQuery {
             SearchQuery::Not(sub)
             | SearchQuery::Parent(sub)
             | SearchQuery::Child(sub)
+            | SearchQuery::Initial(sub)
+            | SearchQuery::Terminal(sub)
             | SearchQuery::PlyRange { query: sub, .. }
             | SearchQuery::Occurrences { query: sub, .. }
             | SearchQuery::Play {
                 outcome_query: sub, ..
             }
             | SearchQuery::VariableBinding { query: sub, .. } => sub.has_header_predicates(),
-            SearchQuery::Symmetric { query: sub, .. } => sub.has_header_predicates(),
+            SearchQuery::Symmetric { query: sub, .. } | SearchQuery::Shift { query: sub, .. } => {
+                sub.has_header_predicates()
+            }
             _ => false,
         }
     }

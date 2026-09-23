@@ -24,7 +24,7 @@ class DatabaseControlWidget(QWidget):
     start_backend_requested = pyqtSignal(str, str, int)  # bin_path, db_path, threads
     stop_backend_requested = pyqtSignal()
     create_database_requested = pyqtSignal(str, str)     # db_path, format
-    import_pgn_requested = pyqtSignal(str, object)      # pgn_path, scid_exe (Optional[str])
+    import_pgn_requested = pyqtSignal(str)               # pgn_path
     export_pgn_requested = pyqtSignal(str)               # output_path
     compact_requested = pyqtSignal()
     save_requested = pyqtSignal()
@@ -43,19 +43,20 @@ class DatabaseControlWidget(QWidget):
         self.auto_detect_defaults()
 
     def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 6, 8, 6)
+        main_layout.setSpacing(6)
 
-        # 1. Connection & Database Management Group
-        conn_group = QGroupBox("Backend Connection & SCID Database")
+        # Connection & Database Group
+        conn_group = QGroupBox("Engine Connection & Database")
         conn_layout = QGridLayout(conn_group)
-        conn_layout.setContentsMargins(8, 4, 8, 4)
-        conn_layout.setSpacing(4)
+        conn_layout.setContentsMargins(6, 6, 6, 6)
+        conn_layout.setSpacing(6)
 
-        # Binary Path
-        conn_layout.addWidget(QLabel("scid-mgr Binary:"), 0, 0)
+        # Release binary path
+        conn_layout.addWidget(QLabel("Release Binary:"), 0, 0)
         self.binary_input = QLineEdit()
+        self.binary_input.setPlaceholderText("Path to target/release/scid-mgr.exe...")
         conn_layout.addWidget(self.binary_input, 0, 1)
         btn_browse_bin = QPushButton("Browse...")
         btn_browse_bin.clicked.connect(self.browse_binary)
@@ -69,21 +70,6 @@ class DatabaseControlWidget(QWidget):
         btn_browse_db = QPushButton("Open DB / PGN...")
         btn_browse_db.clicked.connect(self.browse_db)
         conn_layout.addWidget(btn_browse_db, 1, 2)
-
-        # SCID C++ Engine (Optional Legacy)
-        conn_layout.addWidget(QLabel("SCID C++ (Optional):"), 2, 0)
-        scid_cpp_row = QHBoxLayout()
-        scid_cpp_row.setContentsMargins(0, 0, 0, 0)
-        self.scid_cpp_input = QLineEdit()
-        scid_cpp_row.addWidget(self.scid_cpp_input)
-        self.chk_use_scid_cpp = QCheckBox("Use external SCID C++ binary instead of Native Rust (~1.2s)")
-        self.chk_use_scid_cpp.setChecked(False)
-        self.chk_use_scid_cpp.setStyleSheet("color: #666;")
-        scid_cpp_row.addWidget(self.chk_use_scid_cpp)
-        conn_layout.addLayout(scid_cpp_row, 2, 1)
-        btn_browse_scid = QPushButton("Browse...")
-        btn_browse_scid.clicked.connect(self.browse_scid_cpp)
-        conn_layout.addWidget(btn_browse_scid, 2, 2)
 
         # Database action buttons row
         db_actions_layout = QHBoxLayout()
@@ -187,25 +173,6 @@ class DatabaseControlWidget(QWidget):
         
         self.binary_input.setText(os.path.abspath(release_bin))
 
-        # Auto-detect official SCID C++ engine
-        downloads_scid = r"C:\Users\ASUS\Downloads\scid-v5.2.202603_windows_x64\scid_windows_x64\bin\scid.exe"
-        scid_candidates = [
-            downloads_scid,
-            r"C:\Program Files\Scid\bin\scid.exe",
-            r"C:\Program Files (x86)\Scid\bin\scid.exe",
-        ]
-        for scid_cand in scid_candidates:
-            if os.path.exists(scid_cand):
-                self.scid_cpp_input.setText(scid_cand)
-                break
-
-    def browse_scid_cpp(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select Official SCID scid.exe Binary", "", "Executables (*.exe);;All Files (*)"
-        )
-        if path:
-            self.scid_cpp_input.setText(path)
-
     def browse_binary(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select scid-mgr Binary", "", "Executables (*.exe);;All Files (*)"
@@ -259,9 +226,7 @@ class DatabaseControlWidget(QWidget):
             return
         path, _ = QFileDialog.getOpenFileName(self, "Select PGN File to Import", "", "PGN Files (*.pgn);;All Files (*)")
         if path:
-            scid_exe = self.scid_cpp_input.text().strip()
-            use_scid = self.chk_use_scid_cpp.isChecked() and scid_exe and os.path.exists(scid_exe)
-            self.import_pgn_requested.emit(path, scid_exe if use_scid else None)
+            self.import_pgn_requested.emit(path)
 
     def on_export_pgn(self):
         if not self.client.is_running():
