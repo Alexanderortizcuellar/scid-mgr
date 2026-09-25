@@ -1164,4 +1164,27 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
         0,
         None
     ));
+
+    // 9. Comparing two compound sets: `[A] == [BRK]`
+    let exp_set_cmp = QueryParser::explain("[A] == [BRK]").expect("Failed to explain '[A] == [BRK]'");
+    assert_eq!(exp_set_cmp.canonical_dsl, "A == [BRK]");
+
+    let q_set_cmp = QueryParser::parse_str("[A] == [BRK]").expect("Failed to parse '[A] == [BRK]'");
+    // Position where White only has Bishop, Rook, King (no Queens, Knights, Pawns):
+    let fen_brk: Fen = "7k/8/8/8/8/5K2/4R3/3B4 b - - 0 1".parse().unwrap();
+    let pos_brk: Chess = fen_brk.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_set_cmp,
+        &pos_brk,
+        0,
+        None
+    ));
+    // In startpos, White also has Queens, Knights, Pawns, so [A] != [BRK]
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_set_cmp,
+        &pos_init,
+        0,
+        None
+    ));
 }
+
