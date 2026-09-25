@@ -83,7 +83,7 @@ pub fn parse_piece_specifier(spec: &str) -> Option<(Option<Color>, Option<Role>)
     }
 }
 
-/// Parse compact piece placement like "Kd4", "qd4", "Bf4", "pe4", "_d4", "Ae4", "ae4", "wqd4", "bke8"
+/// Parse compact piece placement like "Kd4", "qd4", "Bf4", "pe4", "_d4", "Ae4", "ae4"
 pub fn parse_compact_piece_placement(
     s: &str,
 ) -> Option<(Square, crate::search::query::SquareContent)> {
@@ -148,23 +148,96 @@ pub fn parse_compact_piece_placement(
         };
         return Some((sq, content));
     }
-    if s.len() == 4 {
-        let (p_str, sq_str) = s.split_at(2);
-        if let Ok(sq) = Square::from_str(&sq_str.to_lowercase()) {
-            if let Some((color_opt, role_opt)) = parse_piece_specifier(p_str) {
-                let content = match (color_opt, role_opt) {
-                    (Some(c), Some(r)) => {
-                        SquareContent::Piece(shakmaty::Piece { color: c, role: r })
-                    }
-                    (None, Some(r)) => SquareContent::Role(r),
-                    (Some(c), None) => SquareContent::Color(c),
-                    (None, None) => SquareContent::Occupied,
-                };
-                return Some((sq, content));
+    None
+}
+
+/// Parse multi-char piece string like "A_", "Aa_", "qr", "RBN", "q_" into a SquareSetExpr union
+pub fn parse_multi_char_piece_specifier(
+    s: &str,
+) -> Option<crate::search::query::SquareSetExpr> {
+    use crate::search::query::{SquareContent, SquareSetExpr};
+    if s.len() <= 1 {
+        return None;
+    }
+    let mut pieces = Vec::new();
+    let mut has_empty = false;
+    let mut has_all = false;
+    for ch in s.chars() {
+        if ch == '_' {
+            has_empty = true;
+            continue;
+        }
+        if ch == '.' {
+            has_all = true;
+            continue;
+        }
+        let ch_str = ch.to_string();
+        if let Some((color_opt, role_opt)) = parse_piece_specifier(&ch_str) {
+            let roles = match role_opt {
+                Some(r) => vec![r],
+                None => vec![
+                    shakmaty::Role::Pawn,
+                    shakmaty::Role::Knight,
+                    shakmaty::Role::Bishop,
+                    shakmaty::Role::Rook,
+                    shakmaty::Role::Queen,
+                    shakmaty::Role::King,
+                ],
+            };
+            let colors = match color_opt {
+                Some(c) => vec![c],
+                None => vec![shakmaty::Color::White, shakmaty::Color::Black],
+            };
+            for c in colors {
+                for &r in &roles {
+                    pieces.push(shakmaty::Piece { color: c, role: r });
+                }
             }
+        } else {
+            return None;
         }
     }
-    None
+    let piece_expr = if !pieces.is_empty() {
+        let content = if pieces.len() == 1 {
+            SquareContent::Piece(pieces[0])
+        } else {
+            SquareContent::AnyOf(pieces)
+        };
+        Some(SquareSetExpr::Piece(content))
+    } else {
+        None
+    };
+
+    let empty_expr = if has_empty {
+        Some(SquareSetExpr::Piece(SquareContent::Empty))
+    } else {
+        None
+    };
+
+    let all_expr = if has_all {
+        Some(SquareSetExpr::Squares(!shakmaty::Bitboard::EMPTY))
+    } else {
+        None
+    };
+
+    let mut items = Vec::new();
+    if let Some(p) = piece_expr {
+        items.push(p);
+    }
+    if let Some(e) = empty_expr {
+        items.push(e);
+    }
+    if let Some(a) = all_expr {
+        items.push(a);
+    }
+    if items.is_empty() {
+        return Some(SquareSetExpr::Piece(SquareContent::Occupied));
+    }
+    let mut combined = items.remove(0);
+    for it in items {
+        combined = SquareSetExpr::Union(Box::new(combined), Box::new(it));
+    }
+    Some(combined)
 }
 
 /// Parse a Square, Piece, Variable, or Empty

@@ -1081,11 +1081,15 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
         &q_a_empty, &pos_init, 0, None
     ));
 
-    // 6. Smothered mate query: `btm mate and not attacks(k, [A, _])`
+    // 6. Smothered mate query: `btm mate and not attacks(k, [A, _])` or unbracketed `attacks(k, A_)`
     // In smothered mate, the Black King is in checkmate, and cannot attack any White piece or empty square (all surrounding squares are blocked by Black's own pieces).
     let dsl_smothered = "btm mate and not attacks(k, [A, _])";
     let q_smothered =
         QueryParser::parse_str(dsl_smothered).expect("Failed to parse smothered mate query");
+
+    let dsl_smothered_unbracketed = "btm mate and not attacks(k, A_)";
+    let q_smothered_unbracketed = QueryParser::parse_str(dsl_smothered_unbracketed)
+        .expect("Failed to parse unbracketed smothered mate query");
 
     // Philidor's smothered mate position:
     // White Knight on f7 gives checkmate, Black King on h8 is surrounded by Black Rook on g8, Black Pawns on g7, h7.
@@ -1095,6 +1099,21 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
     assert!(crate::search::evaluator::matches_single_ply(
         &q_smothered,
         &pos_smothered,
+        0,
+        None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_smothered_unbracketed,
+        &pos_smothered,
+        0,
+        None
+    ));
+
+    // 7. Unbracketed A_ standalone:
+    let q_a_under = QueryParser::parse_str("A_").expect("Failed to parse 'A_'");
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_a_under,
+        &pos_init,
         0,
         None
     ));

@@ -772,6 +772,9 @@ impl<'a> QueryParser<'a> {
                 if super::helpers::parse_compact_piece_placement(id).is_some() {
                     return true;
                 }
+                if super::helpers::parse_multi_char_piece_specifier(id).is_some() {
+                    return true;
+                }
                 if parse_piece_specifier(id).is_some() {
                     return true;
                 }
@@ -909,91 +912,9 @@ impl<'a> QueryParser<'a> {
             }
 
             // Multi-char piece string e.g. "qr", "RBN", "Aa", "Aa_", "A_"
-            if id_clone.len() > 1 && parse_piece_specifier(&id_clone).is_none() {
-                let mut all_valid = true;
-                let mut char_pieces = Vec::new();
-                let mut has_empty = false;
-                let mut has_all = false;
-                for ch in id_clone.chars() {
-                    if ch == '_' {
-                        has_empty = true;
-                        continue;
-                    }
-                    if ch == '.' {
-                        has_all = true;
-                        continue;
-                    }
-                    let ch_str = ch.to_string();
-                    if let Some((color_opt, role_opt)) = parse_piece_specifier(&ch_str) {
-                        let roles = match role_opt {
-                            Some(r) => vec![r],
-                            None => vec![
-                                shakmaty::Role::Pawn,
-                                shakmaty::Role::Knight,
-                                shakmaty::Role::Bishop,
-                                shakmaty::Role::Rook,
-                                shakmaty::Role::Queen,
-                                shakmaty::Role::King,
-                            ],
-                        };
-                        let colors = match color_opt {
-                            Some(c) => vec![c],
-                            None => vec![Color::White, Color::Black],
-                        };
-                        for c in colors {
-                            for &r in &roles {
-                                char_pieces.push(Piece { color: c, role: r });
-                            }
-                        }
-                    } else {
-                        all_valid = false;
-                        break;
-                    }
-                }
-                if all_valid {
-                    self.advance();
-                    let piece_expr = if !char_pieces.is_empty() {
-                        let content = if char_pieces.len() == 1 {
-                            SquareContent::Piece(char_pieces[0])
-                        } else {
-                            SquareContent::AnyOf(char_pieces)
-                        };
-                        Some(SquareSetExpr::Piece(content))
-                    } else {
-                        None
-                    };
-
-                    let empty_expr = if has_empty {
-                        Some(SquareSetExpr::Piece(SquareContent::Empty))
-                    } else {
-                        None
-                    };
-
-                    let all_expr = if has_all {
-                        Some(SquareSetExpr::Squares(!Bitboard::EMPTY))
-                    } else {
-                        None
-                    };
-
-                    let mut items = Vec::new();
-                    if let Some(p) = piece_expr {
-                        items.push(p);
-                    }
-                    if let Some(e) = empty_expr {
-                        items.push(e);
-                    }
-                    if let Some(a) = all_expr {
-                        items.push(a);
-                    }
-                    if items.is_empty() {
-                        return Ok(SquareSetExpr::Piece(SquareContent::Occupied));
-                    }
-                    let mut combined = items.remove(0);
-                    for it in items {
-                        combined = SquareSetExpr::Union(Box::new(combined), Box::new(it));
-                    }
-                    return Ok(combined);
-                }
+            if let Some(multi_expr) = super::helpers::parse_multi_char_piece_specifier(&id_clone) {
+                self.advance();
+                return Ok(multi_expr);
             }
 
             // Piece specifier e.g. "Q", "n", "A", "a", "queen", "wq", "bk"
@@ -1234,6 +1155,11 @@ impl<'a> QueryParser<'a> {
                     Box::new(SquareSetExpr::Piece(content)),
                     Box::new(SquareSetExpr::Squares(Bitboard::from_square(sq))),
                 ));
+            }
+
+            if let Some(multi_expr) = super::helpers::parse_multi_char_piece_specifier(id) {
+                self.advance();
+                return Ok(multi_expr);
             }
 
             if let Some((color_opt, role_opt)) = parse_piece_specifier(id) {
