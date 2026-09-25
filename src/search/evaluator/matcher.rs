@@ -797,6 +797,25 @@ pub fn evaluate_with_timeline_env(
                 matching_plies: all_plies,
             }
         }
+        SearchQuery::WhatIf {
+            mutations,
+            query: sub_query,
+        } => {
+            let mut matched_plies = Vec::new();
+            for (ply, pos) in positions.iter().enumerate() {
+                if let Some(mutated_pos) = apply_board_mutations(pos, mutations) {
+                    if matches_single_ply(sub_query, &mutated_pos, ply, None) {
+                        matched_plies.push(ply);
+                    }
+                }
+            }
+            let is_match = !matched_plies.is_empty();
+            QueryMatchResult {
+                is_match,
+                match_count: matched_plies.len(),
+                matching_plies: matched_plies,
+            }
+        }
         SearchQuery::Not(sub_query) => {
             let res = evaluate_with_timeline_env(sub_query, headers, positions, moves, env);
             if sub_query.is_header_only() {
@@ -1084,8 +1103,111 @@ pub fn matches_single_ply(
                 }
             })
         }
+        SearchQuery::WhatIf {
+            mutations,
+            query: sub,
+        } => {
+            if let Some(mutated_pos) = apply_board_mutations(pos, mutations) {
+                matches_single_ply(sub, &mutated_pos, ply, last_move)
+            } else {
+                false
+            }
+        }
         _ => false,
     }
+}
+
+/// Apply a sequence of speculative board mutations inside an isolated sandbox
+pub fn apply_board_mutations(
+    pos: &Chess,
+    mutations: &[crate::search::query::BoardMutation],
+) -> Option<Chess> {
+    use crate::search::query::BoardMutation;
+    use shakmaty::{CastlingMode, Color, EnPassantMode, FromSetup, Setup};
+
+    let mut setup = Setup::empty();
+    setup.board = pos.board().clone();
+    setup.turn = pos.turn();
+    setup.castling_rights = pos.castles().castling_rights();
+    setup.ep_square = pos.ep_square(EnPassantMode::Legal);
+    setup.halfmoves = pos.halfmoves();
+    setup.fullmoves = pos.fullmoves();
+
+    let mut current_turn = pos.turn();
+
+    for mutation in mutations {
+        match mutation {
+            BoardMutation::RemoveSquares(sqs) => {
+                for sq in sqs {
+                    setup.board.discard_piece_at(*sq);
+                }
+            }
+            BoardMutation::Pass => {
+                current_turn = current_turn.other();
+                setup.ep_square = None;
+            }
+            BoardMutation::SetTurn(color) => {
+                current_turn = *color;
+                setup.ep_square = None;
+            }
+            BoardMutation::Transfer { from, to } => {
+                let piece = setup.board.remove_piece_at(*from)?;
+                setup.board.set_piece_at(*to, piece);
+            }
+            BoardMutation::AddPiece { piece, square } => {
+                setup.board.set_piece_at(*square, *piece);
+            }
+            BoardMutation::SwapSquares { sq1, sq2 } => {
+                let p1 = setup.board.remove_piece_at(*sq1);
+                let p2 = setup.board.remove_piece_at(*sq2);
+                if let Some(p) = p1 {
+                    setup.board.set_piece_at(*sq2, p);
+                }
+                if let Some(p) = p2 {
+                    setup.board.set_piece_at(*sq1, p);
+                }
+            }
+            BoardMutation::SwapColor(sq) => {
+                let mut piece = setup.board.remove_piece_at(*sq)?;
+                piece.color = piece.color.other();
+                setup.board.set_piece_at(*sq, piece);
+            }
+            BoardMutation::MoveSequence(moves) => {
+                setup.turn = current_turn;
+                setup.castling_rights = setup.castling_rights.intersect(
+                    setup.board.rooks() & setup.board.by_color(Color::White)
+                        | setup.board.rooks() & setup.board.by_color(Color::Black),
+                );
+                let mut temp_pos = Chess::from_setup(setup.clone(), CastlingMode::Chess960).ok()?;
+                for move_pat in moves {
+                    let legal_moves = temp_pos.legal_moves();
+                    let matched_mv = legal_moves
+                        .into_iter()
+                        .find(|m| PathMatcher::match_legal_move(m, &temp_pos, move_pat))?;
+                    temp_pos.play_unchecked(&matched_mv);
+                }
+                setup.board = temp_pos.board().clone();
+                setup.turn = temp_pos.turn();
+                setup.castling_rights = temp_pos.castles().castling_rights();
+                setup.ep_square = temp_pos.ep_square(EnPassantMode::Legal);
+                setup.halfmoves = temp_pos.halfmoves();
+                setup.fullmoves = temp_pos.fullmoves();
+                current_turn = temp_pos.turn();
+            }
+        }
+    }
+
+    setup.turn = current_turn;
+    setup.castling_rights = setup.castling_rights.intersect(
+        setup.board.rooks() & setup.board.by_color(Color::White)
+            | setup.board.rooks() & setup.board.by_color(Color::Black),
+    );
+
+    if setup.board.king_of(Color::White).is_none() || setup.board.king_of(Color::Black).is_none() {
+        return None;
+    }
+
+    Chess::from_setup(setup, CastlingMode::Chess960).ok()
 }
 
 #[inline]

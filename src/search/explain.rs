@@ -2,10 +2,10 @@ use shakmaty::{Bitboard, Color, Role};
 
 use super::annotation::AnnotationPredicate;
 use super::query::{
-    ComparisonOp, CqlLinePattern, CqlPathConstituent, CqlPathPattern, HeaderPredicate,
-    LineDirection, MaterialPredicate, MovePattern, PathPattern, PathStep, PawnPredicate,
-    PieceMatcher, PositionPattern, PowerPredicate, SearchQuery, SetPredicate, SquareContent,
-    SquareOrPiece, SquareSetExpr, TacticalPredicate, VariableDomain,
+    BoardMutation, ComparisonOp, CqlLinePattern, CqlPathConstituent, CqlPathPattern,
+    HeaderPredicate, LineDirection, MaterialPredicate, MovePattern, PathPattern, PathStep,
+    PawnPredicate, PieceMatcher, PositionPattern, PowerPredicate, SearchQuery, SetPredicate,
+    SquareContent, SquareOrPiece, SquareSetExpr, TacticalPredicate, VariableDomain,
 };
 use super::transform::BoardSymmetry;
 
@@ -985,6 +985,44 @@ impl ToDsl for AnnotationPredicate {
     }
 }
 
+impl ToDsl for BoardMutation {
+    fn to_dsl(&self) -> String {
+        match self {
+            BoardMutation::RemoveSquares(sqs) => {
+                if sqs.len() == 1 {
+                    format!("remove {}", sqs[0])
+                } else {
+                    format!(
+                        "remove [{}]",
+                        sqs.iter()
+                            .map(|s| format!("{s}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
+            BoardMutation::Pass => "pass".to_string(),
+            BoardMutation::SetTurn(c) => {
+                let c_str = if *c == Color::White { "white" } else { "black" };
+                format!("turn {c_str}")
+            }
+            BoardMutation::Transfer { from, to } => format!("move {from} to {to}"),
+            BoardMutation::AddPiece { piece, square } => {
+                let pm = PieceMatcher::new(Some(piece.color), Some(piece.role));
+                format!("add {} on {square}", pm.to_dsl())
+            }
+            BoardMutation::SwapSquares { sq1, sq2 } => format!("swap {sq1} {sq2}"),
+            BoardMutation::SwapColor(sq) => format!("swap_color {sq}"),
+            BoardMutation::MoveSequence(mvs) => {
+                format!(
+                    "[{}]",
+                    mvs.iter().map(|m| m.to_dsl()).collect::<Vec<_>>().join(" ")
+                )
+            }
+        }
+    }
+}
+
 impl ToDsl for SearchQuery {
     fn to_dsl(&self) -> String {
         match self {
@@ -1043,6 +1081,14 @@ impl ToDsl for SearchQuery {
                 } else {
                     format!("{move_dsl} leads_to {{ {} }}", outcome_query.to_dsl())
                 }
+            }
+            SearchQuery::WhatIf { mutations, query } => {
+                let muts_dsl = mutations
+                    .iter()
+                    .map(|m| m.to_dsl())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("what_if({muts_dsl}) {{ {} }}", query.to_dsl())
             }
             SearchQuery::Header(h) => h.to_dsl(),
             SearchQuery::Position(p) => p.to_dsl(),
@@ -1172,13 +1218,13 @@ fn collect_fens(query: &SearchQuery, out: &mut Vec<String>) {
 fn contains_symmetry(query: &SearchQuery) -> bool {
     match query {
         SearchQuery::Symmetric { .. } => true,
+        SearchQuery::Shift { .. } => true,
         SearchQuery::Position(PositionPattern::Symmetric { .. }) => true,
         SearchQuery::And(subs) | SearchQuery::Or(subs) => subs.iter().any(contains_symmetry),
         SearchQuery::Not(sub)
         | SearchQuery::PlyRange { query: sub, .. }
         | SearchQuery::Occurrences { query: sub, .. }
         | SearchQuery::VariableBinding { query: sub, .. }
-        | SearchQuery::Shift { query: sub, .. }
         | SearchQuery::Initial(sub)
         | SearchQuery::Terminal(sub) => contains_symmetry(sub),
         _ => false,
@@ -1226,6 +1272,47 @@ pub fn explain_query(original_input: &str, query: &SearchQuery) -> QueryExplanat
                     dsl,
                     transformed_fens: fens,
                 });
+            }
+        }
+        SearchQuery::Shift { mode, query: inner } => {
+            let offsets: Vec<(i8, i8)> = match mode {
+                crate::search::transform::ShiftMode::Horizontal => {
+                    (-7..=7).map(|df| (df, 0)).collect()
+                }
+                crate::search::transform::ShiftMode::Vertical => {
+                    (-7..=7).map(|dr| (0, dr)).collect()
+                }
+                crate::search::transform::ShiftMode::All => {
+                    let mut v = Vec::with_capacity(15 * 15);
+                    for df in -7..=7 {
+                        for dr in -7..=7 {
+                            v.push((df, dr));
+                        }
+                    }
+                    v
+                }
+            };
+
+            for (df, dr) in offsets {
+                if let Some(shifted) = crate::search::transform::shift_query(inner, df, dr) {
+                    let label = if df == 0 && dr == 0 {
+                        "Original (Shift +0)".to_string()
+                    } else if df == 0 {
+                        format!("Shift Rank {:+}", dr)
+                    } else if dr == 0 {
+                        format!("Shift File {:+}", df)
+                    } else {
+                        format!("Shift (File {:+}, Rank {:+})", df, dr)
+                    };
+                    let dsl = shifted.to_dsl();
+                    let mut fens = Vec::new();
+                    collect_fens(&shifted, &mut fens);
+                    branches.push(QueryBranch {
+                        symmetry_name: label,
+                        dsl,
+                        transformed_fens: fens,
+                    });
+                }
             }
         }
         SearchQuery::Position(PositionPattern::Symmetric {

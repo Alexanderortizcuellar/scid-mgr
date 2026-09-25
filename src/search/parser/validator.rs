@@ -42,6 +42,7 @@ pub fn validate_query_semantics(query: &SearchQuery, pos: usize) -> Result<(), P
         | SearchQuery::Play {
             outcome_query: sub, ..
         }
+        | SearchQuery::WhatIf { query: sub, .. }
         | SearchQuery::VariableBinding { query: sub, .. }
         | SearchQuery::Symmetric { query: sub, .. }
         | SearchQuery::Shift { query: sub, .. }

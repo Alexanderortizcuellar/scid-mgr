@@ -17,6 +17,7 @@ This chapter covers geometric tactical predicates: Pins, Forks, Skewers, Trapped
 | **`attackers(attacker, target)`** | Attacking piece squares that target squares | `attackers(white, e5)` |
 | **`ray(direction, origin)`** | Squares along a directional ray | `ray(up, d4)` or `ray(diagonal, [c1, f1])` |
 | **`between(from, to)`** | Squares strictly between two sets | `between(K, R)` |
+| **`offset(target, dx, dy)`** | Cartesian $(\Delta x, \Delta y)$ spatial offset | `offset(e3, 2, 1)` or `offset(N, 2, 1)` |
 | **`distance(sq1, sq2)`** | Chebyshev distance between two squares `max(|dx|, |dy|)` | `distance(e1, e8) >= 5` |
 | **`is_attacked`** | Square attacked by color | `is_attacked e4 by black` |
 
@@ -77,7 +78,11 @@ Returns the subset of `target` squares attacked by any piece in `attacker`:
 attacks(R, k) >= 2                                      # King subjected to double rook check/attack
 attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8]) # Spatial file control dominance
 attacks(n, K) & ~occupied                               # Knight attacks on king while targeting escape squares
+btm and mate and not attacks(k, [A, _])                 # Canonical Smothered Mate: Black is checkmated and King has zero attacks on White pieces (A) or empty squares (_)
 ```
+
+> **Smothered Mate (`not attacks(k, [A, _])`) Mechanics**:
+> `[A, _]` represents all squares occupied by enemy (White) pieces `A` or empty squares `_`. If `not attacks(k, [A, _])` holds, every square adjacent to the king is occupied by a friendly (Black) piece `a`. In checkmate, this means the king is completely smothered by its own army!
 
 #### Attack Origin Evaluation (`attackers`)
 Returns the subset of `attacker` pieces that attack any square in `target`:
@@ -142,4 +147,50 @@ flipcolor rotate90 {
 * **`northwest 2 Q & up 1 k & R`**: Asserts that a square exists which is simultaneously 2 squares NW of the Queen, 1 square North of the enemy King, and occupied by a White Rook (contact Rook check supported diagonally by Queen 2 squares behind).
 * **`right 1 k & _`**: Asserts that the adjacent flight square 1 step right of the King is empty (`_`).
 * **`flipcolor rotate90`**: Evaluates this mating net across all 4 rotational angles (0°, 90°, 180°, 270°) and both White/Black mating perspectives!
+
+---
+
+### 8. Hypothetical Board Mutation Sandbox (`what_if(...) { ... }`)
+
+The `what_if` filter allows you to perform **speculative evaluation** by applying arbitrary hypothetical mutations to a copy of the current board state and evaluating test filters inside a sandbox.
+
+#### Syntax:
+```cql
+what_if(<mutations>) {
+    <test filters>
+}
+# or bracket syntax
+what_if[<mutations>] {
+    <test filters>
+}
+```
+
+#### Supported Mutations:
+1. **`pass` / `null_move`**: Switches the side to move without moving any piece (threat / null-move analysis).
+2. **`remove <squares>` / `without <piece> on <square>`**: Clears squares (e.g. `remove f6`, `remove [f6, g7]`, `without knight on f6`) to test defender removal or unblocking.
+3. **`move <from> to <to>` / `transfer <from> -> <to>`**: Moves a piece from one square to another hypothetically (e.g. `move b1 to d5`).
+4. **`add <piece> on <square>` / `place <piece> on <square>`**: Injects a piece onto an empty square (e.g. `add Q on e5`).
+5. **`swap <sq1>, <sq2>`**: Swaps the contents of two squares (e.g. `swap g1, f1`).
+6. **`swap_color <square>` / `invert_color <square>`**: Inverts the piece color on a square (e.g. `swap_color c4`).
+7. **`turn white` / `turn black` / `wtm` / `btm`**: Explicitly sets side to move.
+8. **`[<moves>]`**: Plays an arbitrary sequence of moves before evaluating the inner block (e.g. `[e4 e5 Qh5]`).
+
+#### Examples:
+```cql
+# 1. Threat Detection (If Black passes, does White have immediate mate?):
+what_if(pass) { play { mate } }
+
+# 2. Deflection / Removing the Defender (If Nf6 is removed, can White mate?):
+what_if(remove f6) { play { mate } }
+
+# 3. Piece Placement Fantasy:
+what_if(add Q on e5) { attacks(Q, e8) }
+
+# 4. Multi-mutation rollout:
+what_if(remove f6, turn white) { play { mate } }
+
+# 5. Hypothetical Move Sequence:
+what_if([e4 e5 Qh5]) { attacks(Q, f7) }
+```
+
 

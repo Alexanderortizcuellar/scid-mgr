@@ -357,7 +357,7 @@ let result = GameSearchEvaluator::evaluate_pgn(&query, pgn_game_str);
 - **Pawn Structures**: `passedpawns [white] >= 1`, `isolatedpawns [black] == 0`, `doubledpawns [white] == 0`, `backwardpawns [black] >= 1`, `pawnislands [black] <= 2`.
 - **Tactics & Motifs**: `attacks [N, k]`, `pin [B, n, k]`, `pin from B to k through n`, `pin from bishop to queen through knight`, `fork [N, k, q]`, `discovered_attack white`, `skewer [Q, k, r]`, `skewer from Q to r through k`, `trapped [q]`, `outpost [N, d5]`, `distance(K, k) <= 2`.
 - **Annotations & Comments**: `comment:"novelty"`, `nag:!`, `nag:??`, `nag:[1, 3]`.
-- **Symmetry & Transformations**: `symmetry:horizontal ( ... )`, `symmetry:color ( ... )`, `symmetry:any ( ... )`.
+- **Symmetry & Transformations**: `symmetry:horizontal ( ... )`, `symmetry:color ( ... )`, `symmetry:any ( ... )`, `shifthorizontal { ... }`, `shiftvertical { ... }`, `shift { ... }`, `shift:horizontal`, `shift:vertical`, `shift:all`.
 - **Endgame & Material**: `opposite_bishops`, `same_colored_bishops`.
 - **Square Ranges & Diagonals**: `B on light`, `[B, b] on [dark]`, `B on [a1..h8]`, `K on [a1-h2]`.
 - **Logic, Scoping & Multiline Queries**: `and`, `or`, `not`, `!`, parentheses `( ... )`, `ply 0..20 ( ... )`. Multiple lines or statements separated by whitespace/newlines are automatically treated as implicit `and` connectors without needing explicit `and`s.

@@ -743,6 +743,32 @@ pub enum SearchQuery {
     CqlPath(CqlPathPattern),
     /// CQLi Line Pattern with position/move transitions along arrows
     CqlLine(CqlLinePattern),
+    /// Hypothetical sandbox evaluation: applies speculative mutations to a cloned board and evaluates subquery
+    WhatIf {
+        mutations: Vec<BoardMutation>,
+        query: Box<SearchQuery>,
+    },
+}
+
+/// Hypothetical board mutation for what_if sandbox evaluation
+#[derive(Debug, Clone, PartialEq)]
+pub enum BoardMutation {
+    /// Remove pieces on the specified squares
+    RemoveSquares(Vec<Square>),
+    /// Null move / pass: flip side to move without changing pieces
+    Pass,
+    /// Explicitly set the side to move
+    SetTurn(Color),
+    /// Arbitrary piece transfer (from -> to, capturing any piece on `to`)
+    Transfer { from: Square, to: Square },
+    /// Place a piece on a square
+    AddPiece { piece: Piece, square: Square },
+    /// Swap the contents of two squares
+    SwapSquares { sq1: Square, sq2: Square },
+    /// Invert the color of a piece on a square (White <-> Black)
+    SwapColor(Square),
+    /// Execute a sequence of moves (e.g. `[e4, e5, Qh5]`)
+    MoveSequence(Vec<MovePattern>),
 }
 
 impl SearchQuery {
@@ -808,6 +834,7 @@ impl SearchQuery {
             | SearchQuery::Play {
                 outcome_query: sub, ..
             }
+            | SearchQuery::WhatIf { query: sub, .. }
             | SearchQuery::VariableBinding { query: sub, .. } => sub.requires_san_strings(),
             SearchQuery::Symmetric { query: sub, .. } | SearchQuery::Shift { query: sub, .. } => {
                 sub.requires_san_strings()
@@ -832,6 +859,7 @@ impl SearchQuery {
             | SearchQuery::Play {
                 outcome_query: sub, ..
             }
+            | SearchQuery::WhatIf { query: sub, .. }
             | SearchQuery::VariableBinding { query: sub, .. } => sub.has_header_predicates(),
             SearchQuery::Symmetric { query: sub, .. } | SearchQuery::Shift { query: sub, .. } => {
                 sub.has_header_predicates()

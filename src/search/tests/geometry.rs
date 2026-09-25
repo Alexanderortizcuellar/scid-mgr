@@ -744,3 +744,255 @@ fn test_top_level_piece_designators_and_square_set_operators() {
         &q_q_or_p, &pos_kp, 0, None
     ));
 }
+
+#[test]
+fn test_documented_shift_transformation_examples() {
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. Horizontal Shift: Connected center pawns (e4, f4) matching (d4, e4) template
+    let fen_center_pawns: Fen = "8/4k3/8/8/4PP2/8/8/4K3 w - - 0 1".parse().unwrap();
+    let pos_pawns: Chess = fen_center_pawns
+        .into_position(CastlingMode::Chess960)
+        .unwrap();
+    let q_shift_pawns =
+        QueryParser::parse_str("shifthorizontal { piece P on d4 and piece P on e4 }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_shift_pawns,
+        &pos_pawns,
+        0,
+        None
+    ));
+
+    // 2. Vertical Shift: Rook behind King on f-file (Rf3, Kf4) matching (e1, e2) template
+    let fen_vertical: Fen = "8/4k3/8/8/5K2/5R2/8/8 w - - 0 1".parse().unwrap();
+    let pos_vert: Chess = fen_vertical.into_position(CastlingMode::Chess960).unwrap();
+    let q_shift_vert =
+        QueryParser::parse_str("shiftvertical { piece R on f1 and piece K on f2 }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_shift_vert,
+        &pos_vert,
+        0,
+        None
+    ));
+
+    // 3. 2D All-board Shift: Queen & Bishop battery (Qe6, Bb3) matching (Qf7, Bc4) template
+    let fen_battery: Fen = "3k4/8/4Q3/8/8/1B6/8/4K3 w - - 0 1".parse().unwrap();
+    let pos_battery: Chess = fen_battery.into_position(CastlingMode::Chess960).unwrap();
+    let q_shift_all = QueryParser::parse_str("shift { piece Q on f7 and piece B on c4 }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_shift_all,
+        &pos_battery,
+        0,
+        None
+    ));
+
+    // 4. Shift with Pin: White Bishop on b5 pinning Black Knight on d7 against Black King on e8 (Opera motif) shifted
+    // Let's test on standard Opera game position:
+    let opera_pgn = r#"[Event "Paris"]
+[Site "Paris FRA"]
+[Date "1858.??.??"]
+[White "Paul Morphy"]
+[Black "Duke Karl / Count Isouard"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"#;
+    let q_shift_pin =
+        QueryParser::parse_str("shift:horizontal { pin(bishop, knight, king) }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_shift_pin, opera_pgn).is_match);
+
+    // 5. Shift with Outpost
+    let fen_outpost: Fen = "8/8/8/3N4/4P3/8/8/4K2k w - - 0 1".parse().unwrap(); // Knight on d5 defended by pawn on e4 -> outpost
+    let pos_outpost: Chess = fen_outpost.into_position(CastlingMode::Chess960).unwrap();
+    let q_shift_outpost = QueryParser::parse_str("shift_all { outpost knight on c4 }").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_shift_outpost,
+        &pos_outpost,
+        0,
+        None
+    ));
+
+    // 6. Shift with Attack square set
+    let q_shift_attack = QueryParser::parse_str("shift { attacks(R, k) >= 1 }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_shift_attack, opera_pgn).is_match);
+
+    // 7. Shift with Move
+    let q_shift_move = QueryParser::parse_str("shifthorizontal { move from d2 to d4 }").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_shift_move, opera_pgn).is_match);
+
+    // 8. Shift with Bracketed Square Sets: shiftvertical [a1, a2]
+    let q_shift_sq_set = QueryParser::parse_str("shiftvertical [a1, a2]").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_shift_sq_set,
+        &pos_pawns,
+        0,
+        None
+    ));
+    let exp_shift = QueryParser::explain("shiftvertical [a1, a2]").unwrap();
+    assert_eq!(exp_shift.canonical_dsl, "shiftvertical { [a1, a2] }");
+}
+
+#[test]
+fn test_chained_directional_shifts_and_flips() {
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. Chained directional shift: `up 1 right 2 N`
+    // White Knight on c3 (f=2, r=2).
+    // right 2 N -> e3 (f=4, r=2)
+    // up 1 right 2 N -> e4 (f=4, r=3)
+    let q_knight_hop = QueryParser::parse_str("up 1 right 2 N").unwrap();
+    let fen_c3: Fen = "8/8/8/8/8/2N5/8/4K2k w - - 0 1".parse().unwrap();
+    let pos_c3: Chess = fen_c3.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_knight_hop,
+        &pos_c3,
+        0,
+        None
+    ));
+
+    // Intersection with e4: `(up 1 right 2 N) & e4` matches, but with d4 fails
+    let q_e4 = QueryParser::parse_str("(up 1 right 2 N) & e4").unwrap();
+    let q_d4 = QueryParser::parse_str("(up 1 right 2 N) & d4").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_e4, &pos_c3, 0, None
+    ));
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_d4, &pos_c3, 0, None
+    ));
+
+    // 2. Chained direction with flip: `flip northeast 1 up 1 Q`
+    // In Original (Identity):
+    // Queen on e1 -> up 1 (e2) -> northeast 1 (f3)
+    // In Flipped (Horizontal mirror):
+    // Queen on d1 (mirrored e1) -> up 1 (d2) -> northwest 1 (c3)
+    let q_flip_q = QueryParser::parse_str("flip northeast 1 up 1 Q").unwrap();
+    let fen_e1: Fen = "k7/8/8/8/8/8/8/4QK2 w - - 0 1".parse().unwrap(); // Queen on e1
+    let pos_e1: Chess = fen_e1.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_flip_q, &pos_e1, 0, None
+    ));
+
+    // Testing flipped square target:
+    // With Queen on d1, original `northeast 1 up 1 Q` gives e3.
+    // Flipped `northwest 1 up 1 Q` on d1 gives c3.
+    let fen_d1: Fen = "k7/8/8/8/8/8/8/3QK3 w - - 0 1".parse().unwrap(); // Queen on d1
+    let pos_d1: Chess = fen_d1.into_position(CastlingMode::Chess960).unwrap();
+    // In flipped symmetry, Queen on d1 satisfies the horizontal mirror branch of `northeast 1 up 1 Q`!
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_flip_q, &pos_d1, 0, None
+    ));
+
+    // 3. Flipped directional shift with concrete square: `flip (northeast 1 up 1 e1 & occupied)`
+    let q_orig = QueryParser::parse_str("northeast 1 up 1 e1 & occupied").unwrap();
+    let q_flip_sq = QueryParser::parse_str("flip (northeast 1 up 1 e1 & occupied)").unwrap();
+    let q_flip_all = QueryParser::parse_str("flip:all (northeast 1 up 1 e1 & occupied)").unwrap();
+
+    // F3 occupied with Queen on f3 matches original branch
+    let fen_f3_occ: Fen = "1k6/8/8/8/8/5Q2/8/6K1 w - - 0 1".parse().unwrap(); // Queen on f3 (f3 = northeast 1 up 1 e1)
+    let pos_f3: Chess = fen_f3_occ.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_orig, &pos_f3, 0, None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_flip_all,
+        &pos_f3,
+        0,
+        None
+    ));
+
+    // C3 occupied with Queen on c3 matches flipped branch (c3 = northwest 1 up 1 d1)
+    let fen_c3_occ: Fen = "1k6/8/8/8/8/2Q5/8/6K1 w - - 0 1".parse().unwrap();
+    let pos_c3_occ: Chess = fen_c3_occ.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_flip_sq,
+        &pos_c3_occ,
+        0,
+        None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_flip_all,
+        &pos_c3_occ,
+        0,
+        None
+    ));
+
+    // 4. Static shift constant folding: `up 1 right 2 e3` resolves to `g4`
+    let exp_static = QueryParser::explain("up 1 right 2 e3").unwrap();
+    assert_eq!(exp_static.canonical_dsl, "g4");
+}
+
+#[test]
+fn test_offset_function_syntax_and_evaluation() {
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. Static square offset: `offset(e3, 2, 1)` -> g4
+    let exp = QueryParser::explain("offset(e3, 2, 1)").unwrap();
+    assert_eq!(exp.canonical_dsl, "g4");
+
+    let exp_neg = QueryParser::explain("offset(e3, -2, -1)").unwrap();
+    assert_eq!(exp_neg.canonical_dsl, "c2");
+
+    // 2. Dynamic piece offset: `offset(N, 2, 1)` on Knight on c3 (c3 + (2,1) -> e4)
+    let q_offset_n = QueryParser::parse_str("offset(N, 2, 1)").unwrap();
+    let fen_c3: Fen = "8/8/8/8/8/2N5/8/4K2k w - - 0 1".parse().unwrap();
+    let pos_c3: Chess = fen_c3.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_offset_n,
+        &pos_c3,
+        0,
+        None
+    ));
+
+    let q_match_e4 = QueryParser::parse_str("offset(N, 2, 1) & e4").unwrap();
+    let q_match_d4 = QueryParser::parse_str("offset(N, 2, 1) & d4").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_match_e4,
+        &pos_c3,
+        0,
+        None
+    ));
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_match_d4,
+        &pos_c3,
+        0,
+        None
+    ));
+
+    // 3. Offset with King: `offset(k, -1, 0)` on Black King on e8 -> d8
+    let q_offset_k = QueryParser::parse_str("offset(k, -1, 0) & d8").unwrap();
+    let fen_e8: Fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1".parse().unwrap();
+    let pos_e8: Chess = fen_e8.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_offset_k,
+        &pos_e8,
+        0,
+        None
+    ));
+
+    // 4. Offset with Symmetries & Flips:
+    // `flip (offset(N, 2, 1) & h4)`
+    // - Original: (offset (+2, +1) from N) & h4. (Knight on f3 gives h4)
+    // - Flipped: (offset (-2, +1) from N) & a4. (Knight on c3 gives a4)
+    let q_flip_offset_n = QueryParser::parse_str("flip (offset(N, 2, 1) & h4)").unwrap();
+    let fen_c3_knight: Fen = "8/8/8/8/8/2N5/8/4K2k w - - 0 1".parse().unwrap();
+    let pos_c3_knight: Chess = fen_c3_knight.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_flip_offset_n,
+        &pos_c3_knight,
+        0,
+        None
+    ));
+
+    // 5. Static offset under rotation: `rotate90 offset(e3, 2, 1)`
+    // e3 + (2,1) = g4 (f=6, r=3)
+    // rotate90 turns (f=6, r=3) -> (f=3, r=1) = d2
+    let exp_rot = QueryParser::explain("rotate90 offset(e3, 2, 1)").unwrap();
+    assert_eq!(exp_rot.branches.len(), 4);
+    assert_eq!(exp_rot.branches[0].dsl, "g4"); // 0 deg
+    assert_eq!(exp_rot.branches[1].dsl, "d2"); // 90 deg
+    assert_eq!(exp_rot.branches[2].dsl, "b5"); // 180 deg
+    assert_eq!(exp_rot.branches[3].dsl, "e7"); // 270 deg
+}

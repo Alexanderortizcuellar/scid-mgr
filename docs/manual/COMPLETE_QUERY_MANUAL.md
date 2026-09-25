@@ -288,6 +288,25 @@ flipcolor rotate90 {
 * Searches for checkmates where a Rook delivers contact mate 1 square away, backed up diagonally 2 squares away by a Queen, with an adjacent empty flight square.
 * Evaluates across all 8 board rotations and player color perspectives (`flipcolor rotate90`).
 
+### 🧪 Hypothetical Board Mutation Sandbox (`what_if(...) { ... }`)
+Applies arbitrary hypothetical mutations on a sandbox copy of the position and executes nested test queries:
+* **Syntax**: `what_if(mutation1, mutation2, ...) { <filters> }` or `what_if[...] { <filters> }`
+* **Mutations**:
+  * `pass` / `null_move` (Threat detection: switches side to move)
+  * `remove <squares>` / `without <piece> on <sq>` (Removing defenders/blockers)
+  * `move <from> to <to>` / `transfer <from> -> <to>` (Piece relocation)
+  * `add <piece> on <square>` / `place <piece> on <sq>` (Piece injection)
+  * `swap <sq1>, <sq2>` (Piece swap)
+  * `swap_color <square>` / `invert_color <sq>` (Piece color swap)
+  * `turn white` / `turn black` (Turn toggle)
+  * `[<moves>]` (Move sequence rollout)
+* **Example**:
+  ```cql
+  what_if(pass) { play { mate } }             # Null move threat detection
+  what_if(remove f6) { play { mate } }       # Deflection / defender removal
+  what_if([e4 e5 Qh5]) { attacks(Q, f7) }    # Move sequence rollout
+  ```
+
 ---
 
 # ⚖️ Chapter 6: Material Balance & Piece Power
@@ -311,9 +330,9 @@ This chapter documents material composition filters, piece point differences, bi
 
 # 🔄 Chapter 7: Board Transformations & Symmetries
 
-Transformation blocks automatically expand a search query across geometric board symmetries (reflections, rotations) or color inversions.
+Transformation blocks automatically expand a search query across geometric board symmetries (reflections, rotations), spatial shifts (horizontal, vertical, 2D translation), or color inversions.
 
-## 📌 Transformation Keywords
+## 📌 Transformation & Shift Keywords
 
 * **`flipcolor`** / **`invertcolor`**: Color Inversion (White $\leftrightarrow$ Black).
 * **`flipvertical`** / **`flip_v`**: Vertical reflection across ranks 4 and 5 ($1 \leftrightarrow 8, 2 \leftrightarrow 7$).
@@ -322,14 +341,21 @@ Transformation blocks automatically expand a search query across geometric board
 * **`flipmaindiagonal`** / **`flip_diag`**: Main diagonal reflection ($a1-h8$).
 * **`flipantidiagonal`** / **`flip_antidiag`**: Anti-diagonal reflection ($a8-h1$).
 * **`flip:all`** / **`symm:all`**: Expands into all 8 geometric board symmetries.
+* **`shifthorizontal`** / **`shift_h`** / **`shift:horizontal`**: Shifts horizontally across all files (same rank).
+* **`shiftvertical`** / **`shift_v`** / **`shift:vertical`**: Shifts vertically across all ranks (same file).
+* **`shift`** / **`shiftall`** / **`shift:all`**: Shifts 2D across both files and ranks anywhere on the board.
 
 ```text
 flipcolor {
     white "Carlsen" and fork(knight, queen, rook)
 }
 
-fliphorizontal {
-    Bc4 and Qh5 and attacks(h7, f7)
+shifthorizontal {
+    piece P on d4 and piece P on e4
+}
+
+shift {
+    piece Q on f7 and piece B on c4
 }
 ```
 

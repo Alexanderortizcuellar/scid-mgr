@@ -150,6 +150,17 @@ fn test_mating_themes_catalog_parsing_and_evaluation() {
         "flipcolor must match Black smothered mate"
     );
     assert_eq!(res_fc_black.matching_plies, vec![14]);
+
+    // Test canonical CQL smothered mate definition: `btm and mate and not attacks(k, [A, _])`
+    let q_cql_smothered = QueryParser::parse_str("btm and mate and not attacks(k, [A, _])")
+        .expect("Failed to parse canonical CQL smothered mate query");
+    let res_cql_smothered =
+        GameSearchEvaluator::evaluate_pgn(&q_cql_smothered, caro_kann_smothered);
+    assert!(
+        res_cql_smothered.is_match,
+        "Canonical CQL smothered mate query `btm and mate and not attacks(k, [A, _])` must match Caro-Kann smothered mate"
+    );
+    assert_eq!(res_cql_smothered.matching_plies, vec![11]);
 }
 
 #[test]
@@ -479,4 +490,90 @@ fn test_play_and_not_move_missed_mate_regression() {
         !res3.is_match,
         "Should NOT match when the played move was indeed from Q"
     );
+}
+
+#[test]
+fn test_what_if_sandbox_mutations() {
+    // 1. Hypothetical move sequence: from starting position, if [e4 e5 Qh5], White Q attacks f7
+    let q_seq = QueryParser::parse_str("what_if([e4 e5 Qh5]) { attacks(Q, f7) }").unwrap();
+    let start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    let start_pos: shakmaty::Chess = shakmaty::fen::Fen::from_ascii(start_fen.as_bytes())
+        .unwrap()
+        .into_position(shakmaty::CastlingMode::Standard)
+        .unwrap();
+    let res_seq = GameSearchEvaluator::evaluate_with_timeline(
+        &q_seq,
+        &HashMap::new(),
+        std::slice::from_ref(&start_pos),
+        &[],
+    );
+    assert!(res_seq.is_match, "After 1.e4 e5 2.Qh5, Queen attacks f7");
+
+    // 2. Removal test: White Queen on h7 checkmates if Black knight on f6 is removed
+    let scholars_defense = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4";
+    let scholars_pos: shakmaty::Chess = shakmaty::fen::Fen::from_ascii(scholars_defense.as_bytes())
+        .unwrap()
+        .into_position(shakmaty::CastlingMode::Standard)
+        .unwrap();
+
+    let q_remove = QueryParser::parse_str("what_if(remove f6) { play { mate } }").unwrap();
+    let res_rem = GameSearchEvaluator::evaluate_with_timeline(
+        &q_remove,
+        &HashMap::new(),
+        std::slice::from_ref(&scholars_pos),
+        &[],
+    );
+    assert!(
+        res_rem.is_match,
+        "Removing knight on f6 allows White to play mate (Qxf7#)"
+    );
+
+    // Also test bracket syntax what_if[remove f6] { ... }
+    let q_remove_bracket = QueryParser::parse_str("what_if[remove f6] { play { mate } }").unwrap();
+    let res_rem_b = GameSearchEvaluator::evaluate_with_timeline(
+        &q_remove_bracket,
+        &HashMap::new(),
+        std::slice::from_ref(&scholars_pos),
+        &[],
+    );
+    assert!(res_rem_b.is_match);
+
+    // 3. Threat detection via null move (pass):
+    let threat_pos_fen = "r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 3 3";
+    let threat_pos: shakmaty::Chess = shakmaty::fen::Fen::from_ascii(threat_pos_fen.as_bytes())
+        .unwrap()
+        .into_position(shakmaty::CastlingMode::Standard)
+        .unwrap();
+
+    let q_threat = QueryParser::parse_str("what_if(pass) { play { mate } }").unwrap();
+    let res_threat = GameSearchEvaluator::evaluate_with_timeline(
+        &q_threat,
+        &HashMap::new(),
+        std::slice::from_ref(&threat_pos),
+        &[],
+    );
+    assert!(
+        res_threat.is_match,
+        "Null move / pass exposes White's unstoppable mate threat"
+    );
+
+    // 4. Piece Transfer:
+    let q_transfer = QueryParser::parse_str("what_if(move b1 to d5) { attacks(N, f6) }").unwrap();
+    let res_trans = GameSearchEvaluator::evaluate_with_timeline(
+        &q_transfer,
+        &HashMap::new(),
+        std::slice::from_ref(&start_pos),
+        &[],
+    );
+    assert!(
+        res_trans.is_match,
+        "Transferring knight to d5 gives attack on f6"
+    );
+
+    // 5. Piece Addition (with pawn replaced):
+    let q_add =
+        QueryParser::parse_str("what_if(remove e2, add Q on e5) { attacks(Q, e7) }").unwrap();
+    let res_add =
+        GameSearchEvaluator::evaluate_with_timeline(&q_add, &HashMap::new(), &[start_pos], &[]);
+    assert!(res_add.is_match, "Adding queen on e5 attacks e7 pawn");
 }

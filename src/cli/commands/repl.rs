@@ -8,6 +8,13 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+type GameSummaryTuple = (String, String, String, String);
+type SearchSessionResult = (
+    Vec<crate::search::ScidMatchResult>,
+    usize,
+    HashMap<usize, GameSummaryTuple>,
+);
+
 enum DatabaseSession {
     Scid(ScidDatabaseWrapper),
     Pgn(PgnDatabaseWrapper),
@@ -56,15 +63,7 @@ impl DatabaseSession {
         }
     }
 
-    fn search(
-        &self,
-        query: &crate::search::SearchQuery,
-        limit: usize,
-    ) -> (
-        Vec<crate::search::ScidMatchResult>,
-        usize,
-        HashMap<usize, (String, String, String, String)>,
-    ) {
+    fn search(&self, query: &crate::search::SearchQuery, limit: usize) -> SearchSessionResult {
         match self {
             DatabaseSession::Pgn(db) => {
                 let total = db.game_count();

@@ -196,7 +196,20 @@ fn test_query_explain_and_to_dsl() {
         "8/4p3/8/8/8/8/8/8 b - - 0 1"
     );
 
-    // 3. Complex compound query to_dsl
+    // 3. Shift explanation: shiftvertical e1 -> 8 vertical branches (e1, e2, e3, e4, e5, e6, e7, e8)
+    let shift_exp = QueryParser::explain("shiftvertical e1").unwrap();
+    assert!(shift_exp.has_symmetries);
+    assert_eq!(shift_exp.branches.len(), 8);
+    assert_eq!(shift_exp.branches[0].dsl, "e1");
+    assert_eq!(shift_exp.branches[1].dsl, "e2");
+    assert_eq!(shift_exp.branches[2].dsl, "e3");
+    assert_eq!(shift_exp.branches[3].dsl, "e4");
+    assert_eq!(shift_exp.branches[4].dsl, "e5");
+    assert_eq!(shift_exp.branches[5].dsl, "e6");
+    assert_eq!(shift_exp.branches[6].dsl, "e7");
+    assert_eq!(shift_exp.branches[7].dsl, "e8");
+
+    // 4. Complex compound query to_dsl
     let complex_q =
         QueryParser::parse_str("player \"Morphy\" and wtm and legal count == 0").unwrap();
     let dsl = complex_q.to_dsl();
@@ -466,6 +479,13 @@ fn test_manual_examples_all_valid() {
         r#"fliphorizontal { Bc4 and Qh5 and attacks(h7, f7) }"#,
         r#"flipcolor { passed_pawns white >= 1 and [Qq] == 0 and [Rr] == 0 and result "1-0" }"#,
         r#"flip:all { fen "8/8/8/8/8/8/4P3/8 w - - 0 1" }"#,
+        r#"shifthorizontal { piece P on d4 and piece P on e4 }"#,
+        r#"shiftvertical { piece R on f1 and piece K on f2 }"#,
+        r#"shift { piece Q on f7 and piece B on c4 }"#,
+        r#"shift:horizontal { pin(bishop, knight, king) }"#,
+        r#"shift_all { outpost knight on c4 }"#,
+        r#"shift { attacks(R, k) >= 1 }"#,
+        r#"shifthorizontal { move from d2 to d4 }"#,
         r#"piece $minor in [N, B] { $minor on d5 and fork($minor, queen, rook) }"#,
         // Chapter 8: Boolean Logic, Timeline & Annotations
         r#"move_number <= 25 and result "1-0" and path [Bxh7 kxh7]"#,

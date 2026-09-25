@@ -260,9 +260,9 @@ impl BoardSymmetry {
         }
 
         let mut new_grid: [[Option<char>; 8]; 8] = [[None; 8]; 8];
-        for r in 0..8 {
-            for f in 0..8 {
-                if let Some(ch) = grid[r][f] {
+        for (r, row) in grid.iter().enumerate() {
+            for (f, item) in row.iter().enumerate() {
+                if let Some(ch) = item {
                     let sq = Square::from_coords(File::new(f as u32), Rank::new(r as u32));
                     let new_sq = self.transform_square(sq);
                     let new_ch = match self {
@@ -273,7 +273,7 @@ impl BoardSymmetry {
                                 ch.to_ascii_uppercase()
                             }
                         }
-                        _ => ch,
+                        _ => *ch,
                     };
                     new_grid[new_sq.rank() as usize][new_sq.file() as usize] = Some(new_ch);
                 }
@@ -285,13 +285,13 @@ impl BoardSymmetry {
             let rank = 7 - r_idx;
             let mut rank_str = String::new();
             let mut empty_count = 0;
-            for file in 0..8 {
-                if let Some(ch) = new_grid[rank][file] {
+            for ch_opt in &new_grid[rank] {
+                if let Some(ch) = ch_opt {
                     if empty_count > 0 {
                         rank_str.push_str(&empty_count.to_string());
                         empty_count = 0;
                     }
-                    rank_str.push(ch);
+                    rank_str.push(*ch);
                 } else {
                     empty_count += 1;
                 }
@@ -816,11 +816,63 @@ impl BoardSymmetry {
             SearchQuery::CqlLine(cql_line) => {
                 SearchQuery::CqlLine(self.transform_cql_line_pattern(cql_line))
             }
+            SearchQuery::WhatIf {
+                mutations,
+                query: sub,
+            } => SearchQuery::WhatIf {
+                mutations: mutations
+                    .iter()
+                    .map(|m| self.transform_mutation(m))
+                    .collect(),
+                query: Box::new(self.transform_query(sub)),
+            },
             SearchQuery::Initial(sub) => SearchQuery::Initial(Box::new(self.transform_query(sub))),
             SearchQuery::Terminal(sub) => {
                 SearchQuery::Terminal(Box::new(self.transform_query(sub)))
             }
             other => other.clone(),
+        }
+    }
+
+    /// Transform a BoardMutation under geometric or color symmetry
+    pub fn transform_mutation(
+        &self,
+        mutation: &super::query::BoardMutation,
+    ) -> super::query::BoardMutation {
+        use super::query::BoardMutation;
+        match mutation {
+            BoardMutation::RemoveSquares(sqs) => BoardMutation::RemoveSquares(
+                sqs.iter().map(|s| self.transform_square(*s)).collect(),
+            ),
+            BoardMutation::Pass => BoardMutation::Pass,
+            BoardMutation::SetTurn(color) => BoardMutation::SetTurn(match self {
+                BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal => color.other(),
+                _ => *color,
+            }),
+            BoardMutation::Transfer { from, to } => BoardMutation::Transfer {
+                from: self.transform_square(*from),
+                to: self.transform_square(*to),
+            },
+            BoardMutation::AddPiece { piece, square } => BoardMutation::AddPiece {
+                piece: match self {
+                    BoardSymmetry::ColorInvert | BoardSymmetry::ColorInvertHorizontal => {
+                        shakmaty::Piece {
+                            color: piece.color.other(),
+                            role: piece.role,
+                        }
+                    }
+                    _ => *piece,
+                },
+                square: self.transform_square(*square),
+            },
+            BoardMutation::SwapSquares { sq1, sq2 } => BoardMutation::SwapSquares {
+                sq1: self.transform_square(*sq1),
+                sq2: self.transform_square(*sq2),
+            },
+            BoardMutation::SwapColor(sq) => BoardMutation::SwapColor(self.transform_square(*sq)),
+            BoardMutation::MoveSequence(mvs) => BoardMutation::MoveSequence(
+                mvs.iter().map(|m| self.transform_move_pattern(m)).collect(),
+            ),
         }
     }
 
@@ -1229,12 +1281,8 @@ pub fn shift_piece_placement(placement: &str, df: i8, dr: i8) -> Option<String> 
                 file += digit as usize;
             } else if file < 8 {
                 let sq = Square::from_coords(File::new(file as u32), Rank::new(rank as u32));
-                if let Some(shifted_sq) = shift_square(sq, df, dr) {
-                    new_grid[shifted_sq.rank() as usize][shifted_sq.file() as usize] = Some(ch);
-                } else {
-                    // Piece falls off board
-                    return None;
-                }
+                let shifted_sq = shift_square(sq, df, dr)?;
+                new_grid[shifted_sq.rank() as usize][shifted_sq.file() as usize] = Some(ch);
                 file += 1;
             } else {
                 return None;
@@ -1247,13 +1295,13 @@ pub fn shift_piece_placement(placement: &str, df: i8, dr: i8) -> Option<String> 
         let rank = 7 - r_idx;
         let mut rank_str = String::new();
         let mut empty_count = 0;
-        for file in 0..8 {
-            if let Some(ch) = new_grid[rank][file] {
+        for ch_opt in &new_grid[rank] {
+            if let Some(ch) = ch_opt {
                 if empty_count > 0 {
                     rank_str.push_str(&empty_count.to_string());
                     empty_count = 0;
                 }
-                rank_str.push(ch);
+                rank_str.push(*ch);
             } else {
                 empty_count += 1;
             }
@@ -1390,7 +1438,11 @@ pub fn shift_square_set_expr(expr: &SquareSetExpr, df: i8, dr: i8) -> Option<Squ
                     new_bb.add(shifted);
                 }
             }
-            Some(SquareSetExpr::Squares(new_bb))
+            if !bb.is_empty() && new_bb.is_empty() {
+                None
+            } else {
+                Some(SquareSetExpr::Squares(new_bb))
+            }
         }
         SquareSetExpr::Intersection(left, right) => Some(SquareSetExpr::Intersection(
             Box::new(shift_square_set_expr(left, df, dr)?),
@@ -1647,7 +1699,57 @@ pub fn shift_query(query: &SearchQuery, df: i8, dr: i8) -> Option<SearchQuery> {
             domain: domain.clone(),
             query: Box::new(q),
         }),
+        SearchQuery::WhatIf { mutations, query } => {
+            let mut shifted_mutations = Vec::with_capacity(mutations.len());
+            for m in mutations {
+                shifted_mutations.push(shift_mutation(m, df, dr)?);
+            }
+            Some(SearchQuery::WhatIf {
+                mutations: shifted_mutations,
+                query: Box::new(shift_query(query, df, dr)?),
+            })
+        }
         other => Some(other.clone()),
+    }
+}
+
+/// Shift a BoardMutation by (df, dr)
+pub fn shift_mutation(
+    mutation: &super::query::BoardMutation,
+    df: i8,
+    dr: i8,
+) -> Option<super::query::BoardMutation> {
+    use super::query::BoardMutation;
+    match mutation {
+        BoardMutation::RemoveSquares(sqs) => {
+            let mut shifted_sqs = Vec::with_capacity(sqs.len());
+            for &sq in sqs {
+                shifted_sqs.push(shift_square(sq, df, dr)?);
+            }
+            Some(BoardMutation::RemoveSquares(shifted_sqs))
+        }
+        BoardMutation::Pass => Some(BoardMutation::Pass),
+        BoardMutation::SetTurn(c) => Some(BoardMutation::SetTurn(*c)),
+        BoardMutation::Transfer { from, to } => Some(BoardMutation::Transfer {
+            from: shift_square(*from, df, dr)?,
+            to: shift_square(*to, df, dr)?,
+        }),
+        BoardMutation::AddPiece { piece, square } => Some(BoardMutation::AddPiece {
+            piece: *piece,
+            square: shift_square(*square, df, dr)?,
+        }),
+        BoardMutation::SwapSquares { sq1, sq2 } => Some(BoardMutation::SwapSquares {
+            sq1: shift_square(*sq1, df, dr)?,
+            sq2: shift_square(*sq2, df, dr)?,
+        }),
+        BoardMutation::SwapColor(sq) => Some(BoardMutation::SwapColor(shift_square(*sq, df, dr)?)),
+        BoardMutation::MoveSequence(mvs) => {
+            let mut shifted_mvs = Vec::with_capacity(mvs.len());
+            for mv in mvs {
+                shifted_mvs.push(shift_move_pattern(mv, df, dr)?);
+            }
+            Some(BoardMutation::MoveSequence(shifted_mvs))
+        }
     }
 }
 

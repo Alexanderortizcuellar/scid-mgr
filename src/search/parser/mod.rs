@@ -1,4 +1,5 @@
-use shakmaty::Color;
+use shakmaty::{Color, Piece, Role, Square};
+use std::str::FromStr;
 
 pub mod headers;
 pub mod helpers;
@@ -17,7 +18,9 @@ pub use helpers::{
 pub use lexer::{is_ident_char, is_ident_start, Lexer, ParseError, Token};
 pub use validator::validate_query_semantics;
 
-use super::query::{ComparisonOp, MaterialPredicate, PositionPattern, SearchQuery, SquareContent};
+use super::query::{
+    BoardMutation, ComparisonOp, MaterialPredicate, PositionPattern, SearchQuery, SquareContent,
+};
 
 /// CQL-Lite query parser that translates textual search expressions into a SearchQuery AST
 pub struct QueryParser<'a> {
@@ -373,9 +376,9 @@ impl<'a> QueryParser<'a> {
             return self.parse_ply_expr();
         }
 
-        // 4. Bracketed piece lists without 'piece' keyword: e.g. `[B, b] >= 1`, `[Q, R] on [d1, e1]`
+        // 4. Bracketed lists: piece lists (e.g. `[B, b] >= 1`, `[Q, R] on [d1, e1]`) or square sets (`[a1, a2]`)
         if let Some(Token::LBracket) = self.peek() {
-            if self.has_square_set_operator_ahead() {
+            if !self.is_bracket_piece_list() || self.has_square_set_operator_ahead() {
                 let saved_pos = self.pos;
                 if let Ok(sq) = self.parse_square_set_query() {
                     return Ok(sq);
@@ -1437,6 +1440,11 @@ impl<'a> QueryParser<'a> {
                     });
                 }
 
+                "what_if" | "whatif" => {
+                    self.advance();
+                    return self.parse_what_if_expr();
+                }
+
                 _ => {
                     if ident_str.starts_with('$') {
                         if self.peek_nth(1) == Some(&Token::Eq) {
@@ -1548,5 +1556,235 @@ impl<'a> QueryParser<'a> {
             format!("Unrecognized query token at pos {}", pos),
             pos,
         ))
+    }
+
+    /// Parse a `what_if(...) { ... }` or `what_if [...] { ... }` hypothetical sandbox query
+    pub(crate) fn parse_what_if_expr(&mut self) -> Result<SearchQuery, ParseError> {
+        let pos = self.current_pos();
+        let mut mutations = Vec::new();
+
+        if let Some(Token::LParen) = self.peek() {
+            self.advance();
+            while let Some(tok) = self.peek() {
+                if let Token::RParen = tok {
+                    self.advance();
+                    break;
+                }
+                if let Token::Comma = tok {
+                    self.advance();
+                    continue;
+                }
+                mutations.push(self.parse_single_board_mutation()?);
+            }
+        } else if let Some(Token::LBracket) = self.peek() {
+            self.advance();
+            while let Some(tok) = self.peek() {
+                if let Token::RBracket = tok {
+                    self.advance();
+                    break;
+                }
+                if let Token::Comma = tok {
+                    self.advance();
+                    continue;
+                }
+                mutations.push(self.parse_single_board_mutation()?);
+            }
+        } else {
+            mutations.push(self.parse_single_board_mutation()?);
+        }
+
+        if mutations.is_empty() {
+            return Err(ParseError::new(
+                "what_if requires at least one board mutation (e.g. what_if(pass) { ... }, what_if(remove f6) { ... })",
+                pos,
+            ));
+        }
+
+        let sub_query = if let Some(Token::LBrace) = self.peek() {
+            self.advance();
+            let q = self.parse_or_expr()?;
+            self.expect_token(Token::RBrace)?;
+            q
+        } else if let Some(Token::LParen) = self.peek() {
+            self.advance();
+            let q = self.parse_or_expr()?;
+            self.expect_token(Token::RParen)?;
+            q
+        } else {
+            self.parse_unary_expr()?
+        };
+
+        Ok(SearchQuery::WhatIf {
+            mutations,
+            query: Box::new(sub_query),
+        })
+    }
+
+    /// Parse a single board mutation within what_if
+    pub(crate) fn parse_single_board_mutation(&mut self) -> Result<BoardMutation, ParseError> {
+        let pos = self.current_pos();
+
+        // Bracketed move sequence: `[e4 e5 Qh5]`
+        if let Some(Token::LBracket) = self.peek() {
+            self.advance();
+            let mut moves = Vec::new();
+            while let Some(tok) = self.peek() {
+                if let Token::RBracket = tok {
+                    self.advance();
+                    break;
+                }
+                if let Token::Comma = tok {
+                    self.advance();
+                    continue;
+                }
+                let move_pos = self.current_pos();
+                if let Some(Token::StringLit(s)) = self.peek() {
+                    let s_clone = s.clone();
+                    self.advance();
+                    if let Some(pat) = helpers::parse_path_move_token(&s_clone) {
+                        moves.push(pat);
+                    } else {
+                        moves.push(super::query::MovePattern {
+                            san: Some(s_clone),
+                            ..Default::default()
+                        });
+                    }
+                } else if let Some(Token::Ident(s)) = self.peek() {
+                    let s_clone = s.clone();
+                    self.advance();
+                    if let Some(pat) = helpers::parse_path_move_token(&s_clone) {
+                        moves.push(pat);
+                    } else {
+                        return Err(ParseError::new(
+                            format!("Invalid move token in what_if sequence: {}", s_clone),
+                            move_pos,
+                        ));
+                    }
+                } else {
+                    return Err(ParseError::new(
+                        format!("Expected move token in what_if sequence, found {:?}", tok),
+                        move_pos,
+                    ));
+                }
+            }
+            return Ok(BoardMutation::MoveSequence(moves));
+        }
+
+        let kw = self.expect_ident()?;
+        let kw_low = kw.to_lowercase();
+        match kw_low.as_str() {
+            "pass" | "null_move" | "nullmove" | "null" => Ok(BoardMutation::Pass),
+            "turn" | "wtm" | "btm" => {
+                if kw_low == "wtm" {
+                    return Ok(BoardMutation::SetTurn(Color::White));
+                }
+                if kw_low == "btm" {
+                    return Ok(BoardMutation::SetTurn(Color::Black));
+                }
+                let c_str = self.expect_ident()?;
+                let color = match c_str.to_lowercase().as_str() {
+                    "white" | "w" => Color::White,
+                    "black" | "b" => Color::Black,
+                    _ => {
+                        return Err(ParseError::new(
+                            format!("Invalid turn color in what_if mutation: {}", c_str),
+                            pos,
+                        ))
+                    }
+                };
+                Ok(BoardMutation::SetTurn(color))
+            }
+            "remove" | "delete" | "without" => {
+                if self.match_ident("knight")
+                    || self.match_ident("bishop")
+                    || self.match_ident("rook")
+                    || self.match_ident("queen")
+                    || self.match_ident("pawn")
+                    || self.match_ident("king")
+                    || self.match_ident("piece")
+                {
+                    let _ =
+                        self.match_ident("on") || self.match_ident("at") || self.match_ident("in");
+                }
+                let sqs = self.parse_square_set()?;
+                Ok(BoardMutation::RemoveSquares(sqs))
+            }
+            "move" | "transfer" => {
+                let from_str = self.expect_ident()?;
+                let from = Square::from_str(&from_str.to_lowercase()).map_err(|_| {
+                    ParseError::new(
+                        format!("Invalid from square in what_if transfer: {}", from_str),
+                        pos,
+                    )
+                })?;
+                let _ = self.match_ident("to") || self.match_ident("->");
+                let to_str = self.expect_ident()?;
+                let to = Square::from_str(&to_str.to_lowercase()).map_err(|_| {
+                    ParseError::new(
+                        format!("Invalid to square in what_if transfer: {}", to_str),
+                        pos,
+                    )
+                })?;
+                Ok(BoardMutation::Transfer { from, to })
+            }
+            "add" | "place" | "insert" => {
+                let p_str = self.expect_ident()?;
+                let (c_opt, r_opt) = helpers::parse_piece_specifier(&p_str).ok_or_else(|| {
+                    ParseError::new(format!("Invalid piece in what_if add: {}", p_str), pos)
+                })?;
+                let color = c_opt.unwrap_or(Color::White);
+                let role = r_opt.unwrap_or(Role::Queen);
+                let piece = Piece { color, role };
+                let _ = self.match_ident("on") || self.match_ident("at") || self.match_ident("in");
+                let sq_str = self.expect_ident()?;
+                let square = Square::from_str(&sq_str.to_lowercase()).map_err(|_| {
+                    ParseError::new(format!("Invalid square in what_if add: {}", sq_str), pos)
+                })?;
+                Ok(BoardMutation::AddPiece { piece, square })
+            }
+            "swap" => {
+                let s1_str = self.expect_ident()?;
+                let sq1 = Square::from_str(&s1_str.to_lowercase()).map_err(|_| {
+                    ParseError::new(
+                        format!("Invalid first square in what_if swap: {}", s1_str),
+                        pos,
+                    )
+                })?;
+                if let Some(Token::Comma) = self.peek() {
+                    self.advance();
+                }
+                let s2_str = self.expect_ident()?;
+                let sq2 = Square::from_str(&s2_str.to_lowercase()).map_err(|_| {
+                    ParseError::new(
+                        format!("Invalid second square in what_if swap: {}", s2_str),
+                        pos,
+                    )
+                })?;
+                Ok(BoardMutation::SwapSquares { sq1, sq2 })
+            }
+            "swap_color" | "swapcolor" | "invert_color" | "invertcolor" => {
+                let sq_str = self.expect_ident()?;
+                let sq = Square::from_str(&sq_str.to_lowercase()).map_err(|_| {
+                    ParseError::new(
+                        format!("Invalid square in what_if swap_color: {}", sq_str),
+                        pos,
+                    )
+                })?;
+                Ok(BoardMutation::SwapColor(sq))
+            }
+            other => {
+                if let Some(pat) = helpers::parse_path_move_token(other) {
+                    Ok(BoardMutation::MoveSequence(vec![pat]))
+                } else {
+                    Err(ParseError::new(
+                        format!(
+                            "Unknown what_if mutation: '{}'. Supported: pass, turn <color>, remove <squares>, move <from> to <to>, add <piece> on <square>, swap <sq1> <sq2>, swap_color <sq>",
+                            other
+                        ),
+                        pos,
+                    ))
+                }
+            }
+        }
     }
 }

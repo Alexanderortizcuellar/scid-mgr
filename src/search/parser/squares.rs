@@ -704,6 +704,16 @@ impl<'a> QueryParser<'a> {
                     }
                 }
 
+                if let SquareSetExpr::Squares(bb) = inner {
+                    let mut new_bb = Bitboard::EMPTY;
+                    for sq in bb {
+                        for expanded_sq in dir.expand_square(sq, min_dist, max_dist) {
+                            new_bb.add(expanded_sq);
+                        }
+                    }
+                    return Ok(SquareSetExpr::Squares(new_bb));
+                }
+
                 return Ok(SquareSetExpr::Shift {
                     direction: dir,
                     min_dist,
@@ -735,6 +745,8 @@ impl<'a> QueryParser<'a> {
                 }
                 if id_low == "attacks"
                     || id_low == "attackers"
+                    || id_low == "offset"
+                    || id_low == "shift"
                     || id_low == "ray"
                     || id_low == "diag"
                     || id_low == "diagonal"
@@ -789,6 +801,8 @@ impl<'a> QueryParser<'a> {
             if self.is_bracket_piece_list() {
                 self.advance(); // consume '['
                 let mut pieces = Vec::new();
+                let mut has_empty = false;
+                let mut has_occupied = false;
                 while let Some(tok) = self.peek() {
                     if let Token::RBracket = tok {
                         self.advance();
@@ -799,11 +813,24 @@ impl<'a> QueryParser<'a> {
                         continue;
                     }
                     let pt = self.expect_ident()?;
-                    // Multi-char piece string e.g. "qr", "RBN", "Aa"
+                    let pt_low = pt.to_lowercase();
+                    if pt == "_" || pt == "." || pt_low == "empty" {
+                        has_empty = true;
+                        continue;
+                    }
+                    if pt_low == "occupied" || pt_low == "pieces" || pt_low == "any_piece" {
+                        has_occupied = true;
+                        continue;
+                    }
+                    // Multi-char piece string e.g. "qr", "RBN", "Aa", "Aa_", "A_"
                     if pt.len() > 1 && parse_piece_specifier(&pt).is_none() {
                         let mut all_valid = true;
                         let mut char_pieces = Vec::new();
                         for ch in pt.chars() {
+                            if ch == '_' || ch == '.' {
+                                has_empty = true;
+                                continue;
+                            }
                             let ch_str = ch.to_string();
                             if let Some((color_opt, role_opt)) = parse_piece_specifier(&ch_str) {
                                 let roles = match role_opt {
@@ -831,7 +858,7 @@ impl<'a> QueryParser<'a> {
                                 break;
                             }
                         }
-                        if all_valid && !char_pieces.is_empty() {
+                        if all_valid {
                             pieces.extend(char_pieces);
                             continue;
                         }
@@ -866,14 +893,31 @@ impl<'a> QueryParser<'a> {
                     }
                 }
 
-                let content = if pieces.is_empty() {
-                    SquareContent::Occupied
-                } else if pieces.len() == 1 {
-                    SquareContent::Piece(pieces[0])
+                let piece_expr = if has_occupied {
+                    Some(SquareSetExpr::Piece(SquareContent::Occupied))
+                } else if !pieces.is_empty() {
+                    let content = if pieces.len() == 1 {
+                        SquareContent::Piece(pieces[0])
+                    } else {
+                        SquareContent::AnyOf(pieces)
+                    };
+                    Some(SquareSetExpr::Piece(content))
                 } else {
-                    SquareContent::AnyOf(pieces)
+                    None
                 };
-                return Ok(SquareSetExpr::Piece(content));
+
+                let empty_expr = if has_empty {
+                    Some(SquareSetExpr::Piece(SquareContent::Empty))
+                } else {
+                    None
+                };
+
+                return match (piece_expr, empty_expr) {
+                    (Some(p), Some(e)) => Ok(SquareSetExpr::Union(Box::new(p), Box::new(e))),
+                    (Some(p), None) => Ok(p),
+                    (None, Some(e)) => Ok(e),
+                    (None, None) => Ok(SquareSetExpr::Piece(SquareContent::Occupied)),
+                };
             }
 
             let squares = self.parse_square_set()?;
@@ -920,6 +964,65 @@ impl<'a> QueryParser<'a> {
                         attacker: Box::new(attacker),
                         target: Box::new(target),
                     });
+                }
+                "offset" => {
+                    self.advance();
+                    self.expect_token(Token::LParen)?;
+                    let target_expr = self.parse_square_set_expr()?;
+                    self.expect_token(Token::Comma)?;
+                    let dx = self.expect_number()?;
+                    self.expect_token(Token::Comma)?;
+                    let dy = self.expect_number()?;
+                    self.expect_token(Token::RParen)?;
+
+                    // If static squares: fold directly
+                    if let SquareSetExpr::Squares(bb) = target_expr {
+                        let mut new_bb = Bitboard::EMPTY;
+                        for sq in bb {
+                            if let Some(shifted_sq) =
+                                crate::search::transform::shift_square(sq, dx as i8, dy as i8)
+                            {
+                                new_bb.add(shifted_sq);
+                            }
+                        }
+                        return Ok(SquareSetExpr::Squares(new_bb));
+                    }
+
+                    // Otherwise compose directional shifts:
+                    let mut current = target_expr;
+                    if dx > 0 {
+                        current = SquareSetExpr::Shift {
+                            direction: crate::search::query::Direction::Right,
+                            min_dist: dx as usize,
+                            max_dist: dx as usize,
+                            expr: Box::new(current),
+                        };
+                    } else if dx < 0 {
+                        current = SquareSetExpr::Shift {
+                            direction: crate::search::query::Direction::Left,
+                            min_dist: (-dx) as usize,
+                            max_dist: (-dx) as usize,
+                            expr: Box::new(current),
+                        };
+                    }
+
+                    if dy > 0 {
+                        current = SquareSetExpr::Shift {
+                            direction: crate::search::query::Direction::Up,
+                            min_dist: dy as usize,
+                            max_dist: dy as usize,
+                            expr: Box::new(current),
+                        };
+                    } else if dy < 0 {
+                        current = SquareSetExpr::Shift {
+                            direction: crate::search::query::Direction::Down,
+                            min_dist: (-dy) as usize,
+                            max_dist: (-dy) as usize,
+                            expr: Box::new(current),
+                        };
+                    }
+
+                    return Ok(current);
                 }
                 "between" => {
                     self.advance();
@@ -1015,7 +1118,7 @@ impl<'a> QueryParser<'a> {
         ))
     }
 
-    fn is_bracket_piece_list(&self) -> bool {
+    pub(crate) fn is_bracket_piece_list(&self) -> bool {
         let mut idx = 1;
         let mut has_items = false;
         while let Some((_, tok)) = self.tokens.get(self.pos + idx) {
@@ -1027,13 +1130,27 @@ impl<'a> QueryParser<'a> {
                 }
                 Token::Ident(ref s) => {
                     has_items = true;
+                    let s_low = s.to_lowercase();
+                    if s == "_"
+                        || s == "."
+                        || s_low == "empty"
+                        || s_low == "occupied"
+                        || s_low == "pieces"
+                        || s_low == "any_piece"
+                    {
+                        idx += 1;
+                        continue;
+                    }
                     if parse_piece_specifier(s).is_some() {
                         idx += 1;
                         continue;
                     }
                     if s.len() > 1
-                        && s.chars()
-                            .all(|ch| parse_piece_specifier(&ch.to_string()).is_some())
+                        && s.chars().all(|ch| {
+                            parse_piece_specifier(&ch.to_string()).is_some()
+                                || ch == '_'
+                                || ch == '.'
+                        })
                     {
                         idx += 1;
                         continue;
