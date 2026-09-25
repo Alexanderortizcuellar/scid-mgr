@@ -996,3 +996,106 @@ fn test_offset_function_syntax_and_evaluation() {
     assert_eq!(exp_rot.branches[2].dsl, "b5"); // 180 deg
     assert_eq!(exp_rot.branches[3].dsl, "e7"); // 270 deg
 }
+
+#[test]
+fn test_universal_square_set_and_bracketed_piece_placement_regression() {
+    use shakmaty::fen::Fen;
+    use shakmaty::{CastlingMode, Chess};
+
+    // 1. `.` represents all 64 squares:
+    let _q_dot = QueryParser::parse_str(".").expect("Failed to parse '.' as universal set");
+    let exp_dot = QueryParser::explain(".").unwrap();
+    assert_eq!(exp_dot.canonical_dsl, ".");
+
+    let q_dot_count = QueryParser::parse_str(". == 64").expect("Failed to parse '. == 64'");
+    let fen_init: Fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        .parse()
+        .unwrap();
+    let pos_init: Chess = fen_init.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_dot_count,
+        &pos_init,
+        0,
+        None
+    ));
+
+    // 2. Set operations on `.` (universal set):
+    let q_dot_diff = QueryParser::parse_str(". \\ d4 == 63").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_dot_diff,
+        &pos_init,
+        0,
+        None
+    ));
+
+    let q_dot_light = QueryParser::parse_str(". & light == 32").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_dot_light,
+        &pos_init,
+        0,
+        None
+    ));
+
+    let q_bracket_dot = QueryParser::parse_str("[.] == 64").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_bracket_dot,
+        &pos_init,
+        0,
+        None
+    ));
+
+    // 3. `_` represents empty squares (at startpos, 32 empty squares):
+    let q_empty = QueryParser::parse_str("_ == 32").unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_empty, &pos_init, 0, None
+    ));
+    let exp_empty = QueryParser::explain("_").unwrap();
+    assert_eq!(exp_empty.canonical_dsl, "_");
+
+    // 4. `[Bd1, _]` as standalone query and in tactical filters:
+    let q_bd1_empty = QueryParser::parse_str("[Bd1, _]").expect("Failed to parse '[Bd1, _]'");
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_bd1_empty,
+        &pos_init,
+        0,
+        None
+    ));
+
+    // In initial pos, d1 is Queen (not Bishop), but empty squares exist, so `[Bd1, _]` is non-empty.
+    // If we test `[Bd1, _] & d1`, d1 is Qd1 (not Bd1 and not empty), so it should NOT match d1:
+    let q_bd1_d1 = QueryParser::parse_str("[Bd1, _] & d1").unwrap();
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_bd1_d1, &pos_init, 0, None
+    ));
+
+    // On a board with Bishop on d1:
+    let fen_bd1: Fen = "4k3/8/8/8/8/8/8/3B1K2 w - - 0 1".parse().unwrap();
+    let pos_bd1: Chess = fen_bd1.into_position(CastlingMode::Chess960).unwrap();
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_bd1_d1, &pos_bd1, 0, None
+    ));
+
+    // 5. `[A, _]` (White pieces or empty squares):
+    let q_a_empty = QueryParser::parse_str("[A, _]").expect("Failed to parse '[A, _]'");
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_a_empty, &pos_init, 0, None
+    ));
+
+    // 6. Smothered mate query: `btm mate and not attacks(k, [A, _])`
+    // In smothered mate, the Black King is in checkmate, and cannot attack any White piece or empty square (all surrounding squares are blocked by Black's own pieces).
+    let dsl_smothered = "btm mate and not attacks(k, [A, _])";
+    let q_smothered =
+        QueryParser::parse_str(dsl_smothered).expect("Failed to parse smothered mate query");
+
+    // Philidor's smothered mate position:
+    // White Knight on f7 gives checkmate, Black King on h8 is surrounded by Black Rook on g8, Black Pawns on g7, h7.
+    let fen_smothered: Fen = "6rk/5Npp/8/8/8/8/8/7K b - - 0 1".parse().unwrap();
+    let pos_smothered: Chess = fen_smothered.into_position(CastlingMode::Chess960).unwrap();
+
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_smothered,
+        &pos_smothered,
+        0,
+        None
+    ));
+}

@@ -71,7 +71,7 @@ impl ToDsl for SquareOrPiece {
             SquareOrPiece::Square(sq) => format!("{sq}"),
             SquareOrPiece::Piece(pm) => pm.to_dsl(),
             SquareOrPiece::Variable(v) => format!("${v}"),
-            SquareOrPiece::Empty => ".".to_string(),
+            SquareOrPiece::Empty => "_".to_string(),
         }
     }
 }
@@ -79,8 +79,8 @@ impl ToDsl for SquareOrPiece {
 impl ToDsl for SquareContent {
     fn to_dsl(&self) -> String {
         match self {
-            SquareContent::Empty => ".".to_string(),
-            SquareContent::Occupied => "?".to_string(),
+            SquareContent::Empty => "_".to_string(),
+            SquareContent::Occupied => "occupied".to_string(),
             SquareContent::Piece(p) => {
                 let ch = p.role.char();
                 if p.color == Color::White {
@@ -138,7 +138,9 @@ impl ToDsl for SquareSetExpr {
         match self {
             SquareSetExpr::Piece(content) => content.to_dsl(),
             SquareSetExpr::Squares(bb) => {
-                if *bb == Bitboard::LIGHT_SQUARES {
+                if *bb == !Bitboard::EMPTY {
+                    ".".to_string()
+                } else if *bb == Bitboard::LIGHT_SQUARES {
                     "light".to_string()
                 } else if *bb == Bitboard::DARK_SQUARES {
                     "dark".to_string()

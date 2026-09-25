@@ -376,15 +376,13 @@ impl<'a> QueryParser<'a> {
             return self.parse_ply_expr();
         }
 
-        // 4. Bracketed lists: piece lists (e.g. `[B, b] >= 1`, `[Q, R] on [d1, e1]`) or square sets (`[a1, a2]`)
+        // 4. Bracketed lists: piece lists (e.g. `[B, b] >= 1`, `[Q, R] on [d1, e1]`) or square sets (`[a1, a2]`, `[Bd1, _]`, `[.]`)
         if let Some(Token::LBracket) = self.peek() {
-            if !self.is_bracket_piece_list() || self.has_square_set_operator_ahead() {
-                let saved_pos = self.pos;
-                if let Ok(sq) = self.parse_square_set_query() {
-                    return Ok(sq);
-                }
-                self.pos = saved_pos;
+            let saved_pos = self.pos;
+            if let Ok(sq) = self.parse_square_set_query() {
+                return Ok(sq);
             }
+            self.pos = saved_pos;
             return self.parse_piece_on_square();
         }
 

@@ -14,7 +14,8 @@ In CQLite, piece symbols can specify color, piece role, or color sets:
 | **`p`**, **`n`**, **`b`**, **`r`**, **`q`**, **`k`** | **Black Pieces** (Pawn, Knight, Bishop, Rook, Queen, King) | `qd8` (Black Queen on d8) |
 | **`A`** / **`white_pieces`** / **`white`** | **Any White Piece** | `Ae4` (Any White piece on e4) |
 | **`a`** / **`black_pieces`** / **`black`** | **Any Black Piece** | `ad4` (Any Black piece on d4) |
-| **`_`** / **`empty`** | **Empty Square** | `_e4` (Square e4 is empty) |
+| **`_`** / **`empty`** | **Empty Squares Set** | `_e4` (Square e4 is empty) / `[A, _]` |
+| **`.`** / **`all`** / **`all_squares`** | **Universal Set** (All 64 squares) | `. \ d4 == 63` |
 | **`any_piece`** / **`occupied`** | **Any Occupied Square** (either color) | `occupied on d4` |
 
 ---
@@ -35,9 +36,11 @@ wpd4     # White Pawn on d4 (explicit prefix)
 bke8     # Black King on e8 (explicit prefix)
 ```
 
-You can combine multiple placements seamlessly with `and` or space separation:
+You can combine multiple placements seamlessly with `and` or space separation, or in bracketed square set unions:
 ```text
 Kd4 qd8 Pa5
+[Bd1, _]     # White Bishop on d1 or empty squares
+[A, _]       # Any White piece or empty squares
 ```
 
 ---
@@ -50,6 +53,8 @@ You can query individual squares, sets, rectangular board boxes, ranks, files, o
 | :--- | :--- | :--- | :--- |
 | **`e4`** | Single Square | Target single square | `Q on e4` |
 | **`[c3, d5, e4]`** | Square Set | List of specific squares | `Knight on [c3, d5, f3]` |
+| **`[Bd1, _]`** | Unified Set | Union of piece placements & empty squares | `attacks(k, [A, _])` |
+| **`.`** | Universal Set | All 64 squares on the chessboard | `. & light == 32` |
 | **`a1-h2`** / **`c3-f6`** | Rectangular Area | All squares in the bounding box between two corners | `P on a1-h2 == 0` |
 | **`a1..h8`** / **`diag:a1-h8`** | Diagonal Ray | Only the collinear diagonal between corners | `B on a1..h8` |
 | **`a1-8`** | Full File Range | Squares on file `a` from rank 1 to 8 | `R on a1-8` |
