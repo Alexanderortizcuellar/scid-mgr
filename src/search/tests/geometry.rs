@@ -1081,15 +1081,15 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
         &q_a_empty, &pos_init, 0, None
     ));
 
-    // 6. Smothered mate query: `btm mate and not attacks(k, [A, _])` or unbracketed `attacks(k, A_)`
+    // 6. Smothered mate query: `btm mate and not attacks(k, [A, _])` or `attacks(k, [A_])`
     // In smothered mate, the Black King is in checkmate, and cannot attack any White piece or empty square (all surrounding squares are blocked by Black's own pieces).
     let dsl_smothered = "btm mate and not attacks(k, [A, _])";
     let q_smothered =
         QueryParser::parse_str(dsl_smothered).expect("Failed to parse smothered mate query");
 
-    let dsl_smothered_unbracketed = "btm mate and not attacks(k, A_)";
-    let q_smothered_unbracketed = QueryParser::parse_str(dsl_smothered_unbracketed)
-        .expect("Failed to parse unbracketed smothered mate query");
+    let dsl_smothered_compound = "btm mate and not attacks(k, [A_])";
+    let q_smothered_compound = QueryParser::parse_str(dsl_smothered_compound)
+        .expect("Failed to parse [A_] compound smothered mate query");
 
     // Philidor's smothered mate position:
     // White Knight on f7 gives checkmate, Black King on h8 is surrounded by Black Rook on g8, Black Pawns on g7, h7.
@@ -1103,17 +1103,43 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
         None
     ));
     assert!(crate::search::evaluator::matches_single_ply(
-        &q_smothered_unbracketed,
+        &q_smothered_compound,
         &pos_smothered,
         0,
         None
     ));
 
-    // 7. Unbracketed A_ standalone:
-    let q_a_under = QueryParser::parse_str("A_").expect("Failed to parse 'A_'");
+    // 7. Compound piece identifiers in bracketed lists: [QB], [Q, B], [qn], [q, n], [A_]
+    let q_qb = QueryParser::parse_str("[QB] == 2").expect("Failed to parse '[QB]'");
+    let q_q_b = QueryParser::parse_str("[Q, B] == 2").expect("Failed to parse '[Q, B]'");
+    let q_qn = QueryParser::parse_str("[qn] == 2").expect("Failed to parse '[qn]'");
+    let q_q_n = QueryParser::parse_str("[q, n] == 2").expect("Failed to parse '[q, n]'");
+
+    // Fen with White Q on d1, White B on c1, White K on e1, Black q on d8, Black n on c6, Black k on e8:
+    let fen_compound: Fen = "3qk3/8/2n5/8/8/8/8/2BQK3 w - - 0 1".parse().unwrap();
+    let pos_compound: Chess = fen_compound.into_position(CastlingMode::Chess960).unwrap();
+
     assert!(crate::search::evaluator::matches_single_ply(
-        &q_a_under,
-        &pos_init,
+        &q_qb,
+        &pos_compound,
+        0,
+        None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_q_b,
+        &pos_compound,
+        0,
+        None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_qn,
+        &pos_compound,
+        0,
+        None
+    ));
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_q_n,
+        &pos_compound,
         0,
         None
     ));

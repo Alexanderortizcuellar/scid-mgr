@@ -772,9 +772,6 @@ impl<'a> QueryParser<'a> {
                 if super::helpers::parse_compact_piece_placement(id).is_some() {
                     return true;
                 }
-                if super::helpers::parse_multi_char_piece_specifier(id).is_some() {
-                    return true;
-                }
                 if parse_piece_specifier(id).is_some() {
                     return true;
                 }
@@ -1155,11 +1152,6 @@ impl<'a> QueryParser<'a> {
                     Box::new(SquareSetExpr::Piece(content)),
                     Box::new(SquareSetExpr::Squares(Bitboard::from_square(sq))),
                 ));
-            }
-
-            if let Some(multi_expr) = super::helpers::parse_multi_char_piece_specifier(id) {
-                self.advance();
-                return Ok(multi_expr);
             }
 
             if let Some((color_opt, role_opt)) = parse_piece_specifier(id) {
