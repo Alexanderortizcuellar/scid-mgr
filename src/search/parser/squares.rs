@@ -1245,7 +1245,15 @@ impl<'a> QueryParser<'a> {
                     }
                     brace_depth -= 1;
                 }
-                Token::Pipe | Token::Ampersand | Token::Backslash
+                Token::Pipe
+                | Token::Ampersand
+                | Token::Backslash
+                | Token::Eq
+                | Token::Neq
+                | Token::Gt
+                | Token::Gte
+                | Token::Lt
+                | Token::Lte
                     if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
                 {
                     return true;

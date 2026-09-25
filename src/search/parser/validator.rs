@@ -34,6 +34,13 @@ pub fn validate_query_semantics(query: &SearchQuery, pos: usize) -> Result<(), P
         }) => {
             validate_piece_count(content, squares.as_deref(), *op, *count, pos)?;
         }
+        SearchQuery::SquareSet(crate::search::query::SetPredicate::CountComparison {
+            expr: crate::search::query::SquareSetExpr::Piece(content),
+            op,
+            count,
+        }) => {
+            validate_piece_count(content, None, *op, *count, pos)?;
+        }
         SearchQuery::Not(sub)
         | SearchQuery::Parent(sub)
         | SearchQuery::Child(sub)
@@ -611,6 +618,18 @@ fn validate_and_clauses(clauses: &[SearchQuery], pos: usize) -> Result<(), Parse
     let mut black_counts = PieceCountAccumulator::default();
 
     for clause in clauses {
+        if let SearchQuery::SquareSet(crate::search::query::SetPredicate::CountComparison {
+            expr: crate::search::query::SquareSetExpr::Piece(SquareContent::Piece(p)),
+            op: crate::search::query::ComparisonOp::Equal,
+            count,
+        }) = clause
+        {
+            match p.color {
+                Color::White => white_counts.set_count(p.role, *count),
+                Color::Black => black_counts.set_count(p.role, *count),
+            }
+        }
+
         if let SearchQuery::Position(PositionPattern::PieceCount {
             content,
             squares,

@@ -1143,4 +1143,25 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
         0,
         None
     ));
+
+    // 8. Comparing compact placement to empty set: `Bd1 == []`
+    let exp_bd1_empty = QueryParser::explain("Bd1 == []").expect("Failed to explain 'Bd1 == []'");
+    assert_eq!(exp_bd1_empty.canonical_dsl, "(B & d1) == []");
+
+    let q_no_bd1 = QueryParser::parse_str("Bd1 == []").expect("Failed to parse 'Bd1 == []'");
+    // In startpos, d1 is occupied by White Queen (not Bishop), so Bd1 is empty set [] -> Bd1 == [] matches!
+    assert!(crate::search::evaluator::matches_single_ply(
+        &q_no_bd1,
+        &pos_init,
+        0,
+        None
+    ));
+
+    // In pos_bd1, White Bishop is on d1, so Bd1 is {d1} != [] -> Bd1 == [] should NOT match:
+    assert!(!crate::search::evaluator::matches_single_ply(
+        &q_no_bd1,
+        &pos_bd1,
+        0,
+        None
+    ));
 }

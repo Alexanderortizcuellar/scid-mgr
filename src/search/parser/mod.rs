@@ -1468,9 +1468,17 @@ impl<'a> QueryParser<'a> {
                             ));
                         }
                     }
-                    if let Some((sq, content)) = helpers::parse_compact_piece_placement(&ident_str)
-                    {
+                    if helpers::parse_compact_piece_placement(&ident_str).is_some() {
+                        if self.has_square_set_operator_ahead() {
+                            let saved_pos = self.pos;
+                            if let Ok(sq) = self.parse_square_set_query() {
+                                return Ok(sq);
+                            }
+                            self.pos = saved_pos;
+                        }
                         self.advance();
+                        let (sq, content) =
+                            helpers::parse_compact_piece_placement(&ident_str).unwrap();
                         let mut map = std::collections::HashMap::new();
                         map.insert(sq, content);
                         return Ok(SearchQuery::Position(PositionPattern::Squares(map)));
