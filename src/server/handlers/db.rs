@@ -1,4 +1,4 @@
-use crate::db::{GameFilter, ScidDatabaseWrapper, ScidFormat};
+use crate::db::{GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::{IndexStatus, PositionIndex};
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
@@ -292,6 +292,7 @@ pub fn handle_info_stats(
 pub fn handle_query_games(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
+    session_mgr: &crate::server::search_session::SearchSessionManager,
     thread_pool: &rayon::ThreadPool,
 ) -> ResponseMessage {
     let id = req.id;
@@ -324,6 +325,73 @@ pub fn handle_query_games(
         })
         .and_then(|v| v.as_u64())
         .unwrap_or(100) as usize;
+
+    let search_id_opt = req
+        .params
+        .get("search_id")
+        .or_else(|| req.params.get("params").and_then(|p| p.get("search_id")))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty());
+
+    // ⚡ Search Session Pagination: Paginate through cached search results and resolve headers on-demand
+    if let Some(search_id) = search_id_opt {
+        let session = match session_mgr.get_session(search_id) {
+            Some(s) => s,
+            None => {
+                return ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!(
+                        "Search session '{}' not found or expired",
+                        search_id
+                    )),
+                };
+            }
+        };
+
+        let total = session.matches.len();
+        let start = page * page_size;
+        let games: Vec<GameSummary> = if start >= total {
+            Vec::new()
+        } else {
+            let end = usize::min(start + page_size, total);
+            let slice = &session.matches[start..end];
+            match db {
+                DatabaseBackend::Scid(s) => slice
+                    .iter()
+                    .filter_map(|m| {
+                        let mut summ = s.get_game_summary(m.game_id)?;
+                        summ.matching_plies = Some(m.match_details.matching_plies.clone());
+                        summ.match_count = Some(m.match_details.match_count);
+                        Some(summ)
+                    })
+                    .collect(),
+                DatabaseBackend::Pgn(p) => slice
+                    .iter()
+                    .map(|m| {
+                        let mut summ = p.get_summary(m.game_id);
+                        summ.matching_plies = Some(m.match_details.matching_plies.clone());
+                        summ.match_count = Some(m.match_details.match_count);
+                        summ
+                    })
+                    .collect(),
+            }
+        };
+
+        return ResponseMessage {
+            id,
+            status: "ok".to_string(),
+            data: Some(serde_json::json!({
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "search_id": search_id,
+                "games": games
+            })),
+            error: None,
+        };
+    }
 
     let filter_value = req.params.get("params").unwrap_or(&req.params);
     let filter: GameFilter = serde_json::from_value(filter_value.clone()).unwrap_or_default();

@@ -669,18 +669,54 @@ class CqlSearchWidget(QWidget):
                 return
 
             data = resp.get("data", {})
+            search_id = data.get("search_id")
             total_searched = data.get("total_searched", 0)
             matched_count = data.get("matched_count", 0)
             duration_ms = data.get("duration_ms", 0)
-            self.matches_data = data.get("matches", [])
+            is_cached = data.get("cached", False)
+            cache_tag = " (cached)" if is_cached else ""
 
             self.lbl_results_header.setText(
-                f"✅ Found {matched_count} matching games across {total_searched:,} games in {duration_ms} ms"
+                f"✅ Found {matched_count:,} matching games across {total_searched:,} games in {duration_ms} ms{cache_tag}"
             )
 
-            self.populate_results_table(self.matches_data)
+            if matched_count == 0 or not search_id:
+                self.matches_data = []
+                self.populate_results_table([])
+                return
 
-        self.client.send_request("dsl_search", params, on_search_done)
+            # Fetch first page of games with matching plies resolved on-demand
+            def on_games_loaded(list_resp: dict):
+                if list_resp.get("status") == "ok":
+                    list_data = list_resp.get("data", {})
+                    games = list_data.get("games", [])
+                    # Normalize fields for UI display
+                    self.matches_data = []
+                    for g in games:
+                        self.matches_data.append({
+                            "game_id": g.get("id"),
+                            "white": g.get("white"),
+                            "black": g.get("black"),
+                            "result": g.get("result"),
+                            "date": g.get("date"),
+                            "event": g.get("event"),
+                            "site": g.get("site"),
+                            "round": g.get("round"),
+                            "match_count": g.get("match_count", 1),
+                            "matching_plies": g.get("matching_plies", []),
+                        })
+                    self.populate_results_table(self.matches_data)
+                else:
+                    err = list_resp.get("error", "Failed to retrieve search game results")
+                    QMessageBox.warning(self, "List Error", err)
+
+            self.client.send_request(
+                "query_games",
+                {"search_id": search_id, "page": 0, "page_size": self.spin_limit.value()},
+                on_games_loaded,
+            )
+
+        self.client.send_request("search", params, on_search_done)
 
     def on_backend_event(self, event: str, data: dict):
         if event == "search_progress":

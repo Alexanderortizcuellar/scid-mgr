@@ -194,6 +194,8 @@ impl PgnDatabaseWrapper {
             non_standard_start: false,
             num_moves: 0,
             time_control: None,
+            matching_plies: None,
+            match_count: None,
         }
     }
 

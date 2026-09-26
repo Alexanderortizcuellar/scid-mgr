@@ -1,10 +1,12 @@
 pub mod handlers;
+pub mod search_session;
 
 use crate::db::ScidDatabaseWrapper;
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::PositionIndex;
 use crate::tree_index::TreeIndex;
 use anyhow::Result;
+use search_session::SearchSessionManager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
@@ -53,6 +55,7 @@ pub fn run_interactive_server(
     let mut current_db: Option<DatabaseBackend> = None;
     let mut current_pos_index: Option<PositionIndex> = None;
     let mut current_tree_index: Option<TreeIndex> = None;
+    let mut session_mgr = SearchSessionManager::new();
 
     if let Some(path) = initial_db_path {
         if path.exists() {
@@ -121,6 +124,7 @@ pub fn run_interactive_server(
             &mut current_db,
             &mut current_pos_index,
             &mut current_tree_index,
+            &mut session_mgr,
             &mut thread_pool,
             &mut current_thread_count,
             max_system_threads,
@@ -138,6 +142,7 @@ fn handle_command(
     current_db: &mut Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,
     current_tree_index: &mut Option<TreeIndex>,
+    session_mgr: &mut SearchSessionManager,
     thread_pool: &mut rayon::ThreadPool,
     current_thread_count: &mut usize,
     max_system_threads: usize,
@@ -160,12 +165,16 @@ fn handle_command(
 
         // Database Lifecycle & Inspection
         "open" | "open_db" => {
+            session_mgr.clear();
             handlers::db::handle_open_db(req, current_db, current_pos_index, current_tree_index)
         }
-        "create" => handlers::db::handle_create_db(req, current_db),
+        "create" => {
+            session_mgr.clear();
+            handlers::db::handle_create_db(req, current_db)
+        }
         "info" | "stats" => handlers::db::handle_info_stats(req, current_db),
         "query_games" | "get_games" => {
-            handlers::db::handle_query_games(req, current_db, thread_pool)
+            handlers::db::handle_query_games(req, current_db, session_mgr, thread_pool)
         }
         "get_game_summaries" => handlers::db::handle_get_game_summaries(req, current_db),
         "get_pgn" | "get_game" | "get_game_pgn" => {
@@ -241,19 +250,41 @@ fn handle_command(
         ),
 
         // Database Editing & Mutation
-        "add_game" => handlers::db::handle_add_game(req, current_db),
-        "update_game" => handlers::db::handle_update_game(req, current_db),
-        "delete_game" => handlers::db::handle_delete_game(req, current_db),
-        "undelete_game" => handlers::db::handle_undelete_game(req, current_db),
-        "compact" => handlers::db::handle_compact(req, current_db),
+        "add_game" => {
+            session_mgr.clear();
+            handlers::db::handle_add_game(req, current_db)
+        }
+        "update_game" => {
+            session_mgr.clear();
+            handlers::db::handle_update_game(req, current_db)
+        }
+        "delete_game" => {
+            session_mgr.clear();
+            handlers::db::handle_delete_game(req, current_db)
+        }
+        "undelete_game" => {
+            session_mgr.clear();
+            handlers::db::handle_undelete_game(req, current_db)
+        }
+        "compact" => {
+            session_mgr.clear();
+            handlers::db::handle_compact(req, current_db)
+        }
         "save" => handlers::db::handle_save(req, current_db),
         "sort_database" | "sort_db" => {
+            session_mgr.clear();
             handlers::db::handle_sort_database(req, current_db, current_pos_index)
         }
-        "sort_pgn" => handlers::db::handle_sort_pgn(req, current_db),
+        "sort_pgn" => {
+            session_mgr.clear();
+            handlers::db::handle_sort_pgn(req, current_db)
+        }
 
         // Import, Export & Benchmark
-        "import_pgn" => handlers::import_export::handle_import_pgn(req, current_db),
+        "import_pgn" => {
+            session_mgr.clear();
+            handlers::import_export::handle_import_pgn(req, current_db)
+        }
         "export_pgn" => handlers::import_export::handle_export_pgn(req, current_db),
         "benchmark" | "bench" => handlers::import_export::handle_benchmark(req, current_db),
 
@@ -263,7 +294,7 @@ fn handle_command(
             handlers::search::handle_explain_dsl(req)
         }
         "search" | "search_query" | "query_search" | "dsl_search" | "cql_search" => {
-            handlers::search::handle_cql_search(req, current_db, thread_pool)
+            handlers::search::handle_cql_search(req, current_db, session_mgr, thread_pool)
         }
 
         unknown => ResponseMessage {

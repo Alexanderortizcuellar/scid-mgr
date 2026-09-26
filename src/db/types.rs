@@ -33,6 +33,10 @@ pub struct GameSummary {
     pub non_standard_start: bool,
     pub num_moves: u32,
     pub time_control: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_plies: Option<Vec<usize>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

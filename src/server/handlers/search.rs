@@ -1,4 +1,5 @@
 use crate::pgn_db::PgnDatabaseWrapper;
+use crate::server::search_session::SearchSessionManager;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use std::io::{self, Write};
 use std::path::Path;
@@ -70,6 +71,7 @@ pub fn handle_explain_dsl(req: &RequestMessage) -> ResponseMessage {
 pub fn handle_cql_search(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
+    session_mgr: &mut SearchSessionManager,
     thread_pool: &rayon::ThreadPool,
 ) -> ResponseMessage {
     let id = req.id;
@@ -114,12 +116,6 @@ pub fn handle_cql_search(
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty());
 
-    let limit = req
-        .params
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(500) as usize;
-
     let start_time = Instant::now();
 
     if let Some(pgn_path) = custom_pgn_path {
@@ -135,6 +131,27 @@ pub fn handle_cql_search(
         match PgnDatabaseWrapper::open(path) {
             Ok(pgn_wrapper) => {
                 let total_games = pgn_wrapper.game_count();
+                let db_key = SearchSessionManager::db_key(&pgn_wrapper.pgn_path, total_games);
+
+                // ⚡ Fast Cache Lookup: reuse identical query on unchanged database
+                if let Some(cached) = session_mgr.find_cached(&db_key, query_str) {
+                    let matched_count = cached.matches.len();
+                    let total_searched = cached.total_searched;
+                    let search_id = cached.search_id.clone();
+                    return ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_searched,
+                            "matched_count": matched_count,
+                            "duration_ms": 0,
+                            "cached": true,
+                        })),
+                        error: None,
+                    };
+                }
+
                 let match_results = thread_pool.install(|| {
                     pgn_wrapper.search_query_with_progress(&parsed_query, |scanned, total, matches_len| {
                         let event_json = serde_json::json!({
@@ -154,41 +171,25 @@ pub fn handle_cql_search(
                     })
                 });
 
-                let matches: Vec<serde_json::Value> = match_results
-                    .iter()
-                    .take(limit)
-                    .map(|m| {
-                        let idx = m.game_id;
-                        let summ = pgn_wrapper.get_summary(idx);
-                        let pgn_text = pgn_wrapper.get_game_pgn(idx).unwrap_or_default();
-                        serde_json::json!({
-                            "game_id": idx,
-                            "white": summ.white,
-                            "black": summ.black,
-                            "date": summ.date,
-                            "result": summ.result,
-                            "event": summ.event,
-                            "site": summ.site,
-                            "round": summ.round,
-                            "match_count": m.match_details.match_count,
-                            "matching_plies": m.match_details.matching_plies,
-                            "matching_fen": null,
-                            "pgn": pgn_text,
-                        })
-                    })
-                    .collect();
-
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
+                let search_id = session_mgr.create_session(
+                    &db_key,
+                    query_str,
+                    total_games,
+                    match_results,
+                    duration_ms,
+                );
 
                 ResponseMessage {
                     id,
                     status: "ok".to_string(),
                     data: Some(serde_json::json!({
+                        "search_id": search_id,
                         "total_searched": total_games,
                         "matched_count": matched_count,
                         "duration_ms": duration_ms,
-                        "matches": matches,
+                        "cached": false,
                     })),
                     error: None,
                 }
@@ -218,6 +219,27 @@ pub fn handle_cql_search(
         match db {
             DatabaseBackend::Scid(s) => {
                 let total_games = s.game_count();
+                let db_key = SearchSessionManager::db_key(&s.index_path, total_games);
+
+                // ⚡ Fast Cache Lookup: reuse identical query on unchanged database
+                if let Some(cached) = session_mgr.find_cached(&db_key, query_str) {
+                    let matched_count = cached.matches.len();
+                    let total_searched = cached.total_searched;
+                    let search_id = cached.search_id.clone();
+                    return ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_searched,
+                            "matched_count": matched_count,
+                            "duration_ms": 0,
+                            "cached": true,
+                        })),
+                        error: None,
+                    };
+                }
+
                 let match_results = thread_pool.install(|| {
                     s.search_query_with_progress(&parsed_query, |scanned, total, matches_len| {
                         let event_json = serde_json::json!({
@@ -237,47 +259,52 @@ pub fn handle_cql_search(
                     })
                 });
 
-                let matches: Vec<serde_json::Value> = match_results
-                    .iter()
-                    .take(limit)
-                    .filter_map(|m| {
-                        let idx = m.game_id;
-                        let summ = s.get_game_summary(idx)?;
-                        let pgn_text = s.game_pgn(idx).unwrap_or_default();
-                        Some(serde_json::json!({
-                            "game_id": idx,
-                            "white": summ.white,
-                            "black": summ.black,
-                            "date": summ.date,
-                            "result": summ.result,
-                            "event": summ.event,
-                            "site": summ.site,
-                            "round": summ.round,
-                            "match_count": m.match_details.match_count,
-                            "matching_plies": m.match_details.matching_plies,
-                            "matching_fen": null,
-                            "pgn": pgn_text,
-                        }))
-                    })
-                    .collect();
-
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
+                let search_id = session_mgr.create_session(
+                    &db_key,
+                    query_str,
+                    total_games,
+                    match_results,
+                    duration_ms,
+                );
 
                 ResponseMessage {
                     id,
                     status: "ok".to_string(),
                     data: Some(serde_json::json!({
+                        "search_id": search_id,
                         "total_searched": total_games,
                         "matched_count": matched_count,
                         "duration_ms": duration_ms,
-                        "matches": matches,
+                        "cached": false,
                     })),
                     error: None,
                 }
             }
             DatabaseBackend::Pgn(p) => {
                 let total_games = p.game_count();
+                let db_key = SearchSessionManager::db_key(&p.pgn_path, total_games);
+
+                // ⚡ Fast Cache Lookup: reuse identical query on unchanged database
+                if let Some(cached) = session_mgr.find_cached(&db_key, query_str) {
+                    let matched_count = cached.matches.len();
+                    let total_searched = cached.total_searched;
+                    let search_id = cached.search_id.clone();
+                    return ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_searched,
+                            "matched_count": matched_count,
+                            "duration_ms": 0,
+                            "cached": true,
+                        })),
+                        error: None,
+                    };
+                }
+
                 let match_results = thread_pool.install(|| {
                     p.search_query_with_progress(&parsed_query, |scanned, total, matches_len| {
                         let event_json = serde_json::json!({
@@ -297,41 +324,25 @@ pub fn handle_cql_search(
                     })
                 });
 
-                let matches: Vec<serde_json::Value> = match_results
-                    .iter()
-                    .take(limit)
-                    .map(|m| {
-                        let idx = m.game_id;
-                        let summ = p.get_summary(idx);
-                        let pgn_text = p.get_game_pgn(idx).unwrap_or_default();
-                        serde_json::json!({
-                            "game_id": idx,
-                            "white": summ.white,
-                            "black": summ.black,
-                            "date": summ.date,
-                            "result": summ.result,
-                            "event": summ.event,
-                            "site": summ.site,
-                            "round": summ.round,
-                            "match_count": m.match_details.match_count,
-                            "matching_plies": m.match_details.matching_plies,
-                            "matching_fen": null,
-                            "pgn": pgn_text,
-                        })
-                    })
-                    .collect();
-
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
+                let search_id = session_mgr.create_session(
+                    &db_key,
+                    query_str,
+                    total_games,
+                    match_results,
+                    duration_ms,
+                );
 
                 ResponseMessage {
                     id,
                     status: "ok".to_string(),
                     data: Some(serde_json::json!({
+                        "search_id": search_id,
                         "total_searched": total_games,
                         "matched_count": matched_count,
                         "duration_ms": duration_ms,
-                        "matches": matches,
+                        "cached": false,
                     })),
                     error: None,
                 }

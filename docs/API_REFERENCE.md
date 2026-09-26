@@ -47,8 +47,9 @@ Opens a database on disk (`.si5`, `.si4`, or `.pgn`).
 - **Returns**: Database metadata (`stats`).
 
 ### `query_games` (or `get_games`)
-Queries, filters, sorts, and paginates games.
+Queries, filters, sorts, and paginates games. When `search_id` is supplied, paginates through the cached search result set and resolves game metadata and `matching_plies` on-demand for the requested page slice.
 - **Params**:
+  - `search_id`: `string` (optional; paginates through results of a previous `search` session)
   - `page`: `number` (0-indexed, default: 0)
   - `page_size`: `number` (default: 100)
   - `player`: `string` (matches White or Black)
@@ -63,7 +64,7 @@ Queries, filters, sorts, and paginates games.
   - `sort_asc`: `boolean` (default: `true`)
   - `fen`: `string` (exact or partial board placement)
   - `material`: `object` (`MaterialFilter`)
-- **Returns**: `{ page, page_size, total, games: [...] }`
+- **Returns**: `{ page, page_size, total, search_id, games: [{ id, white, black, date, result, event, site, white_elo, black_elo, eco, round, matching_plies, match_count }, ...] }`
 
 ### `get_pgn`
 Retrieves the standard PGN text for a specific game.
@@ -180,4 +181,23 @@ Sorts all games in a source PGN file according to specified criteria and writes 
 
 ### `add_game`, `update_game`, `delete_game`, `undelete_game`, `compact`, `save`
 Mutation commands for editing games, marking deletions, reclaiming dead space, and writing companion files.
+
+### `search` (or `cql_search`, `dsl_search`)
+Executes a CQL search query, storing matching game IDs and matching plies in an in-memory `search_id` session. Automatically returns the cached `search_id` if the identical query is run on the same database. Emits streaming `search_progress` events.
+- **Params**:
+  - `query`: `string` (CQL query text)
+  - `pgn_path`: `string` (optional custom PGN path)
+- **Returns**: `{ search_id: "search_1", total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
+
+### `validate_dsl`
+Validates CQL query syntax and returns parse error diagnostics with line, column, snippet, and help suggestions.
+- **Params**:
+  - `query`: `string`
+- **Returns**: `{ valid: boolean, position?: number, line?: number, column?: number, snippet?: string, help?: string }`
+
+### `explain_dsl`
+Analyzes query AST, checks header-only eligibility, canonicalizes syntax, and expands board symmetry branches.
+- **Params**:
+  - `query`: `string`
+- **Returns**: `{ canonical_dsl: string, is_header_only: boolean, has_symmetries: boolean, branches: [...] }`
 

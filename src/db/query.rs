@@ -95,6 +95,8 @@ impl ScidDatabaseWrapper {
             non_standard_start: entry.non_standard_start,
             num_moves: 0,
             time_control: None,
+            matching_plies: None,
+            match_count: None,
         })
     }
 
