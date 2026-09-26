@@ -51,7 +51,7 @@ Scope search conditions to specific game phases, ply ranges, or move numbers:
 Restrict a sub-query to only evaluate between specific plies (1 move = 2 plies):
 ```text
 ply in 1..20 {
-    # Opening phase tactical motifs
+    // Opening phase tactical motifs
     fork(knight, queen, rook)
 }
 ```
@@ -59,8 +59,8 @@ ply in 1..20 {
 ### 2. Move Number Filter (`move_number [op] [num]`)
 Match conditions at specific 1-indexed full move numbers:
 ```text
-move_number <= 10 and queens == 0    # Early queen trade (by move 10)
-move_number >= 40 and total_power <= 12 # Deep endgame
+move_number <= 10 and queens == 0    // Early queen trade (by move 10)
+move_number >= 40 and total_power <= 12 // Deep endgame
 ```
 
 ### 3. Occurrence Count Filter (`occurrences min..max { ... }` or `occurrences >= N { ... }`)
@@ -68,7 +68,7 @@ Require a pattern to occur at least $N$ times throughout the game:
 ```text
 occurrences >= 3 {
     check
-}  # Games with at least 3 separate checks
+}  // Games with at least 3 separate checks
 ```
 
 ---
@@ -119,6 +119,26 @@ The engine can simulate all candidate legal moves from the current position and 
 
 ---
 
+## 📝 Query Comment Syntax
+
+The query parser follows SQL/C-style comment syntax:
+
+* **Line Comments (`//`)**: Everything from `//` until the end of the line is ignored:
+  ```text
+  // Search for Sicilian games
+  eco "B90" and date >= "2020" // inline comment
+  ```
+* **Block Comments (`/* ... */`)**: Multi-line block comments:
+  ```text
+  /* Multi-line comment:
+     Looking for Karpov games with bishop endgames */
+  player "Karpov" and [QqRrNn] == 0
+  ```
+
+> ⚠️ **Why `#` is NOT a comment**: The `#` symbol is strictly reserved for the **checkmate** glyph in SAN / move notation (e.g. `path [Qb8+ ... Rd8#]`, `move Qh4#`, `cqlpath { Rd8# }`). Allowing `#` as a comment would cause parser ambiguity and prematurely truncate moves ending in checkmate.
+
+---
+
 ## 💬 Comment & Annotation (NAG) Filters
 
 Query move text commentary and standard Numeric Annotation Glyphs (NAGs):
@@ -142,8 +162,8 @@ Query standard chess annotations:
 * `$6` = `?!` (Dubious move)
 
 ```text
-nag $3                 # Games containing brilliant moves (!!)
-nag $4 and nag $2      # Games with both blunders (??) and mistakes (?)
+nag $3                 // Games containing brilliant moves (!!)
+nag $4 and nag $2      // Games with both blunders (??) and mistakes (?)
 ```
 
 ---

@@ -73,22 +73,25 @@ This chapter covers piece specifiers, compact placement syntax, square sets, rec
 
 ## 🎯 Compact Piece Placement
 
+Compact placements follow standard **FEN casing** (uppercase for White, lowercase for Black):
+
 ```text
-Kd4      # White King on d4
-qd8      # Black Queen on d8
-Bf4      # White Bishop on f4
-pe4      # Black Pawn on e4
-_d4      # Square d4 is empty
-Ae4      # Any White piece on e4
-ad4      # Any Black piece on d4
-wpd4     # White Pawn on d4 (explicit prefix)
-bke8     # Black King on e8 (explicit prefix)
+Kd4      // White King on d4
+qd8      // Black Queen on d8
+Bf4      // White Bishop on f4
+pe4      // Black Pawn on e4
+_d4      // Square d4 is empty
+Ae4      // Any White piece on e4
+ad4      // Any Black piece on d4
 ```
+
+> 💡 **Piece Casing Standard**: White pieces are always specified with uppercase letters (`K, Q, R, B, N, P, A`) and Black pieces with lowercase letters (`k, q, r, b, n, p, a`).
 
 ## 📐 Square Ranges, Areas & Diagonals
 
 * **`e4`**: Single square $\rightarrow$ `Q on e4`
 * **`[c3, d5, e4]`**: Square set $\rightarrow$ `Knight on [c3, d5, f3]`
+* **`[BQ][a1..a8]`**: Bracket juxtaposition $\rightarrow$ `[BQ] & [a1..a8]`
 * **`a1-h2`** / **`c3-f6`**: Rectangular bounding box area $\rightarrow$ `P on a1-h2 == 0`
 * **`a1..h8`** / **`diag:a1-h8`**: Collinear diagonal ray $\rightarrow$ `B on a1..h8`
 * **`a1-8`**: Full file range $\rightarrow$ `R on a1-8`
@@ -102,18 +105,19 @@ bke8     # Black King on e8 (explicit prefix)
 * **Set Difference (`\`, `-`)**: `(occupied \ [e4, d4]) >= 30`
 * **Set Intersection (`&`, juxtaposition)**: `B [c4, g5] == 2` or `B & [c4, g5]`
 * **Set Complement (`~`, `!`)**: `~occupied >= 32`
+* **Compound Set Functions**: `attacks(A, a) & attacks(a, a)`, `attacks[K, r] & a1-b3`
 * **Non-Empty Truthiness**: `B [c4, g5]` (evaluates to true if non-empty)
 * **Set-to-Set Comparisons**: `[Aa] == [KkPp]` (King & Pawn endgame), `[Aa] == []` (empty board), `[Qq] > [Rr]` (more queens than rooks), `[Kk] == [Pp]` (equal kings & pawns)
 
 ## 🔢 Piece Counts
 
 ```text
-queens == 0                  # Queenless positions
-[Qq] == 0                    # Zero queens on board
-[Aa] == [KkPp]               # Pure King & Pawn endgame (no other pieces)
-[Qq] == []                   # Queenless endgame
-rooks >= 3                   # 3 or more rooks
-white_pawns <= 4             # 4 or fewer White pawns
+queens == 0                  // Queenless positions
+[Qq] == 0                    // Zero queens on board
+[Aa] == [KkPp]               // Pure King & Pawn endgame (no other pieces)
+[Qq] == []                   // Queenless endgame
+rooks >= 3                   // 3 or more rooks
+white_pawns <= 4             // 4 or fewer White pawns
 white_light_bishops == 1 and black_dark_bishops == 1
 ```
 
@@ -302,9 +306,9 @@ Applies arbitrary hypothetical mutations on a sandbox copy of the position and e
   * `[<moves>]` (Move sequence rollout)
 * **Example**:
   ```cql
-  what_if(pass) { play { mate } }             # Null move threat detection
-  what_if(remove f6) { play { mate } }       # Deflection / defender removal
-  what_if([e4 e5 Qh5]) { attacks(Q, f7) }    # Move sequence rollout
+  what_if(pass) { play { mate } }             // Null move threat detection
+  what_if(remove f6) { play { mate } }       // Deflection / defender removal
+  what_if([e4 e5 Qh5]) { attacks(Q, f7) }    // Move sequence rollout
   ```
 
 ---
@@ -396,6 +400,14 @@ This chapter covers logical combinators (`and`, `or`, `not`), timeline scopes (`
 * **`legal <move> leads_to { <outcome> }`**: Simulates candidate legal moves and checks resulting board $\rightarrow$ `legal promote B leads_to { stalemate }`
 * **`play [legal] <move> { <outcome> }`**: Prefix syntax for hypothetical move simulation $\rightarrow$ `play legal { mate }` (mate in 1) or `play promote Q { stalemate }`
 
+## 📝 Query Comment Syntax
+
+The query parser follows SQL/C-style comment syntax:
+* **Line Comments (`//`)**: `eco "B90" and date >= "2020" // inline comment`
+* **Block Comments (`/* ... */`)**: `/* multi-line comment */ player "Karpov"`
+
+> ⚠️ **Note**: `#` is NOT a comment; it is reserved for the **checkmate** symbol in SAN notation (e.g. `path [Qb8+ ... Rd8#]`, `move Qh4#`).
+
 ## 💬 Comment & NAG Annotation Filters
 
 * **`comment contains "blunder"`**
@@ -433,13 +445,13 @@ scid-mgr> .continuations [FEN]
 # 🎯 Complete Example Queries
 
 ```text
-# 1. Greek Gift Sacrifice with high ratings
+// 1. Greek Gift Sacrifice with high ratings
 avg_elo >= 2600 and path [Bxh7 kxh7 ... Ng5+ kg8 ... Qh5]
 
-# 2. Passed Pawn Endgame Conversion
+// 2. Passed Pawn Endgame Conversion
 move_number >= 35 and [Qq] == 0 and passed_pawns white >= 1 and passed_pawns black == 0 and result "1-0"
 
-# 3. Double Symmetrical Minor Piece Outpost
+// 3. Double Symmetrical Minor Piece Outpost
 flipcolor {
     outpost knight on d5 and rooks == 2
 }

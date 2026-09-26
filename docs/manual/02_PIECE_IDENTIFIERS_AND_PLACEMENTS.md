@@ -22,33 +22,33 @@ In CQLite, piece symbols can specify color, piece role, or color sets:
 
 ## 🎯 Compact Piece Placement Syntax
 
-Compact placements specify a piece and square directly:
+Compact placements specify a piece and square directly, following standard **FEN casing** (uppercase for White, lowercase for Black):
 
 ```text
-Kd4      # White King on d4
-qd8      # Black Queen on d8
-Bf4      # White Bishop on f4
-pe4      # Black Pawn on e4
-_d4      # Square d4 is empty
-Ae4      # Any White piece on e4
-ad4      # Any Black piece on d4
-wpd4     # White Pawn on d4 (explicit prefix)
-bke8     # Black King on e8 (explicit prefix)
+Kd4      // White King on d4
+qd8      // Black Queen on d8
+Bf4      // White Bishop on f4
+pe4      // Black Pawn on e4
+_d4      // Square d4 is empty
+Ae4      // Any White piece on e4
+ad4      // Any Black piece on d4
 ```
+
+> 💡 **Piece Casing Standard**: In accordance with FEN conventions, White pieces are always specified with uppercase letters (`K, Q, R, B, N, P, A`) and Black pieces with lowercase letters (`k, q, r, b, n, p, a`).
 
 You can combine multiple placements seamlessly with `and` or space separation, or in bracketed square set unions:
 ```text
 Kd4 qd8 Pa5
-[Bd1, _]     # White Bishop on d1 or empty squares
-[A, _]       # Any White piece or empty squares
+[Bd1, _]     // White Bishop on d1 or empty squares
+[A, _]       // Any White piece or empty squares
 ```
 
 ### 4. Bracket Juxtaposition Syntax (`[PieceSet][SquareSet]`)
 Juxtaposition of a piece group and a square list or range behaves as a concise syntactic sugar for square set intersection (`&`):
 ```text
-[BQ][a1..a8]       # Equivalent to [BQ] & [a1..a8] (White Bishops or Queens on file a)
-[Nn][c3, d5, e4]   # Equivalent to [Nn] & [c3, d5, e4] (Knights on specified squares)
-[Pp][d4-e5]        # Equivalent to [Pp] & [d4-e5] (Pawns in central rectangle)
+[BQ][a1..a8]       // Equivalent to [BQ] & [a1..a8] (White Bishops or Queens on file a)
+[Nn][c3, d5, e4]   // Equivalent to [Nn] & [c3, d5, e4] (Knights on specified squares)
+[Pp][d4-e5]        // Equivalent to [Pp] & [d4-e5] (Pawns in central rectangle)
 ```
 
 ---
@@ -89,15 +89,15 @@ CQLite supports full mathematical square set algebra evaluated directly over 64-
 
 * **Boolean Truthiness**: Evaluates whether the resulting square set is **non-empty** (`count > 0`):
   ```text
-  B [c4, g5]                 # True if White has a bishop on c4 OR g5
-  occupied & [e4, d4, e5, d5]# True if any piece occupies the center
+  B [c4, g5]                 // True if White has a bishop on c4 OR g5
+  occupied & [e4, d4, e5, d5]// True if any piece occupies the center
   ```
 * **Numeric Comparisons**: Compares the size of the set using standard comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`):
   ```text
-  B [c4, g5] == 2            # White has bishops on BOTH c4 and g5
-  (N | B) [b5, g5] >= 2      # At least 2 knights or bishops on b5 and g5
-  (occupied \ [e4, d4]) >= 30# At least 30 pieces excluding central squares
-  ~occupied >= 32            # 32 or more empty squares on the board
+  B [c4, g5] == 2            // White has bishops on BOTH c4 and g5
+  (N | B) [b5, g5] >= 2      // At least 2 knights or bishops on b5 and g5
+  (occupied \ [e4, d4]) >= 30// At least 30 pieces excluding central squares
+  ~occupied >= 32            // 32 or more empty squares on the board
   ```
 
 ---
@@ -108,20 +108,20 @@ Count total pieces on the board or within a specific square set:
 
 ### 1. Simple Piece Counts
 ```text
-queens == 0                  # Queenless positions
-rooks >= 3                   # Positions with 3 or more rooks
-knights == 4                 # All 4 knights present on board
-white_pawns <= 4             # White has 4 or fewer pawns
-black_bishops == 2           # Black has a bishop pair
+queens == 0                  // Queenless positions
+rooks >= 3                   // Positions with 3 or more rooks
+knights == 4                 // All 4 knights present on board
+white_pawns <= 4             // White has 4 or fewer pawns
+black_bishops == 2           // Black has a bishop pair
 ```
 
 ### 2. Bracketed Piece Group Counts
 Count occurrences of combined piece sets:
 ```text
-[Qq] == 0                    # Zero queens on the board (both sides)
-[Rr] >= 3                    # At least 3 rooks on the board
-[BNbn] == 0                  # All minor pieces have been traded off
-[Aa] on [e4, d4, e5, d5] >= 2 # At least 2 pieces in the center
+[Qq] == 0                    // Zero queens on the board (both sides)
+[Rr] >= 3                    // At least 3 rooks on the board
+[BNbn] == 0                  // All minor pieces have been traded off
+[Aa] on [e4, d4, e5, d5] >= 2 // At least 2 pieces in the center
 ```
 
 ### 3. Light & Dark Square Bishop Counts
@@ -133,13 +133,13 @@ light_bishops == 2 and dark_bishops == 0
 ### 4. Set-to-Set Comparisons
 Compare square sets and piece sets directly against other sets or the empty set (`[]`):
 ```text
-[Aa] == [KkPp]               # Pure King & Pawn endgame (no queens, rooks, bishops, or knights)
-[Aa] == []                   # Empty board
-[Qq] == []                   # Queenless endgame
-[Kk] == [Pp]                 # Equal number of kings and pawns
-[Qq] > [Rr]                  # More queens than rooks on the board
-[Nn] > [Bb]                  # More knights than bishops (knight advantage)
-[Aa] on light == [KkPp]      # All pieces on light squares are kings or pawns
+[Aa] == [KkPp]               // Pure King & Pawn endgame (no queens, rooks, bishops, or knights)
+[Aa] == []                   // Empty board
+[Qq] == []                   // Queenless endgame
+[Kk] == [Pp]                 // Equal number of kings and pawns
+[Qq] > [Rr]                  // More queens than rooks on the board
+[Nn] > [Bb]                  // More knights than bishops (knight advantage)
+[Aa] on light == [KkPp]      // All pieces on light squares are kings or pawns
 ```
 
 ---
@@ -172,6 +172,6 @@ fen "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 4"
 * `a` matches **any Black piece**.
 
 ```text
-fen "*/*/*/*ppA*/*/*/*/*"   # Black pawns and White piece on 4th/5th ranks
-fen "*/*/*/*/4k3/*/*/*"      # Black King on e4
+fen "*/*/*/*ppA*/*/*/*/*"   // Black pawns and White piece on 4th/5th ranks
+fen "*/*/*/*/4k3/*/*/*"      // Black King on e4
 ```

@@ -207,12 +207,8 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
-            // Line comments (# or //)
-            if c == '#'
-                || (c == '/'
-                    && self.pos + 1 < self.chars.len()
-                    && self.chars[self.pos + 1].1 == '/')
-            {
+            // Line comments (//)
+            if c == '/' && self.pos + 1 < self.chars.len() && self.chars[self.pos + 1].1 == '/' {
                 while let Some(ch) = self.peek() {
                     self.advance();
                     if ch == '\n' {

@@ -150,7 +150,6 @@ fn test_descriptive_parse_error_diagnostics() {
 fn test_query_comments_support() {
     let q_str = r#"
         // This is a line comment with double slashes
-        # This is a hash comment
         /* This is a block
            comment spanning lines */
         attacks B k // inline comment
@@ -159,6 +158,11 @@ fn test_query_comments_support() {
     let res = GameSearchEvaluator::evaluate_pgn(&query, OPERA_GAME);
     assert!(res.is_match);
     assert!(res.matching_plies.contains(&21));
+
+    // Verify that # is treated as checkmate symbol in SAN / path and not as a comment
+    let q_san_hash = QueryParser::parse_str("path [Qb8+ ... Rd8#]").unwrap();
+    let res_hash = GameSearchEvaluator::evaluate_pgn(&q_san_hash, OPERA_GAME);
+    assert!(res_hash.is_match);
 }
 
 #[test]

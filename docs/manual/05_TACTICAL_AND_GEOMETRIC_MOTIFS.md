@@ -30,10 +30,10 @@ This chapter covers geometric tactical predicates: Pins, Forks, Skewers, Trapped
 ### 1. Pin Motif (`pin`)
 A pinner (Bishop, Rook, Queen) attacks a target through an intermediary pinned piece:
 ```text
-# Pin White Bishop against Black King using White Rook
+// Pin White Bishop against Black King using White Rook
 pin(rook, knight, king)
 
-# Specific pieces and colors
+// Specific pieces and colors
 pin(bishop, black_knight, black_king)
 pin(white_bishop, black_queen, black_king)
 ```
@@ -41,13 +41,13 @@ pin(white_bishop, black_queen, black_king)
 ### 2. Fork Motif (`fork`)
 A piece simultaneously attacks multiple enemy targets:
 ```text
-# Knight forks Queen and Rook
+// Knight forks Queen and Rook
 fork(knight, queen, rook)
 
-# Pawn forks Bishop and Knight
+// Pawn forks Bishop and Knight
 fork(pawn, bishop, knight)
 
-# Specific squares
+// Specific squares
 fork(N on c7, e8, a8)
 ```
 
@@ -77,14 +77,14 @@ outpost white_knight on e5
 #### Attack Target Evaluation (`attacks`)
 Returns the subset of `target` squares attacked by any piece in `attacker`:
 ```text
-attacks(R, k) >= 2                                      # King subjected to double rook check/attack
-attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8]) # Spatial file control dominance
-attacks(n, K) & ~occupied                               # Knight attacks on king while targeting escape squares
-attacks(A, a) & attacks(a, a)                           # Defended pieces: squares occupied by Black attacked by White AND defended by Black
-attacks(K, r) & a1-b3                                   # Squares where King attacks Rook within bounding box a1-b3
-attacks[K, r] & a1-b3                                   # Same expression using bracket syntax
-attacks(white_pieces, [d1..d8]) & ~occupied             # Unoccupied squares on d-file controlled by White
-btm and mate and not attacks(k, [A, _])                 # Canonical Smothered Mate: Black is checkmated and King has zero attacks on White pieces (A) or empty squares (_)
+attacks(R, k) >= 2                                      // King subjected to double rook check/attack
+attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8]) // Spatial file control dominance
+attacks(n, K) & ~occupied                               // Knight attacks on king while targeting escape squares
+attacks(A, a) & attacks(a, a)                           // Defended pieces: squares occupied by Black attacked by White AND defended by Black
+attacks(K, r) & a1-b3                                   // Squares where King attacks Rook within bounding box a1-b3
+attacks[K, r] & a1-b3                                   // Same expression using bracket syntax
+attacks(white_pieces, [d1..d8]) & ~occupied             // Unoccupied squares on d-file controlled by White
+btm and mate and not attacks(k, [A, _])                 // Canonical Smothered Mate: Black is checkmated and King has zero attacks on White pieces (A) or empty squares (_)
 ```
 
 > **Smothered Mate (`not attacks(k, [A, _])`) Mechanics**:
@@ -93,8 +93,8 @@ btm and mate and not attacks(k, [A, _])                 # Canonical Smothered Ma
 #### Attack Origin Evaluation (`attackers`)
 Returns the subset of `attacker` pieces that attack any square in `target`:
 ```text
-attackers(white_pieces, e5) > attackers(black_pieces, e5) # Outnumbering defenders on e5
-attackers(N, d5) >= 2                                    # Multiple knights attacking d5
+attackers(white_pieces, e5) > attackers(black_pieces, e5) // Outnumbering defenders on e5
+attackers(N, d5) >= 2                                    // Multiple knights attacking d5
 ```
 
 #### Directional Rays, Vectors & Lines (`ray`)
@@ -117,9 +117,9 @@ Rays and directional filters use full English words for directions (abbreviation
 | **`anydirection`** | All 8 directions | `ray(anydirection, e4)` |
 
 ```text
-ray(diagonal, [c1, f1]) & [d4, e5]                       # Diagonal ray intersecting central squares
-between(k, q) & occupied == 0                            # Clear open line between king and queen
-distance(K, k) <= 2                                      # Kings in close proximity
+ray(diagonal, [c1, f1]) & [d4, e5]                       // Diagonal ray intersecting central squares
+between(k, q) & occupied == 0                            // Clear open line between king and queen
+distance(K, k) <= 2                                      // Kings in close proximity
 ```
 
 ---
@@ -165,7 +165,7 @@ The `what_if` filter allows you to perform **speculative evaluation** by applyin
 what_if(<mutations>) {
     <test filters>
 }
-# or bracket syntax
+// or bracket syntax
 what_if[<mutations>] {
     <test filters>
 }
@@ -183,19 +183,19 @@ what_if[<mutations>] {
 
 #### Examples:
 ```cql
-# 1. Threat Detection (If Black passes, does White have immediate mate?):
+// 1. Threat Detection (If Black passes, does White have immediate mate?):
 what_if(pass) { play { mate } }
 
-# 2. Deflection / Removing the Defender (If Nf6 is removed, can White mate?):
+// 2. Deflection / Removing the Defender (If Nf6 is removed, can White mate?):
 what_if(remove f6) { play { mate } }
 
-# 3. Piece Placement Fantasy:
+// 3. Piece Placement Fantasy:
 what_if(add Q on e5) { attacks(Q, e8) }
 
-# 4. Multi-mutation rollout:
+// 4. Multi-mutation rollout:
 what_if(remove f6, turn white) { play { mate } }
 
-# 5. Hypothetical Move Sequence:
+// 5. Hypothetical Move Sequence:
 what_if([e4 e5 Qh5]) { attacks(Q, f7) }
 ```
 
