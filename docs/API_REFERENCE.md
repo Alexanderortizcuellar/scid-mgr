@@ -133,6 +133,21 @@ Builds or rebuilds the `.hot.idx` binary graph in the background across worker t
   - `min_games`: `number` (optional minimum game occurrences, default: `2`)
 - **Returns**: `{ status: "ok", output_path, total_games, total_nodes, total_edges, elapsed_ms }`
 
+### `endgames`
+Calculates endgame popularity distribution and occurrence statistics across the database or for games reaching a specific position using the companion `.feat.idx` index.
+- **Params**:
+  - `fen`: `string` (optional FEN position filter)
+  - `category`: `string` (optional category filter, e.g. `"PAWN"`, `"ROOK"`, `"BISHOP"`)
+  - `feature_id`: `string` (optional feature ID filter, e.g. `"END_ROOK_RP_R"`)
+  - `max_samples`: `number` (optional sample game IDs to return, default: `20`)
+- **Returns**: `EndgamePopularityReport` (`{ db_path, total_db_games, games_reaching_position, position_filtered, fen, categories: [...], features: [...] }`)
+
+### `build_endgames`
+Builds the companion 8-byte `.feat.idx` endgame taxonomy index in parallel across worker threads, emitting streaming `build_endgames_progress` events.
+- **Params**:
+  - `output_path`: `string` (optional custom target `.feat.idx` path)
+- **Returns**: `{ status: "ok", output_path, total_games, elapsed_ms }`
+
 ### `benchmark`
 Runs comprehensive multi-threaded benchmarks on the opened database.
 - **Params**:

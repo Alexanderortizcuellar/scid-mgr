@@ -67,6 +67,8 @@ pub mod benchmark;
 pub mod cli;
 pub mod continuation_index;
 pub mod db;
+pub mod endgame_index;
+pub mod pgn;
 pub mod pgn_db;
 pub mod pgn_io;
 pub mod position_index;
@@ -90,6 +92,11 @@ pub use continuation_index::{
     HotGraphBuildConfig, HotGraphHeader, HotGraphMetadata, HotGraphQueryable, MmapHotGraph,
 };
 pub use db::{DbStats, GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
+pub use endgame_index::{
+    CategoryPopularity, EndgameCatalog, EndgameDetector, EndgameFeatureDef, EndgameIndexBuilder,
+    EndgamePopularityReport, EndgameQueryEngine, FeatureIndexHeader, FeaturePopularity,
+    FeatureQueryReport, GameFeatureRecord, MmapFeatureIndex,
+};
 pub use pgn_db::{CompactPgnRecord, PgnDatabaseWrapper, PgnNameTables};
 pub use position_index::{
     IndexDiagnostics as PositionIndexDiagnostics, IndexStatus, PositionIndex, PositionIndexHeader,

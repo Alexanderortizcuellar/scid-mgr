@@ -1,0 +1,860 @@
+# ==============================================================================
+# Chess Feature Catalog — Endgame Taxonomy v2.0
+# Managed via Chess Scanner Endgame Catalog GUI
+# ==============================================================================
+
+schema_version: '2.0'
+family: ENDGAME
+match_mode: exact_material
+categories:
+- id: PAWN
+  name: Pawn Endgames
+  description: Positions where only kings and pawns remain on the board.
+  features:
+  - id: END_PAWN_KP_K
+    bit: 0
+    name: King and Pawn vs King
+    short_name: K+P vs K
+    gbr_code: '0000.10'
+    description: Single pawn race and opposition battle against a bare king. Governed
+      by key squares and the square rule.
+    side_a:
+      pawns: 1
+    side_b:
+      pawns: 0
+    references:
+    - FCE Chapter 2
+    - Dvoretsky Chapter 1
+    - 'de la Villa #1-6'
+  - id: END_PAWN_KP_KP
+    bit: 1
+    name: King and Pawn vs King and Pawn
+    short_name: K+P vs K+P
+    gbr_code: '0000.11'
+    description: Single pawn on each side; critical square opposition, Trebuchet position,
+      and reciprocal zugzwang.
+    side_a:
+      pawns: 1
+    side_b:
+      pawns: 1
+    references:
+    - FCE Chapter 2
+    - Dvoretsky Chapter 1
+  - id: END_PAWN_K2P_K
+    bit: 2
+    name: King and 2 Pawns vs King
+    short_name: K+2P vs K
+    gbr_code: '0000.20'
+    description: Two pawns against a bare king; connected or doubled pawn winning
+      technique.
+    side_a:
+      pawns: 2
+    side_b:
+      pawns: 0
+    references:
+    - FCE Chapter 2
+  - id: END_PAWN_K2P_KP
+    bit: 3
+    name: King and 2 Pawns vs King and Pawn
+    short_name: K+2P vs K+P
+    gbr_code: '0000.21'
+    description: 2 vs 1 pawn ending; creating an outside passed pawn or trading down.
+    side_a:
+      pawns: 2
+    side_b:
+      pawns: 1
+    references:
+    - FCE Chapter 2
+    - 'de la Villa #7-10'
+  - id: END_PAWN_MULTI
+    bit: 4
+    name: Multi-Pawn Endgame
+    short_name: K+Pawns vs K+Pawns
+    gbr_code: '0000'
+    description: Pure pawn endings with 2 or more pawns on both sides; breakthrough
+      races, outside passed pawns, and triangulation.
+    side_a:
+      pawns:
+        min: 2
+        max: 8
+    side_b:
+      pawns:
+        min: 2
+        max: 8
+    references:
+    - FCE Chapter 2
+    - Dvoretsky Chapter 1
+- id: ROOK
+  name: Rook Endgames
+  description: Positions with one or two rooks per side and optional pawns (~50% of
+    practical tournament endgames).
+  features:
+  - id: END_ROOK_R_R
+    bit: 5
+    name: Bare Rooks
+    short_name: R vs R
+    gbr_code: '0400.00'
+    description: Lone rook vs lone rook without pawns (immediate theoretical draw).
+    side_a:
+      rooks: 1
+      pawns: 0
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 6
+  - id: END_ROOK_RP_R
+    bit: 6
+    name: Rook and Pawn vs Rook
+    short_name: R+P vs R
+    gbr_code: '0300.10'
+    description: Fundamental rook ending featuring the Lucena bridge-building technique,
+      Philidor 3rd-rank defense, and short-side defense.
+    side_a:
+      rooks: 1
+      pawns: 1
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 6
+    - Dvoretsky Chapter 4
+    - 'de la Villa #16-24'
+  - id: END_ROOK_RP_RP
+    bit: 7
+    name: Rook and Pawn vs Rook and Pawn
+    short_name: R+P vs R+P
+    gbr_code: '0400.11'
+    description: Symmetrical pawn count rook ending; passed pawn vs passed pawn or
+      rook cut-off tactics.
+    side_a:
+      rooks: 1
+      pawns: 1
+    side_b:
+      rooks: 1
+      pawns: 1
+    references:
+    - FCE Chapter 6
+    - Dvoretsky Chapter 4
+  - id: END_ROOK_R2P_R
+    bit: 8
+    name: Rook and 2 Pawns vs Rook
+    short_name: R+2P vs R
+    gbr_code: '0300.20'
+    description: Rook and 2 pawns vs lone rook; connected pawns, isolated pawns, and
+      rook vs f+h pawns.
+    side_a:
+      rooks: 1
+      pawns: 2
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 6
+    - 'de la Villa #25-28'
+  - id: END_ROOK_R2P_RP
+    bit: 9
+    name: Rook and 2 Pawns vs Rook and Pawn
+    short_name: R+2P vs R+P
+    gbr_code: '0400.21'
+    description: Material advantage of one pawn in single rook ending; building active
+      rook positions and Tarrasch principle.
+    side_a:
+      rooks: 1
+      pawns: 2
+    side_b:
+      rooks: 1
+      pawns: 1
+    references:
+    - FCE Chapter 6
+    - Dvoretsky Chapter 4
+  - id: END_ROOK_R3P_R2P
+    bit: 10
+    name: Rook and 3 Pawns vs Rook and 2 Pawns
+    short_name: R+3P vs R+2P
+    gbr_code: '0400.32'
+    description: Classic 3 vs 2 rook ending on one flank; defensive setups and creating
+      outside passers.
+    side_a:
+      rooks: 1
+      pawns: 3
+    side_b:
+      rooks: 1
+      pawns: 2
+    references:
+    - FCE Chapter 6
+    - Dvoretsky Chapter 4
+    - 'de la Villa #29-33'
+  - id: END_ROOK_R4P_R3P
+    bit: 11
+    name: Rook and 4 Pawns vs Rook and 3 Pawns
+    short_name: R+4P vs R+3P
+    gbr_code: '0400.43'
+    description: Most frequent rook ending in grandmaster practice (4 vs 3 on one
+      wing or with isolated d-pawns).
+    side_a:
+      rooks: 1
+      pawns: 4
+    side_b:
+      rooks: 1
+      pawns: 3
+    references:
+    - FCE Chapter 6
+    - Dvoretsky Chapter 4
+  - id: END_ROOK_R_NP_R
+    bit: 12
+    name: Rook and Multiple Pawns vs Rook
+    short_name: R+nP vs R
+    description: Rook and 2 or more pawns against a lone defending rook without pawns.
+    side_a:
+      rooks: 1
+      pawns:
+        min: 2
+        max: 8
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 6
+  - id: END_ROOK_R_R_GENERAL
+    bit: 13
+    name: Single Rook Endgame
+    short_name: R+Pawns vs R+Pawns
+    description: Any position with exactly 1 rook on each side and any number of pawns
+      (0 to 8).
+    side_a:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 6
+  - id: END_ROOK_2R_2R
+    bit: 14
+    name: Double Rook Endgame
+    short_name: 2R+Pawns vs 2R+Pawns
+    gbr_code: 0800
+    description: Two rooks on each side with optional pawns; 7th rank doubled rooks
+      and piece coordination.
+    side_a:
+      rooks: 2
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      rooks: 2
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 6
+    - Dvoretsky Chapter 4
+- id: BISHOP
+  name: Bishop Endgames
+  description: Positions with one bishop per side and optional pawns, divided into
+    same-color and opposite-color.
+  features:
+  - id: END_BISHOP_BP_B
+    bit: 15
+    name: Bishop and Pawn vs Bishop (General)
+    short_name: B+P vs B
+    description: One pawn ahead in single bishop ending.
+    side_a:
+      bishops: 1
+      pawns: 1
+    side_b:
+      bishops: 1
+      pawns: 0
+    references:
+    - FCE Chapter 4
+    - 'de la Villa #34-40'
+  - id: END_BISHOP_SCB
+    bit: 16
+    name: Same-Colored Bishops
+    short_name: B vs B (Same)
+    description: Each side has one bishop operating on the same square color, with
+      optional pawns.
+    side_a:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 8
+    conditions:
+    - same_colored_bishops
+    references:
+    - FCE Chapter 4
+    - Dvoretsky Chapter 3
+  - id: END_BISHOP_OCB
+    bit: 17
+    name: Opposite-Colored Bishops
+    short_name: B vs B (Opposite)
+    description: Each side has one bishop operating on opposite square colors; known
+      for high drawing margins.
+    side_a:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 8
+    conditions:
+    - opposite_colored_bishops
+    references:
+    - FCE Chapter 4
+    - Dvoretsky Chapter 3
+    - 'de la Villa #41-47'
+  - id: END_BISHOP_OCB_1P
+    bit: 18
+    name: Opposite-Colored Bishops (1 Pawn Ahead)
+    short_name: B+P vs B (Opposite)
+    description: One side has an extra pawn in opposite-colored bishops (often drawn
+      due to fortress).
+    side_a:
+      bishops: 1
+      pawns:
+        min: 1
+        max: 8
+    side_b:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 7
+    conditions:
+    - opposite_colored_bishops
+    - pawn_difference_1
+    references:
+    - FCE Chapter 4
+    - Dvoretsky Chapter 3
+  - id: END_BISHOP_OCB_2P
+    bit: 19
+    name: Opposite-Colored Bishops (2 Pawns Ahead)
+    short_name: B+2P vs B (Opposite)
+    description: Two pawns ahead in opposite-colored bishops; breakthrough technique
+      vs fortress.
+    side_a:
+      bishops: 1
+      pawns:
+        min: 2
+        max: 8
+    side_b:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 6
+    conditions:
+    - opposite_colored_bishops
+    - pawn_difference_2
+    references:
+    - FCE Chapter 4
+    - Dvoretsky Chapter 3
+  - id: END_BISHOP_2B_K
+    bit: 20
+    name: Two Bishops vs Bare King
+    short_name: 2B vs K
+    gbr_code: '0020.00'
+    description: Elementary checkmate with two bishops cornering the king.
+    side_a:
+      bishops: 2
+      pawns: 0
+    side_b:
+      pawns: 0
+    references:
+    - FCE Chapter 3
+    - 'de la Villa #11'
+- id: KNIGHT
+  name: Knight Endgames
+  description: Positions with knights and pawns only (behave similarly to pawn endgames
+    due to short range).
+  features:
+  - id: END_KNIGHT_N_N
+    bit: 21
+    name: Knight vs Knight (General)
+    short_name: N+Pawns vs N+Pawns
+    description: Each side has exactly one knight and any number of pawns.
+    side_a:
+      knights: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      knights: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 5
+    - Dvoretsky Chapter 2
+  - id: END_KNIGHT_NP_N
+    bit: 22
+    name: Knight and Pawn vs Knight
+    short_name: N+P vs N
+    gbr_code: '0004.10'
+    description: Single pawn advantage in knight endgame; stopping outside knight
+      passers.
+    side_a:
+      knights: 1
+      pawns: 1
+    side_b:
+      knights: 1
+      pawns: 0
+    references:
+    - FCE Chapter 5
+    - 'de la Villa #48-51'
+  - id: END_KNIGHT_N2P_N
+    bit: 23
+    name: Knight and 2 Pawns vs Knight
+    short_name: N+2P vs N
+    gbr_code: '0003.20'
+    description: Knight and two pawns vs knight without pawns.
+    side_a:
+      knights: 1
+      pawns: 2
+    side_b:
+      knights: 1
+      pawns: 0
+    references:
+    - FCE Chapter 5
+  - id: END_KNIGHT_BN_K
+    bit: 24
+    name: Bishop and Knight vs Bare King
+    short_name: B+N vs K
+    gbr_code: '0011.00'
+    description: Famous checkmate technique driving the king to the corner of the
+      bishop's color.
+    side_a:
+      bishops: 1
+      knights: 1
+      pawns: 0
+    side_b:
+      pawns: 0
+    references:
+    - FCE Chapter 3
+    - Dvoretsky Chapter 8
+    - 'de la Villa #12'
+- id: MINOR_MIXED
+  name: Bishop vs Knight Endgames
+  description: Battles between Bishop and Knight with pawns.
+  features:
+  - id: END_MIXED_B_N
+    bit: 25
+    name: Bishop vs Knight (General)
+    short_name: B+Pawns vs N+Pawns
+    description: One side has a bishop, other side has a knight, with optional pawns.
+    side_a:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      knights: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 5
+    - Dvoretsky Chapter 2
+    - 'de la Villa #52-60'
+  - id: END_MIXED_BP_N
+    bit: 26
+    name: Bishop and Pawn vs Knight
+    short_name: B+P vs N
+    gbr_code: '0011.10'
+    description: Bishop and pawn vs lone knight.
+    side_a:
+      bishops: 1
+      pawns: 1
+    side_b:
+      knights: 1
+      pawns: 0
+    references:
+    - FCE Chapter 5
+  - id: END_MIXED_NP_B
+    bit: 27
+    name: Knight and Pawn vs Bishop
+    short_name: N+P vs B
+    gbr_code: '0011.01'
+    description: Knight and pawn vs lone bishop.
+    side_a:
+      knights: 1
+      pawns: 1
+    side_b:
+      bishops: 1
+      pawns: 0
+    references:
+    - FCE Chapter 5
+  - id: END_MIXED_2B_2N
+    bit: 28
+    name: Bishop Pair vs Knight Pair
+    short_name: 2B+Pawns vs 2N+Pawns
+    gbr_code: '0022'
+    description: Two bishops vs two knights in endgame phase; demonstrating the power
+      of the bishop pair.
+    side_a:
+      bishops: 2
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      knights: 2
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 5
+    - Dvoretsky Chapter 3
+- id: QUEEN
+  name: Queen Endgames
+  description: Positions where queens are the primary piece, characterized by perpetual
+    check threats and king safety.
+  features:
+  - id: END_QUEEN_Q_Q
+    bit: 29
+    name: Queen vs Queen (General)
+    short_name: Q+Pawns vs Q+Pawns
+    description: Each side has exactly one queen with optional pawns.
+    side_a:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 8
+    - Dvoretsky Chapter 6
+  - id: END_QUEEN_QP_Q
+    bit: 30
+    name: Queen and Pawn vs Queen
+    short_name: Q+P vs Q
+    gbr_code: '4000.10'
+    description: Queen and single pawn vs queen; complex perpetual check avoidance
+      and king centralization.
+    side_a:
+      queens: 1
+      pawns: 1
+    side_b:
+      queens: 1
+      pawns: 0
+    references:
+    - FCE Chapter 8
+    - Dvoretsky Chapter 6
+    - 'de la Villa #61-68'
+  - id: END_QUEEN_QP_QP
+    bit: 31
+    name: Queen and Pawn vs Queen and Pawn
+    short_name: Q+P vs Q+P
+    gbr_code: '4000.11'
+    description: One pawn on each side with single queens.
+    side_a:
+      queens: 1
+      pawns: 1
+    side_b:
+      queens: 1
+      pawns: 1
+    references:
+    - FCE Chapter 8
+  - id: END_QUEEN_Q2P_Q
+    bit: 32
+    name: Queen and 2 Pawns vs Queen
+    short_name: Q+2P vs Q
+    gbr_code: '3000.20'
+    description: Queen and 2 pawns vs lone queen.
+    side_a:
+      queens: 1
+      pawns: 2
+    side_b:
+      queens: 1
+      pawns: 0
+    references:
+    - FCE Chapter 8
+  - id: END_QUEEN_Q_P
+    bit: 33
+    name: Queen vs Advanced Pawn
+    short_name: Q vs P
+    gbr_code: '3000.01'
+    description: Queen vs 7th-rank pawn; drawing techniques for bishop/rook pawns
+      vs king in corner.
+    side_a:
+      queens: 1
+      pawns: 0
+    side_b:
+      pawns: 1
+    references:
+    - FCE Chapter 8
+    - Dvoretsky Chapter 6
+    - 'de la Villa #13-15'
+  - id: END_QUEEN_2Q_2Q
+    bit: 34
+    name: Double Queen Endgame
+    short_name: 2Q+Pawns vs 2Q+Pawns
+    gbr_code: '8000'
+    description: Two queens per side (usually after double promotion); tactical checkmate
+      races.
+    side_a:
+      queens: 2
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      queens: 2
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 8
+- id: ROOK_VS_MINOR
+  name: Rook vs Minor / Major Imbalances
+  description: Exchange imbalances and piece battles without queens.
+  features:
+  - id: END_ROOK_VS_BISHOP
+    bit: 35
+    name: Rook vs Bishop
+    short_name: R+Pawns vs B+Pawns
+    description: One side has a rook; the other side has a bishop, with optional pawns.
+    side_a:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      bishops: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 7
+    - Dvoretsky Chapter 5
+    - 'de la Villa #69-76'
+  - id: END_ROOK_VS_KNIGHT
+    bit: 36
+    name: Rook vs Knight
+    short_name: R+Pawns vs N+Pawns
+    description: One side has a rook; the other side has a knight, with optional pawns.
+    side_a:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      knights: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 7
+    - Dvoretsky Chapter 5
+    - 'de la Villa #77-84'
+  - id: END_ROOK_VS_2MINORS
+    bit: 37
+    name: Rook vs 2 Minor Pieces
+    short_name: R+Pawns vs 2Minors+Pawns
+    description: Rook vs Bishop+Knight, 2 Bishops, or 2 Knights with optional pawns.
+    side_a:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      rooks: 0
+      pawns:
+        min: 0
+        max: 8
+    conditions:
+    - side_b_minors_equal_2
+    references:
+    - FCE Chapter 7
+    - Dvoretsky Chapter 5
+  - id: END_ROOK_MINOR_RB_R
+    bit: 38
+    name: Rook and Bishop vs Rook
+    short_name: R+B vs R
+    gbr_code: '0310.00'
+    description: Philidor and Cochrane positions; high defensive precision required
+      to hold.
+    side_a:
+      rooks: 1
+      bishops: 1
+      pawns: 0
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 7
+    - Dvoretsky Chapter 5
+    - 'de la Villa #85-88'
+  - id: END_ROOK_MINOR_RN_R
+    bit: 39
+    name: Rook and Knight vs Rook
+    short_name: R+N vs R
+    gbr_code: '0301.00'
+    description: Rook and knight vs lone rook (usually drawn if defender stays in
+      center).
+    side_a:
+      rooks: 1
+      knights: 1
+      pawns: 0
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 7
+    - Dvoretsky Chapter 5
+    - 'de la Villa #89-91'
+  - id: END_QUEEN_VS_ROOK
+    bit: 40
+    name: Queen vs Rook
+    short_name: Q+Pawns vs R+Pawns
+    description: One side has a queen; other side has a rook with optional pawns.
+    side_a:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 9
+    - Dvoretsky Chapter 7
+    - 'de la Villa #96-97'
+  - id: END_QUEEN_VS_R_NO_P
+    bit: 41
+    name: Queen vs Lone Rook (Philidor)
+    short_name: Q vs R (Bare)
+    gbr_code: '3100.00'
+    description: Bare queen vs bare rook; Philidor winning triangulation and zigzag
+      checks.
+    side_a:
+      queens: 1
+      pawns: 0
+    side_b:
+      rooks: 1
+      pawns: 0
+    references:
+    - FCE Chapter 9
+    - Dvoretsky Chapter 7
+    - 'de la Villa #96'
+- id: QUEEN_VS_PIECES
+  name: Queen vs Multiple Pieces
+  description: Complex major piece sacrifices and compensation endgames.
+  features:
+  - id: END_QUEEN_VS_2ROOKS
+    bit: 42
+    name: Queen vs Two Rooks
+    short_name: Q+Pawns vs 2R+Pawns
+    gbr_code: '3800'
+    description: Queen vs two rooks with optional pawns; coordination of rooks vs
+      queen centralization.
+    side_a:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      rooks: 2
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 9
+    - Dvoretsky Chapter 7
+  - id: END_QUEEN_VS_ROOK_MINOR
+    bit: 43
+    name: Queen vs Rook and Minor Piece
+    short_name: Q+Pawns vs R+Minor+Pawns
+    description: Queen vs Rook + Bishop or Rook + Knight with optional pawns.
+    side_a:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    conditions:
+    - side_b_minors_equal_1
+    references:
+    - FCE Chapter 9
+    - 'de la Villa #98-100'
+  - id: END_QUEEN_VS_2MINORS
+    bit: 44
+    name: Queen vs Two Minor Pieces
+    short_name: Q+Pawns vs 2Minors+Pawns
+    description: Queen vs two minor pieces with optional pawns.
+    side_a:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      queens: 0
+      rooks: 0
+      pawns:
+        min: 0
+        max: 8
+    conditions:
+    - side_b_minors_equal_2
+    references:
+    - FCE Chapter 9
+  - id: END_QUEEN_VS_3MINORS
+    bit: 45
+    name: Queen vs Three Minor Pieces
+    short_name: Q+Pawns vs 3Minors+Pawns
+    description: Queen vs three minor pieces with optional pawns.
+    side_a:
+      queens: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      queens: 0
+      rooks: 0
+      pawns:
+        min: 0
+        max: 8
+    conditions:
+    - side_b_minors_equal_3
+    references:
+    - FCE Chapter 9
+  - id: END_QUEEN_ROOK_VS_QUEEN_ROOK
+    bit: 46
+    name: Queen and Rook vs Queen and Rook
+    short_name: Q+R+Pawns vs Q+R+Pawns
+    gbr_code: '4400'
+    description: Major piece battle with Queen and Rook on both sides; king vulnerability
+      and mating nets.
+    side_a:
+      queens: 1
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    side_b:
+      queens: 1
+      rooks: 1
+      pawns:
+        min: 0
+        max: 8
+    references:
+    - FCE Chapter 9
+    - Dvoretsky Chapter 6

@@ -81,7 +81,7 @@ pub fn handle_continuations(
             target_pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
         let target_hash = target_hash_val.0;
         if let Some(postings) = pos_idx.get_all_position_games(target_hash) {
-            candidate_ids = Some(postings.into_iter().map(|id| id as usize).collect());
+            candidate_ids = Some(postings.into_iter().collect());
         } else {
             // Position does not occur in database
             let empty_res = ContinuationResult {

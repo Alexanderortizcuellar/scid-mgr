@@ -19,6 +19,7 @@ Welcome to the **SCID-MGR Search Engine & Query Language Manual**.
 | **[07. Transformations & Symmetries](./07_TRANSFORMATION_AND_SYMMETRY.md)** | Board Transformations | Color flipping (`flipcolor`), vertical/horizontal/diagonal reflections, 90°/180°/270° rotations, all-symmetries (`flip:all`), variable bindings (`$var`). |
 | **[08. Boolean Logic & Timeline Filters](./08_BOOLEAN_LOGIC_AND_TIMELINE.md)** | Compound Logic & Timeline | `and`, `or`, `not`, ply ranges (`ply in 10..30`), occurrence counts (`occurrences >= 2`), comments, and NAGs. |
 | **[09. Continuations Engine](./09_CONTINUATIONS_ENGINE.md)** | Common Continuations & Sequences | Multi-move continuation lines, `.hot.idx` binary graph, candidate acceleration, CLI, REPL, JSON-RPC, and GUI. |
+| **[10. Endgame Taxonomy & Popularity Index](./10_ENDGAME_INDEX.md)** | Endgame Classification & Indexing | 47 standardized endgame definitions across 8 categories, 8-byte `.feat.idx` index, bitwise filtering, win/draw/loss popularity analytics. |
 | **[Complete Unified Manual](./COMPLETE_QUERY_MANUAL.md)** | Single Document | The complete reference manual in one document, ready for PDF or HTML export. |
 
 ---

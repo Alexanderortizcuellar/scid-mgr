@@ -196,7 +196,7 @@ impl StripedHotGraphBuilder {
                 .filter(|e| e.total_games >= min_games_cutoff)
                 .collect();
 
-            valid_edges.sort_by(|a, b| b.total_games.cmp(&a.total_games));
+            valid_edges.sort_by_key(|a| std::cmp::Reverse(a.total_games));
 
             for e in &valid_edges {
                 let target_node = hash_to_node_id
@@ -382,7 +382,7 @@ pub fn build_for_pgn_direct<P1: AsRef<Path>, P2: AsRef<Path>, F: Fn(usize, usize
 
             while let Ok(Some(())) = reader.read_game(&mut visitor) {
                 let scanned = game_counter.fetch_add(1, Ordering::Relaxed) + 1;
-                if scanned % 1000 == 0 {
+                if scanned.is_multiple_of(1000) {
                     progress(scanned as usize, 0, builder.total_nodes());
                 }
                 visitor.reset();
@@ -464,6 +464,7 @@ pub fn build_for_scid_direct<
             .for_each(|start_idx| {
                 let end_idx = (start_idx + chunk_size).min(total_games);
 
+                #[allow(clippy::needless_range_loop)]
                 for game_id in start_idx..end_idx {
                     let entry = &entries[game_id];
                     if entry.deleted {

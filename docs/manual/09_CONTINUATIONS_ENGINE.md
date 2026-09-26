@@ -13,10 +13,87 @@ The engine operates under two complementary modes:
 * **Instant Lookup**: Traverses top continuation lines in sub-milliseconds without disk I/O or position re-parsing.
 * **Striped Parallel Builders**: Index builder processes massive PGN or native SCID databases across multiple worker threads, writing atomic `.tmp` files.
 
-#### Binary Graph Layout:
-* **Header (96 bytes)**: Magic bytes (`CHSHOTG1`), version, total nodes, total edges, max ply, flags, and direct offset index tables.
-* **Node Table (32 bytes per node)**: Zobrist hash, occurrence counts, white wins, draws, black wins, edge count, and first-edge offset.
-* **Edge Table (16 bytes per edge)**: Move key (16-bit packed move), target node index, and traversal count.
+#### Binary Graph Format (`.hot.idx`):
+
+```
++-------------------------------------------------------------+
+| Header (96 Bytes)                                           |
+| - magic: b"CHSHOTG1" (8B)                                   |
+| - version: u32 (4B)                                         |
+| - flags: u32 (4B)                                           |
+| - db_mtime_secs: u64 (8B)                                   |
+| - db_file_size: u64 (8B)                                    |
+| - db_game_count: u64 (8B)                                   |
+| - max_ply: u32 (4B)                                         |
+| - min_games: u32 (4B)                                       |
+| - node_count: u32 (4B)                                      |
+| - edge_count: u32 (4B)                                      |
+| - hash_count: u32 (4B)                                      |
+| - _reserved: u32 (4B)                                       |
+| - nodes_offset: u64 (8B)                                    |
+| - edges_offset: u64 (8B)                                    |
+| - hashes_offset: u64 (8B)                                   |
+| - created_timestamp: u64 (8B)                               |
++-------------------------------------------------------------+
+| Nodes Array [HotNode; node_count] (24 Bytes per node)       |
++-------------------------------------------------------------+
+| Edges Array [HotEdge; edge_count] (24 Bytes per edge)       |
++-------------------------------------------------------------+
+| Hash Map Entries [HotHashEntry; hash_count] (12 Bytes each) |
++-------------------------------------------------------------+
+```
+
+##### 1. Header Layout (96 Bytes)
+
+| Offset | Field | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `0x00..0x08` | `magic` | `[u8; 8]` | Magic identifier: `b"CHSHOTG1"` |
+| `0x08..0x0C` | `version` | `u32` | Format version (currently `1`) |
+| `0x0C..0x10` | `flags` | `u32` | Reserved flags |
+| `0x10..0x18` | `db_mtime_secs` | `u64` | Source database timestamp (seconds) |
+| `0x18..0x20` | `db_file_size` | `u64` | Source database file size in bytes |
+| `0x20..0x28` | `db_game_count` | `u64` | Total games in source database |
+| `0x28..0x2C` | `max_ply` | `u32` | Maximum indexing ply depth (e.g. 24) |
+| `0x2C..0x30` | `min_games` | `u32` | Minimum games threshold for inclusion |
+| `0x30..0x34` | `node_count` | `u32` | Total unique position nodes in graph |
+| `0x34..0x38` | `edge_count` | `u32` | Total directed transition edges |
+| `0x38..0x3C` | `hash_count` | `u32` | Total hash table lookup entries |
+| `0x3C..0x40` | `_reserved` | `u32` | Reserved alignment padding |
+| `0x40..0x48` | `nodes_offset` | `u64` | Byte offset to `HotNode` array |
+| `0x48..0x50` | `edges_offset` | `u64` | Byte offset to `HotEdge` array |
+| `0x50..0x58` | `hashes_offset`| `u64` | Byte offset to sorted `HotHashEntry` array |
+| `0x58..0x60` | `created_timestamp`| `u64`| UNIX timestamp (seconds) when index was built |
+
+##### 2. Node Layout (`HotNode`, 24 Bytes)
+
+| Offset | Field | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `0x00..0x04` | `first_edge` | `u32` | Index into edge array of the first outgoing move |
+| `0x04..0x06` | `edge_count` | `u16` | Number of outgoing move branches |
+| `0x06..0x08` | `_padding` | `u16` | Alignment padding |
+| `0x08..0x0C` | `total_games`| `u32` | Total games reaching this position |
+| `0x0C..0x10` | `white_wins` | `u32` | Games won by White (1-0) |
+| `0x10..0x14` | `draws` | `u32` | Games drawn (1/2-1/2) |
+| `0x14..0x18` | `black_wins` | `u32` | Games won by Black (0-1) |
+
+##### 3. Edge Layout (`HotEdge`, 24 Bytes)
+
+| Offset | Field | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `0x00..0x02` | `packed_move` | `u16` | 16-bit packed move encoding (from_sq, to_sq, promo) |
+| `0x02..0x04` | `_padding` | `u16` | Alignment padding |
+| `0x04..0x08` | `target_node` | `u32` | `NodeId` of resulting position (or `NO_NODE`) |
+| `0x08..0x0C` | `total_games` | `u32` | Games continuing with this move |
+| `0x0C..0x10` | `white_wins` | `u32` | White wins after this move |
+| `0x10..0x14` | `draws` | `u32` | Draws after this move |
+| `0x14..0x18` | `black_wins` | `u32` | Black wins after this move |
+
+##### 4. Hash Index Entry (`HotHashEntry`, 12 Bytes, Packed)
+
+| Offset | Field | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `0x00..0x08` | `hash` | `u64` | 64-bit Zobrist hash of position |
+| `0x08..0x0C` | `node_id` | `u32` | Index into `HotNode` table |
 
 ### 2. On-The-Fly Candidate-Accelerated Dynamic Search
 * **Zero Index Prerequisite**: Analyzes any custom or deep position directly from the database without requiring a prebuilt `.hot.idx` file.
