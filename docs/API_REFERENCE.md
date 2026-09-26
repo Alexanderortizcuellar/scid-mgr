@@ -73,11 +73,13 @@ Retrieves the standard PGN text for a specific game.
 - **Returns**: `{ index, pgn }`
 
 ### `search_position`
-Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loaded, returns in sub-millisecond instant lookup time (< 0.1 ms); otherwise falls back seamlessly to multi-threaded move-stream scanning.
+Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loaded, returns in sub-millisecond instant lookup time (< 0.1 ms); otherwise falls back seamlessly to multi-threaded move-stream scanning. Creates a cached `search_id` session for pagination and multi-column sorting via `query_games`.
 - **Params**:
   - `fen`: `string` (full FEN)
+  - `turn`: `string` (optional turn filter: `"w"` or `"b"`)
+  - `match_mode`: `string` (optional: `"exact"` or `"auto"`)
   - `max_ply`: `number` (optional maximum search depth)
-- **Returns**: `{ matches: [{ game_id, ply }], total_games_searched, elapsed_ms }`
+- **Returns**: `{ search_id: string, total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
 
 ### `opening_tree` (or `query_tree`)
 Queries the instant Opening Tree / Explorer for any board position (FEN or starting board).
@@ -108,12 +110,12 @@ Scans and analyzes the companion `.pos.idx` memory map, calculating Delta-Varint
 - **Returns**: `{ total_game_sets, delta_varint_count, bytes_adaptive, bucket_1_10, bucket_11_100, bucket_101_1k, ... }`
 
 ### `search_material`
-Searches by bitboard piece count and opposite/same-colored bishops.
+Searches by bitboard piece count and opposite/same-colored bishops across the database. Creates a cached `search_id` session for pagination and multi-column sorting via `query_games`.
 - **Params**:
   - `white_rooks`, `black_rooks`, etc.: `number`
   - `opposite_bishops`: `boolean`
   - `same_bishops`: `boolean`
-- **Returns**: `{ matches: [game_ids], match_count, total_games, elapsed_ms }`
+- **Returns**: `{ search_id: string, total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
 
 ### `continuations`
 Calculates top multi-move continuation lines from any position using `.hot.idx` binary graph or dynamic candidate-accelerated search.

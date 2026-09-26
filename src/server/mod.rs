@@ -186,10 +186,11 @@ fn handle_command(
             req,
             current_db,
             current_pos_index,
+            session_mgr,
             thread_pool,
         ),
         "search_material" | "material_search" => {
-            handlers::position::handle_search_material(req, current_db)
+            handlers::position::handle_search_material(req, current_db, session_mgr, thread_pool)
         }
 
         // Opening Tree Operations

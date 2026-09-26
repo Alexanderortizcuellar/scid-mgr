@@ -1,11 +1,16 @@
 use crate::position_index::PositionIndex;
+use crate::search::evaluator::QueryMatchResult;
+use crate::search::ScidMatchResult;
+use crate::server::search_session::SearchSessionManager;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use std::io::{self, Write};
+use std::time::Instant;
 
 pub fn handle_search_position(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,
+    session_mgr: &mut SearchSessionManager,
     thread_pool: &rayon::ThreadPool,
 ) -> ResponseMessage {
     let id = req.id;
@@ -62,6 +67,53 @@ pub fn handle_search_position(
         })
         .unwrap_or(true);
 
+    let max_ply = req
+        .params
+        .get("max_ply")
+        .or_else(|| req.params.get("params").and_then(|p| p.get("max_ply")))
+        .and_then(|v| v.as_u64())
+        .map(|p| p as usize);
+
+    let (total_games, db_key) = match db {
+        DatabaseBackend::Scid(s) => {
+            let count = s.game_count();
+            (count, SearchSessionManager::db_key(&s.index_path, count))
+        }
+        DatabaseBackend::Pgn(p) => {
+            let count = p.game_count();
+            (count, SearchSessionManager::db_key(&p.pgn_path, count))
+        }
+    };
+
+    let query_key = format!(
+        "pos:{}:{}:{}:{:?}",
+        fen.trim(),
+        turn_param.unwrap_or("*"),
+        mode_param.unwrap_or("exact"),
+        max_ply
+    );
+
+    // ⚡ Fast Cache Lookup: reuse identical query on unchanged database
+    if let Some(cached) = session_mgr.find_cached(&db_key, &query_key) {
+        let matched_count = cached.matches.len();
+        let total_searched = cached.total_searched;
+        let search_id = cached.search_id.clone();
+        return ResponseMessage {
+            id,
+            status: "ok".to_string(),
+            data: Some(serde_json::json!({
+                "search_id": search_id,
+                "total_searched": total_searched,
+                "matched_count": matched_count,
+                "duration_ms": 0,
+                "cached": true,
+            })),
+            error: None,
+        };
+    }
+
+    let start_time = Instant::now();
+
     // ⚡ Instant Sub-Millisecond candidate lookup if PositionIndex is active
     if is_exact && turn_param.is_none() {
         if current_pos_index.is_none() {
@@ -75,28 +127,36 @@ pub fn handle_search_position(
         if let Some(pos_idx) = current_pos_index.as_ref() {
             if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(fen) {
                 if let Some(game_ids) = pos_idx.get_all_position_games(zobrist_hash) {
-                    let matches: Vec<crate::position_search::PositionMatch> = game_ids
+                    let matches: Vec<ScidMatchResult> = game_ids
                         .into_iter()
-                        .map(|gid| crate::position_search::PositionMatch {
+                        .map(|gid| ScidMatchResult {
                             game_id: gid,
-                            ply: 0,
+                            match_details: QueryMatchResult {
+                                is_match: true,
+                                matching_plies: vec![0],
+                                match_count: 1,
+                            },
                         })
                         .collect();
-                    let total_games = match db {
-                        DatabaseBackend::Scid(s) => s.game_count(),
-                        DatabaseBackend::Pgn(p) => p.game_count(),
-                    };
-                    let res = crate::position_search::PositionSearchResult {
-                        target_fen: fen.to_string(),
-                        target_hash: zobrist_hash,
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let matched_count = matches.len();
+                    let search_id = session_mgr.create_session(
+                        &db_key,
+                        &query_key,
+                        total_games,
                         matches,
-                        total_games_searched: total_games,
-                        elapsed_ms: 0.05,
-                    };
+                        duration_ms,
+                    );
                     return ResponseMessage {
                         id,
                         status: "ok".to_string(),
-                        data: Some(serde_json::to_value(&res).unwrap_or_default()),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_games,
+                            "matched_count": matched_count,
+                            "duration_ms": duration_ms,
+                            "cached": false,
+                        })),
                         error: None,
                     };
                 }
@@ -104,40 +164,68 @@ pub fn handle_search_position(
         }
     }
 
-    let max_ply = req
-        .params
-        .get("max_ply")
-        .or_else(|| req.params.get("params").and_then(|p| p.get("max_ply")))
-        .and_then(|v| v.as_u64())
-        .map(|p| p as usize);
-
     match db {
         DatabaseBackend::Scid(s) => {
             let res = thread_pool.install(|| {
-                s.search_position_with_progress(fen, turn_param, mode_param, max_ply, |scanned, total, matches_len| {
-                    let event_json = serde_json::json!({
-                        "event": "search_progress",
-                        "data": {
-                            "scanned": scanned,
-                            "total": total,
-                            "matches": matches_len,
-                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                s.search_position_with_progress(
+                    fen,
+                    turn_param,
+                    mode_param,
+                    max_ply,
+                    |scanned, total, matches_len| {
+                        let event_json = serde_json::json!({
+                            "event": "search_progress",
+                            "data": {
+                                "scanned": scanned,
+                                "total": total,
+                                "matches": matches_len,
+                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            }
+                        });
+                        if let Ok(line) = serde_json::to_string(&event_json) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", line);
+                            let _ = out.flush();
                         }
-                    });
-                    if let Ok(line) = serde_json::to_string(&event_json) {
-                        let mut out = io::stdout().lock();
-                        let _ = writeln!(out, "{}", line);
-                        let _ = out.flush();
-                    }
-                })
+                    },
+                )
             });
             match res {
-                Ok(res) => ResponseMessage {
-                    id,
-                    status: "ok".to_string(),
-                    data: Some(serde_json::to_value(&res).unwrap_or_default()),
-                    error: None,
-                },
+                Ok(pos_res) => {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let matched_count = pos_res.matches.len();
+                    let matches: Vec<ScidMatchResult> = pos_res
+                        .matches
+                        .into_iter()
+                        .map(|m| ScidMatchResult {
+                            game_id: m.game_id,
+                            match_details: QueryMatchResult {
+                                is_match: true,
+                                matching_plies: vec![m.ply],
+                                match_count: 1,
+                            },
+                        })
+                        .collect();
+                    let search_id = session_mgr.create_session(
+                        &db_key,
+                        &query_key,
+                        total_games,
+                        matches,
+                        duration_ms,
+                    );
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_games,
+                            "matched_count": matched_count,
+                            "duration_ms": duration_ms,
+                            "cached": false,
+                        })),
+                        error: None,
+                    }
+                }
                 Err(e) => ResponseMessage {
                     id,
                     status: "error".to_string(),
@@ -148,30 +236,65 @@ pub fn handle_search_position(
         }
         DatabaseBackend::Pgn(p) => {
             let res = thread_pool.install(|| {
-                p.search_position(fen, turn_param, mode_param, max_ply, |scanned, total, matches_len| {
-                    let event_json = serde_json::json!({
-                        "event": "search_progress",
-                        "data": {
-                            "scanned": scanned,
-                            "total": total,
-                            "matches": matches_len,
-                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                p.search_position(
+                    fen,
+                    turn_param,
+                    mode_param,
+                    max_ply,
+                    |scanned, total, matches_len| {
+                        let event_json = serde_json::json!({
+                            "event": "search_progress",
+                            "data": {
+                                "scanned": scanned,
+                                "total": total,
+                                "matches": matches_len,
+                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            }
+                        });
+                        if let Ok(line) = serde_json::to_string(&event_json) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", line);
+                            let _ = out.flush();
                         }
-                    });
-                    if let Ok(line) = serde_json::to_string(&event_json) {
-                        let mut out = io::stdout().lock();
-                        let _ = writeln!(out, "{}", line);
-                        let _ = out.flush();
-                    }
-                })
+                    },
+                )
             });
             match res {
-                Ok(res) => ResponseMessage {
-                    id,
-                    status: "ok".to_string(),
-                    data: Some(serde_json::to_value(&res).unwrap_or_default()),
-                    error: None,
-                },
+                Ok(pos_res) => {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let matched_count = pos_res.matches.len();
+                    let matches: Vec<ScidMatchResult> = pos_res
+                        .matches
+                        .into_iter()
+                        .map(|m| ScidMatchResult {
+                            game_id: m.game_id,
+                            match_details: QueryMatchResult {
+                                is_match: true,
+                                matching_plies: vec![m.ply],
+                                match_count: 1,
+                            },
+                        })
+                        .collect();
+                    let search_id = session_mgr.create_session(
+                        &db_key,
+                        &query_key,
+                        total_games,
+                        matches,
+                        duration_ms,
+                    );
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_games,
+                            "matched_count": matched_count,
+                            "duration_ms": duration_ms,
+                            "cached": false,
+                        })),
+                        error: None,
+                    }
+                }
                 Err(e) => ResponseMessage {
                     id,
                     status: "error".to_string(),
@@ -186,6 +309,8 @@ pub fn handle_search_position(
 pub fn handle_search_material(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
+    session_mgr: &mut SearchSessionManager,
+    thread_pool: &rayon::ThreadPool,
 ) -> ResponseMessage {
     let id = req.id;
     let db = match current_db {
@@ -202,58 +327,157 @@ pub fn handle_search_material(
 
     let filter: crate::position_search::MaterialFilter =
         serde_json::from_value(req.params.clone()).unwrap_or_default();
-    let start = std::time::Instant::now();
-    match db {
-        DatabaseBackend::Scid(s) => match s.search_material(&filter) {
-            Ok(matches) => {
-                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                ResponseMessage {
-                    id,
-                    status: "ok".to_string(),
-                    data: Some(serde_json::json!({
-                        "matches": matches,
-                        "match_count": matches.len(),
-                        "total_games": s.game_count(),
-                        "elapsed_ms": elapsed_ms,
-                    })),
-                    error: None,
-                }
-            }
-            Err(e) => ResponseMessage {
-                id,
-                status: "error".to_string(),
-                data: None,
-                error: Some(format!("Material search failed: {}", e)),
-            },
-        },
+
+    let (total_games, db_key) = match db {
+        DatabaseBackend::Scid(s) => {
+            let count = s.game_count();
+            (count, SearchSessionManager::db_key(&s.index_path, count))
+        }
         DatabaseBackend::Pgn(p) => {
-            let res = p.search_material(&filter, |scanned, total, matches_len| {
-                let event_json = serde_json::json!({
-                    "event": "search_progress",
-                    "data": {
-                        "scanned": scanned,
-                        "total": total,
-                        "matches": matches_len,
-                        "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+            let count = p.game_count();
+            (count, SearchSessionManager::db_key(&p.pgn_path, count))
+        }
+    };
+
+    let query_key = format!(
+        "material:{}",
+        serde_json::to_string(&filter).unwrap_or_default()
+    );
+
+    // ⚡ Fast Cache Lookup: reuse identical query on unchanged database
+    if let Some(cached) = session_mgr.find_cached(&db_key, &query_key) {
+        let matched_count = cached.matches.len();
+        let total_searched = cached.total_searched;
+        let search_id = cached.search_id.clone();
+        return ResponseMessage {
+            id,
+            status: "ok".to_string(),
+            data: Some(serde_json::json!({
+                "search_id": search_id,
+                "total_searched": total_searched,
+                "matched_count": matched_count,
+                "duration_ms": 0,
+                "cached": true,
+            })),
+            error: None,
+        };
+    }
+
+    let start_time = Instant::now();
+
+    match db {
+        DatabaseBackend::Scid(s) => {
+            let res = thread_pool.install(|| {
+                s.search_material_with_progress(&filter, |scanned, total, matches_len| {
+                    let event_json = serde_json::json!({
+                        "event": "search_progress",
+                        "data": {
+                            "scanned": scanned,
+                            "total": total,
+                            "matches": matches_len,
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                        }
+                    });
+                    if let Ok(line) = serde_json::to_string(&event_json) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", line);
+                        let _ = out.flush();
                     }
-                });
-                if let Ok(line) = serde_json::to_string(&event_json) {
-                    let mut out = io::stdout().lock();
-                    let _ = writeln!(out, "{}", line);
-                    let _ = out.flush();
-                }
+                })
             });
             match res {
-                Ok(matches) => {
-                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                Ok(game_ids) => {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let matched_count = game_ids.len();
+                    let matches: Vec<ScidMatchResult> = game_ids
+                        .into_iter()
+                        .map(|gid| ScidMatchResult {
+                            game_id: gid,
+                            match_details: QueryMatchResult {
+                                is_match: true,
+                                matching_plies: vec![0],
+                                match_count: 1,
+                            },
+                        })
+                        .collect();
+                    let search_id = session_mgr.create_session(
+                        &db_key,
+                        &query_key,
+                        total_games,
+                        matches,
+                        duration_ms,
+                    );
                     ResponseMessage {
                         id,
                         status: "ok".to_string(),
                         data: Some(serde_json::json!({
-                            "matches": matches,
-                            "match_count": matches.len(),
-                            "total_games": p.game_count(),
-                            "elapsed_ms": elapsed_ms,
+                            "search_id": search_id,
+                            "total_searched": total_games,
+                            "matched_count": matched_count,
+                            "duration_ms": duration_ms,
+                            "cached": false,
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("Material search failed: {}", e)),
+                },
+            }
+        }
+        DatabaseBackend::Pgn(p) => {
+            let res = thread_pool.install(|| {
+                p.search_material(&filter, |scanned, total, matches_len| {
+                    let event_json = serde_json::json!({
+                        "event": "search_progress",
+                        "data": {
+                            "scanned": scanned,
+                            "total": total,
+                            "matches": matches_len,
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                        }
+                    });
+                    if let Ok(line) = serde_json::to_string(&event_json) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", line);
+                        let _ = out.flush();
+                    }
+                })
+            });
+            match res {
+                Ok(game_ids) => {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let matched_count = game_ids.len();
+                    let matches: Vec<ScidMatchResult> = game_ids
+                        .into_iter()
+                        .map(|gid| ScidMatchResult {
+                            game_id: gid,
+                            match_details: QueryMatchResult {
+                                is_match: true,
+                                matching_plies: vec![0],
+                                match_count: 1,
+                            },
+                        })
+                        .collect();
+                    let search_id = session_mgr.create_session(
+                        &db_key,
+                        &query_key,
+                        total_games,
+                        matches,
+                        duration_ms,
+                    );
+                    ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_games,
+                            "matched_count": matched_count,
+                            "duration_ms": duration_ms,
+                            "cached": false,
                         })),
                         error: None,
                     }

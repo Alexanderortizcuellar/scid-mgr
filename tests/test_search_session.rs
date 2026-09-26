@@ -162,6 +162,79 @@ fn test_search_session_scid_and_pgn_pagination() {
         );
         assert_eq!(list_resp_invalid.status, "error");
         assert!(list_resp_invalid.error.unwrap().contains("not found"));
+        // G. Position search uniform search_id test
+        let mut pos_index = None;
+        let pos_search_req = RequestMessage {
+            id: Some(7),
+            command: "search_position".to_string(),
+            params: serde_json::json!({
+                "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+                "match_mode": "exact"
+            }),
+        };
+        let pos_resp = scid_mgr::server::handlers::position::handle_search_position(
+            &pos_search_req,
+            &db_backend,
+            &mut pos_index,
+            &mut session_mgr,
+            &thread_pool,
+        );
+        assert_eq!(pos_resp.status, "ok");
+        let pos_data = pos_resp.data.unwrap();
+        assert!(pos_data.get("search_id").is_some());
+        let pos_search_id = pos_data["search_id"].as_str().unwrap();
+
+        // Paginate and sort position search results
+        let list_pos_req = RequestMessage {
+            id: Some(8),
+            command: "query_games".to_string(),
+            params: serde_json::json!({
+                "search_id": pos_search_id,
+                "page": 0,
+                "page_size": 5,
+                "sort_by": "date",
+                "sort_asc": false
+            }),
+        };
+        let list_pos_resp =
+            handle_query_games(&list_pos_req, &db_backend, &mut session_mgr, &thread_pool);
+        assert_eq!(list_pos_resp.status, "ok");
+
+        // H. Material search uniform search_id test
+        let mat_search_req = RequestMessage {
+            id: Some(9),
+            command: "search_material".to_string(),
+            params: serde_json::json!({
+                "white_queens": [1, 1],
+                "black_queens": [1, 1]
+            }),
+        };
+        let mat_resp = scid_mgr::server::handlers::position::handle_search_material(
+            &mat_search_req,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+        );
+        assert_eq!(mat_resp.status, "ok");
+        let mat_data = mat_resp.data.unwrap();
+        assert!(mat_data.get("search_id").is_some());
+        let mat_search_id = mat_data["search_id"].as_str().unwrap();
+
+        // Paginate and sort material search results
+        let list_mat_req = RequestMessage {
+            id: Some(10),
+            command: "query_games".to_string(),
+            params: serde_json::json!({
+                "search_id": mat_search_id,
+                "page": 0,
+                "page_size": 5,
+                "sort_by": "white_elo",
+                "sort_asc": false
+            }),
+        };
+        let list_mat_resp =
+            handle_query_games(&list_mat_req, &db_backend, &mut session_mgr, &thread_pool);
+        assert_eq!(list_mat_resp.status, "ok");
     }
 
     // 2. PGN Database Search Session Test
