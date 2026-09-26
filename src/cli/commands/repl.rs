@@ -277,6 +277,55 @@ pub fn handle_repl(initial_db_path: &Path, default_limit: usize) -> Result<()> {
                         eprintln!("Continuations error: {:#}", e);
                     }
                 }
+                ".endgames" | ".endgame" | ".feat" => {
+                    let mut fen_opt: Option<String> = None;
+                    let mut cat_opt: Option<String> = None;
+                    let mut feat_opt: Option<String> = None;
+
+                    let sub_parts: Vec<&str> = arg.split_whitespace().collect();
+                    let mut i = 0;
+                    while i < sub_parts.len() {
+                        match sub_parts[i] {
+                            "--fen" | "-f" => {
+                                if i + 1 < sub_parts.len() {
+                                    fen_opt = Some(sub_parts[i + 1].to_string());
+                                    i += 2;
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                            "--category" | "--cat" | "-c" => {
+                                if i + 1 < sub_parts.len() {
+                                    cat_opt = Some(sub_parts[i + 1].to_string());
+                                    i += 2;
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                            other => {
+                                if other.starts_with("END_") || other.parse::<u8>().is_ok() {
+                                    feat_opt = Some(other.to_string());
+                                } else if other.contains('/') {
+                                    fen_opt = Some(other.to_string());
+                                } else {
+                                    cat_opt = Some(other.to_string());
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+
+                    if let Err(e) = crate::cli::commands::endgames::handle_endgames(
+                        &current_path,
+                        fen_opt,
+                        cat_opt,
+                        feat_opt,
+                        false,
+                        limit,
+                    ) {
+                        eprintln!("Endgame error: {:#}", e);
+                    }
+                }
                 _ => {
                     eprintln!(
                         "Unknown shell command: '{}'. Type '.help' for available commands.",
@@ -374,6 +423,7 @@ fn print_help() {
   .explain <QUERY>      Inspect AST, canonical DSL, and symmetry expansions
   .tree [FEN]           Inspect opening tree statistics for position
   .continuations [FEN]  Query common multi-ply continuation lines
+  .endgames [ARGS]      Show endgame popularity or query features (.endgames ROOK, .endgames END_ROOK_RP_R)
   .clear / clear        Clear terminal screen
   .exit / .quit         Exit the shell
 

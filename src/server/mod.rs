@@ -217,6 +217,14 @@ fn handle_command(
             )
         }
 
+        // Endgame Taxonomy & Feature Index Operations
+        "endgames" | "endgame" | "endgame_popularity" | "get_endgames" | "query_endgames" => {
+            handlers::endgames::handle_endgames(req, current_db, current_pos_index)
+        }
+        "build_endgames" | "build_endgame_index" | "build_feat_index" | "rebuild_endgames" => {
+            handlers::endgames::handle_build_endgames(req, current_db)
+        }
+
         // Position Index Operations
         "unload_pos_index" => handlers::index::handle_unload_pos_index(req, current_pos_index),
         "pos_index_status" | "get_pos_index_status" => {

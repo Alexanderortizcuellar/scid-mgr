@@ -86,6 +86,35 @@ impl FeatureIndexWriter {
     }
 }
 
+pub fn resolve_companion_feat_path<P: AsRef<Path>>(db_path: P) -> PathBuf {
+    let p = db_path.as_ref();
+    let path_str = p.to_string_lossy();
+    let lower = path_str.to_lowercase();
+    if lower.ends_with(".pgn") {
+        let direct = PathBuf::from(format!("{}.feat.idx", path_str));
+        if direct.exists() {
+            return direct;
+        }
+        let stem = p.with_extension("feat.idx");
+        if stem.exists() {
+            return stem;
+        }
+        return direct;
+    }
+    if lower.ends_with(".si5")
+        || lower.ends_with(".si4")
+        || lower.ends_with(".sg5")
+        || lower.ends_with(".sg4")
+    {
+        let direct = PathBuf::from(format!("{}.feat.idx", path_str));
+        if direct.exists() {
+            return direct;
+        }
+        return p.with_extension("feat.idx");
+    }
+    PathBuf::from(format!("{}.feat.idx", path_str))
+}
+
 pub struct MmapFeatureIndex {
     mmap: Arc<Mmap>,
     header: FeatureIndexHeader,

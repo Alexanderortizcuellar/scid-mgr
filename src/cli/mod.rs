@@ -88,6 +88,18 @@ pub enum BuildCommands {
         min_games: usize,
     },
 
+    /// Build companion .feat.idx endgame taxonomy and feature index
+    #[command(name = "endgames", aliases = ["feat", "feat-idx", "endgame"])]
+    Endgames {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Custom catalog YAML path (optional)
+        #[arg(long)]
+        catalog: Option<PathBuf>,
+    },
+
     /// Build both companion indexes (.pos.idx and .tree.idx)
     #[command(name = "all")]
     All {
@@ -409,6 +421,34 @@ pub enum Commands {
         min_percentage: f64,
     },
 
+    /// Show endgame popularity breakdown or query games matching an endgame feature
+    #[command(name = "endgames", aliases = ["endgame", "feat", "features"])]
+    Endgames {
+        /// Path to .si4, .si5, or .pgn file
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Filter endgame popularity from a specific opening/middlegame position FEN
+        #[arg(long)]
+        fen: Option<String>,
+
+        /// Filter to a specific category (e.g. PAWN, ROOK, BISHOP, KNIGHT, MINOR_MIXED, QUEEN, ROOK_VS_MINOR, QUEEN_VS_PIECES)
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Query games matching a specific endgame feature ID (e.g. END_ROOK_RP_R) or bit number
+        #[arg(long)]
+        feature: Option<String>,
+
+        /// Output results as formatted JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Maximum sample game IDs to display for a feature query (default: 20)
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
     /// Run the interactive JSON-RPC server
     Interactive {
         /// Optional database path to auto-open
@@ -608,6 +648,9 @@ pub fn run() -> Result<()> {
             } => {
                 commands::continuations::handle_build_continuations(&db_path, max_ply, min_games)?;
             }
+            BuildCommands::Endgames { db_path, catalog } => {
+                commands::endgames::handle_build_endgames(&db_path, catalog.as_deref())?;
+            }
             BuildCommands::All {
                 db_path,
                 max_ply,
@@ -641,6 +684,16 @@ pub fn run() -> Result<()> {
                 min_games,
                 min_percentage,
             )?;
+        }
+        Some(Commands::Endgames {
+            db_path,
+            fen,
+            category,
+            feature,
+            json,
+            limit,
+        }) => {
+            commands::endgames::handle_endgames(&db_path, fen, category, feature, json, limit)?;
         }
         Some(Commands::SortPgn {
             input_pgn,

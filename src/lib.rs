@@ -93,9 +93,9 @@ pub use continuation_index::{
 };
 pub use db::{DbStats, GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
 pub use endgame_index::{
-    CategoryPopularity, EndgameCatalog, EndgameDetector, EndgameFeatureDef, EndgameIndexBuilder,
-    EndgamePopularityReport, EndgameQueryEngine, FeatureIndexHeader, FeaturePopularity,
-    FeatureQueryReport, GameFeatureRecord, MmapFeatureIndex,
+    resolve_companion_feat_path, CategoryPopularity, EndgameCatalog, EndgameDetector,
+    EndgameFeatureDef, EndgameIndexBuilder, EndgamePopularityReport, EndgameQueryEngine,
+    FeatureIndexHeader, FeaturePopularity, FeatureQueryReport, GameFeatureRecord, MmapFeatureIndex,
 };
 pub use pgn_db::{CompactPgnRecord, PgnDatabaseWrapper, PgnNameTables};
 pub use position_index::{

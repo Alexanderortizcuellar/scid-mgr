@@ -14,7 +14,7 @@ pub use model::{
     RECORD_SIZE,
 };
 pub use query::EndgameQueryEngine;
-pub use serializer::{FeatureIndexWriter, MmapFeatureIndex};
+pub use serializer::{resolve_companion_feat_path, FeatureIndexWriter, MmapFeatureIndex};
 pub use types::{
     CategoryPopularity, EndgamePopularityReport, FeaturePopularity, FeatureQueryReport,
 };

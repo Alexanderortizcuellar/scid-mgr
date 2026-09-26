@@ -164,3 +164,93 @@ fn test_scid_endgame_index_build_and_query() -> Result<()> {
     assert_eq!(popularity.total_db_games, 3);
     Ok(())
 }
+
+#[test]
+fn test_cli_endgames_handlers() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("endgames_cli.pgn");
+    let mut file = std::fs::File::create(&pgn_path)?;
+    file.write_all(ENDGAME_PGN.as_bytes())?;
+    file.flush()?;
+
+    // 1. Build index via CLI handler
+    scid_mgr::cli::commands::endgames::handle_build_endgames(&pgn_path, None)?;
+
+    // 2. Query general popularity via CLI handler
+    scid_mgr::cli::commands::endgames::handle_endgames(
+        &pgn_path, None, None, None, true, // JSON output
+        10,
+    )?;
+
+    // 3. Query category filter
+    scid_mgr::cli::commands::endgames::handle_endgames(
+        &pgn_path,
+        None,
+        Some("ROOK".to_string()),
+        None,
+        false,
+        10,
+    )?;
+
+    // 4. Query specific feature ID
+    scid_mgr::cli::commands::endgames::handle_endgames(
+        &pgn_path,
+        None,
+        None,
+        Some("END_PAWN_KP_K".to_string()),
+        false,
+        10,
+    )?;
+
+    Ok(())
+}
+
+#[test]
+fn test_json_rpc_endgames_handlers() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("endgames_rpc.pgn");
+    let mut file = std::fs::File::create(&pgn_path)?;
+    file.write_all(ENDGAME_PGN.as_bytes())?;
+    file.flush()?;
+
+    let pgn_db = scid_mgr::pgn_db::PgnDatabaseWrapper::open(&pgn_path)?;
+    let backend = Some(scid_mgr::server::DatabaseBackend::Pgn(pgn_db));
+    let mut pos_idx = None;
+
+    // 1. Build index via RPC
+    let build_req = scid_mgr::server::RequestMessage {
+        id: Some(1),
+        command: "build_endgames".to_string(),
+        params: serde_json::json!({}),
+    };
+    let build_resp =
+        scid_mgr::server::handlers::endgames::handle_build_endgames(&build_req, &backend);
+    assert_eq!(build_resp.status, "ok");
+
+    // 2. Query general endgames via RPC
+    let query_req = scid_mgr::server::RequestMessage {
+        id: Some(2),
+        command: "endgames".to_string(),
+        params: serde_json::json!({}),
+    };
+    let query_resp =
+        scid_mgr::server::handlers::endgames::handle_endgames(&query_req, &backend, &mut pos_idx);
+    assert_eq!(query_resp.status, "ok");
+    assert!(query_resp.data.is_some());
+
+    // 3. Query specific feature via RPC
+    let feat_req = scid_mgr::server::RequestMessage {
+        id: Some(3),
+        command: "endgames".to_string(),
+        params: serde_json::json!({
+            "feature_id": "END_PAWN_KP_K",
+            "max_samples": 5
+        }),
+    };
+    let feat_resp =
+        scid_mgr::server::handlers::endgames::handle_endgames(&feat_req, &backend, &mut pos_idx);
+    assert_eq!(feat_resp.status, "ok");
+    assert!(feat_resp.data.is_some());
+
+    Ok(())
+}
