@@ -35,9 +35,13 @@ This document explains step-by-step how `scid-mgr` operates, from loading binary
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Physical Storage Files                          │
-│  - SCID v5:  .si5 (Index), .sn5 (Names Journal), .sg5 (Move Stream)   │
-│  - SCID v4:  .si4 (Index), .sn4 (Names Table),   .sg4 (Move Stream)   │
-│  - PGN:      .pgn (Text),  .pgn.idx (Bincode Companion Cache)         │
+│  - SCID v5:        .si5 (Index), .sn5 (Names Journal), .sg5 (Moves)    │
+│  - SCID v4:        .si4 (Index), .sn4 (Names Table),   .sg4 (Moves)    │
+│  - PGN:            .pgn (Text),  .pgn.idx (Bincode Companion Cache)    │
+│  - Position Index: .pos.idx (v3 Delta-Varint Posting Lists)            │
+│  - Tree Index:     .tree.idx (Binary Opening Tree Statistics)          │
+│  - Continuations:  .hot.idx (Common Continuations Binary DAG Graph)    │
+│  - Endgame Index:  .feat.idx (64-bit Endgame Feature Bitmask Index)    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -127,4 +131,22 @@ The PyQt5 desktop client is decoupled into dedicated, testable modules:
 - `GamePreviewPanelWidget`: Reconstructed PGN display and game mutations.
 - `OpeningTreeWidget`: Interactive opening explorer, move table, sample games preview.
 - `ProtocolLogPanelWidget`: Protocol log viewer with payload sanitization to avoid UI thread starvation.
+
+---
+
+### Step 8: Common Continuations Graph Engine (`.hot.idx`)
+1. **Precomputed Binary DAG (`CHSHOTG1`)**:
+   - Compiles frequent opening/middlegame sequences into a zero-allocation binary graph with nodes, edges, and Zobrist hash table.
+   - Enables sub-millisecond multi-move branch exploration and win/draw/loss percentage calculation.
+2. **Dynamic Inverted Index Traversal**:
+   - For positions outside the precomputed graph, uses companion `.pos.idx` candidate posting lists to traverse matching games in parallel.
+
+---
+
+### Step 9: Endgame Taxonomy & Feature Index (`.feat.idx`)
+1. **Compact 8-Byte Feature Bitmasks (`CHSFEAT1`)**:
+   - Indexes 47 standardized endgame classifications (Pawn, Rook, Bishop, Knight, Mixed Minor, Queen, etc.) into an 8-byte `u64` bitmask per game.
+   - 10 million games require only ~80 MB of index storage.
+2. **Sub-Millisecond Bitwise Analytics**:
+   - Uses SIMD / vectorized hardware `popcnt` operations for instantaneous database-wide endgame popularity statistics and win/draw/loss distribution reports.
 

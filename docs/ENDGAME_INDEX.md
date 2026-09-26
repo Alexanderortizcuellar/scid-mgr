@@ -1,4 +1,4 @@
-# ♟️ Chapter 10: Endgame Taxonomy & Popularity Index
+# ♟️ Endgame Taxonomy & Feature Index (`.feat.idx`) Specification
 
 The **Endgame Engine** classifies games into standardized endgame categories and calculates endgame popularity distributions across chess databases:
 1. **Catalog-Driven Taxonomy**: 47 standardized endgame definitions based on international classification (GBR codes, FCE, Dvoretsky, de la Villa) embedded directly into the binary from YAML.
@@ -128,3 +128,58 @@ The catalog classifies endgames across 8 major categories:
   - 1,000,000 games: **8.0 MB**
   - 10,000,000 games: **80.0 MB**
 - **Zero Allocation Memory Mapping**: `MmapFeatureIndex` maps directly from the OS page cache with zero deserialization overhead.
+
+---
+
+## 🖥️ CLI & REPL Commands
+
+```bash
+# Query endgame popularity report for an entire database
+scid-mgr endgames database.si5
+
+# Query endgames reaching a specific position (e.g. Sicilian Defense)
+scid-mgr endgames database.si5 --fen "r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
+
+# Filter by endgame category
+scid-mgr endgames database.si5 --category ROOK
+
+# Filter by specific feature ID with sample games
+scid-mgr endgames database.si5 --feature END_ROOK_RP_R --samples 10
+
+# Build companion .feat.idx index in parallel across all CPU cores
+scid-mgr build endgames database.si5
+
+# REPL Command
+scid-mgr> .endgames [FEN]
+```
+
+---
+
+## 🔌 JSON-RPC API Endpoints
+
+### 1. `endgames`
+Calculates endgame popularity distribution and statistics.
+```json
+{
+  "id": 1,
+  "command": "endgames",
+  "params": {
+    "fen": "r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+    "category": "ROOK",
+    "feature_id": "END_ROOK_RP_R",
+    "max_samples": 20
+  }
+}
+```
+
+### 2. `build_endgames`
+Builds or rebuilds the `.feat.idx` index in parallel across worker threads. Emits `build_endgames_progress` events.
+```json
+{
+  "id": 2,
+  "command": "build_endgames",
+  "params": {
+    "output_path": "path/to/custom.feat.idx"
+  }
+}
+```

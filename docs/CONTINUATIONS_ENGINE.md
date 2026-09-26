@@ -1,4 +1,4 @@
-# 📈 Chapter 9: Common Continuations Engine & Sequence Analysis
+# 📈 Common Continuations Engine & Sequence Analysis
 
 The **Common Continuations Engine** is a high-performance sequence analyzer and game continuation explorer in `scid-mgr`. It calculates the most frequent multi-move continuation paths and branches from any chess position (full FEN or starting board), providing game counts, percentage shares, win/draw/loss distributions, and score statistics.
 

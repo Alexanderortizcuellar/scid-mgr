@@ -432,32 +432,6 @@ The query parser follows SQL/C-style comment syntax:
 
 ---
 
-# 📈 Chapter 9: Common Continuations Engine & Sequence Analysis
-
-The Common Continuations Engine calculates the most frequent multi-move continuation paths and branches from any chess position (full FEN or starting board), providing game counts, percentage shares, win/draw/loss distributions, and score statistics.
-
-## ⚡ Execution Modes & Formats
-* **Precomputed Memory-Mapped Graph (`.hot.idx`)**: Binary DAG format (`CHSHOTG1`) enabling instant sub-millisecond path traversal without disk I/O.
-* **Dynamic Candidate-Accelerated Search**: Dynamic parallel traversal across games using companion `.pos.idx` inverted index acceleration.
-
-## 🖥️ CLI & REPL Commands
-```bash
-# CLI Query
-scid-mgr continuations database.si5 [FEN] --depth 12 --lines 10 --min-games 5
-
-# CLI Index Builder
-scid-mgr build continuations database.si5 --max-ply 16 --min-games 3
-
-# REPL Command
-scid-mgr> .continuations [FEN]
-```
-
-## 🔌 JSON-RPC API Endpoints
-* **`continuations`**: `{"fen": "...", "max_depth": 8, "max_lines": 10, "min_games": 1, "min_percentage": 0.0}`
-* **`build_continuations`**: `{"max_ply": 16, "min_games": 2, "output_path": "..."}`
-
----
-
 # 🎯 Complete Example Queries
 
 ```text

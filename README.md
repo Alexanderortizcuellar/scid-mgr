@@ -8,7 +8,10 @@ A high-performance, multithreaded Rust chess database engine, CLI utility, and J
 
 Comprehensive technical documentation is available in the [`docs/`](docs/) directory:
 - 📖 [**Architecture & End-to-End Workflow**](docs/ARCHITECTURE_AND_WORKFLOW.md)
+- 📖 [**CQLite Search Engine Manual**](docs/manual/README.md)
 - 🔍 [**Search Engine Specification & Reference**](docs/SEARCH_ENGINE.md)
+- 📈 [**Common Continuations Engine & Graph**](docs/CONTINUATIONS_ENGINE.md)
+- ♟️ [**Endgame Taxonomy & Feature Index**](docs/ENDGAME_INDEX.md)
 - 🗺️ [**Search Engine Development Roadmap**](docs/SEARCH_ENGINE_ROADMAP.md)
 - ⚡ [**Performance & Engineering Optimizations**](docs/PERFORMANCE_AND_OPTIMIZATIONS.md)
 - 📊 [**Benchmarks & Performance Metrics (10.35M Games)**](docs/BENCHMARKS_AND_METRICS.md)
@@ -29,6 +32,12 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
   - Custom inverted position index format with sorted Zobrist 64-bit keys and Delta-Varint posting list compression.
   - Instant Opening Tree / Explorer (< 0.05 ms lookup time) returning move win/draw/loss statistics, average ratings, and sample game IDs.
   - Dynamic opening tree filtering by metadata (player, rating, date, ECO, custom candidate game lists).
+- **Common Continuations Graph Engine (`.hot.idx`)**:
+  - Precomputed zero-allocation binary directed acyclic graph (`CHSHOTG1`) for sub-millisecond continuation lines, branch percentages, and score statistics.
+  - Dynamic candidate-accelerated sequence searching for unindexed board positions.
+- **Endgame Taxonomy & Popularity Index (`.feat.idx`)**:
+  - 47 standardized endgame definitions across 8 major categories embedded into an ultra-compact 8-byte bitmask index per game (`CHSFEAT1`).
+  - Sub-millisecond bitwise filtering and database-wide / position-scoped endgame win/draw/loss popularity analytics.
 - **Advanced Search Engine & CQLite DSL**:
   - **Text Query DSL (CQLite)**: Express complex chess queries cleanly (e.g. `white "Kasparov" tag "TimeControl" == "300+0" [Qq] == 0 move A--`).
   - **Position & Partial Board Search**: Full FEN, wildcard FEN, square contents, and turn/legal move filters (`wtm`, `legal == 0`).
@@ -146,6 +155,18 @@ cargo run --release -- test
 
 # Query Instant Opening Tree with sample game IDs
 .\target\release\scid-mgr.exe tree my_database.si5 --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1" --sample-games 20
+
+# Query Most Frequent Multi-Move Continuation Lines (Dynamic or via .hot.idx)
+.\target\release\scid-mgr.exe continuations my_database.si5 --depth 12 --lines 10 --min-games 5
+
+# Build Common Continuations Binary Graph (.hot.idx) in parallel across all CPU cores
+.\target\release\scid-mgr.exe build continuations my_database.si5 --max-ply 16 --min-games 3
+
+# Query Endgame Popularity Distribution across database or position
+.\target\release\scid-mgr.exe endgames my_database.si5 --category ROOK
+
+# Build Companion Endgame Feature Index (.feat.idx) in parallel across all CPU cores
+.\target\release\scid-mgr.exe build endgames my_database.si5
 
 # Run Diagnostics on Companion Position Index (Delta-Varint compression and posting list distribution)
 .\target\release\scid-mgr.exe diag-pos-idx my_database.si5
