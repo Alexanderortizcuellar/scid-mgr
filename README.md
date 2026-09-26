@@ -28,10 +28,13 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
 - **High-Performance In-Memory & Memory-Mapped Indexing**:
   - Sub-millisecond queries, multi-criteria header filtering, parallel sorting with alphabetical rank tables, and instant statistics.
   - Zero-copy memory mapping (`memmap2`) for move streams with low memory footprint (~580 MB for 10.35 million games).
-- **Sub-Millisecond Companion Position Index (`.pos.idx` v3)**:
-  - Custom inverted position index format with sorted Zobrist 64-bit keys and Delta-Varint posting list compression.
-  - Instant Opening Tree / Explorer (< 0.05 ms lookup time) returning move win/draw/loss statistics, average ratings, and sample game IDs.
-  - Dynamic opening tree filtering by metadata (player, rating, date, ECO, custom candidate game lists).
+- **Sub-Millisecond Companion Position Search Index (`.pos.idx`)**:
+  - Custom inverted position index format (`SCIDPOS5`) with sorted 64-bit Zobrist keys and Delta-Varint posting list compression.
+  - Sub-millisecond candidate game search acceleration, pruning 99%+ of non-matching games instantly before move playback.
+- **Sub-Millisecond Opening Tree Index (`.tree.idx`)**:
+  - Precomputed binary opening tree statistics index enabling instant (< 0.05 ms) move lookup.
+  - Returns move win/draw/loss percentages, rating averages, frequency shares, and sample game IDs for any opening position.
+  - Dynamic opening tree filtering by metadata (player, rating, date, ECO) across candidate game subsets.
 - **Common Continuations Graph Engine (`.hot.idx`)**:
   - Precomputed zero-allocation binary directed acyclic graph (`CHSHOTG1`) for sub-millisecond continuation lines, branch percentages, and score statistics.
   - Dynamic candidate-accelerated sequence searching for unindexed board positions.
