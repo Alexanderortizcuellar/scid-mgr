@@ -130,6 +130,22 @@ white_light_bishops == 1 and black_dark_bishops == 1
 * **`stalemate`**: Position is stalemate
 * **`legal`** / **`legal count`**: Number of legal moves $\rightarrow$ `legal count >= 30`
 
+## 🌐 Full & Wildcard FEN Patterns
+
+Match exact or partial board setups with `fen "..."`:
+* **`A`**: Any White piece (Pawn, Knight, Bishop, Rook, Queen, King)
+* **`a`**: Any Black piece (Pawn, Knight, Bishop, Rook, Queen, King)
+* **`*`**: Sequence of 0 to 8 squares (empty or occupied)
+* **`?`** / **`.`**: Any single square
+* **`1`..`8`**: Consecutive empty squares
+* **`P,N,B,R,Q,K` / `p,n,b,r,q,k`**: Specific pieces
+
+```text
+fen "*/*/*/*ppA*/*/*/*/*"   // Black pawns and any White piece on 4th/5th ranks
+fen "*/*/*/*/4k3/*/*/*"      // Black King on e4
+fen "*/*/*/*/*/*/*/* w"      // Any position where it is White to move
+```
+
 ---
 
 # 🏹 Chapter 3: Move & Path Patterns

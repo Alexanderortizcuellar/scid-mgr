@@ -165,13 +165,33 @@ Match exact or partial board setups with standard `fen` / `position` keywords:
 fen "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 4"
 ```
 
-### Rank Wildcards (`*`, `?`, `A`, `a`):
-* `*` for an entire rank matches any rank configuration.
-* `*` within a rank matches any piece sequence.
-* `A` matches **any White piece**.
-* `a` matches **any Black piece**.
+### 🃏 Supported Wildcard & Placeholder Symbols
+
+The FEN matcher supports flexible wildcard placeholders within each rank:
+
+| Symbol / Placeholder | Meaning | Example / Usage |
+| :--- | :--- | :--- |
+| **`A`** | **Any White piece** (Pawn, Knight, Bishop, Rook, Queen, King) | `fen "*/*/*/*ppA*/*/*/*/*"` (Matches any White piece following 2 Black pawns) |
+| **`a`** | **Any Black piece** (Pawn, Knight, Bishop, Rook, Queen, King) | `fen "*/*/*/*aa*/*/*/*"` (Matches any 2 adjacent Black pieces on the 5th rank) |
+| **`*`** | **Any sequence of squares** (0 to 8 squares, empty or occupied) | `fen "*/*/*/*/*/*/*/*"` (Matches any board position)<br>`fen "*R*/*"` (White Rook anywhere on the 8th rank) |
+| **`?`** or **`.`** | **Any single square** (1 square, whether empty or occupied) | `fen "??k?????/*/*/*/*/*/*/*"` (Black King on c8) |
+| **`1` .. `8`** | **Exact number of consecutive empty squares** | `fen "4k3/*/*/*/*/*/*/*"` (Black King on e8 with 4 empty squares to the left and 3 to the right) |
+| **`P, N, B, R, Q, K`** | **Specific White piece** | `fen "*/*/*/*/4K3/*/*/*"` (White King on e4) |
+| **`p, n, b, r, q, k`** | **Specific Black piece** | `fen "*/*/*/*/4k3/*/*/*"` (Black King on e4) |
+| **`w`** / **`b`** *(trailing)* | **Active side to move** (optional suffix) | `fen "*/*/*/*/*/*/*/* w"` (Any board where it is White to move) |
+
+### 🔍 Practical Wildcard FEN Examples
 
 ```text
-fen "*/*/*/*ppA*/*/*/*/*"   // Black pawns and White piece on 4th/5th ranks
-fen "*/*/*/*/4k3/*/*/*"      // Black King on e4
+// 1. King & Pawn Endgame with White King on e4 and Black King on e6:
+fen "*/*/*/4k3/*/4K3/*/*"
+
+// 2. Any White piece on d4 and Black pawn on e5:
+fen "*/*/*/*a*/*Ad*/*/*/*"
+
+// 3. Castled Black King with intact pawn shield:
+fen "6k1/5ppp/*/*/*/*/*/*"
+
+// 4. White piece on the 7th rank with Black to move:
+fen "*/1A6/*/*/*/*/*/* b"
 ```
