@@ -57,7 +57,7 @@ fn test_search_session_scid_and_pgn_pagination() {
         };
 
         let list_resp0 =
-            handle_query_games(&list_req_page0, &db_backend, &session_mgr, &thread_pool);
+            handle_query_games(&list_req_page0, &db_backend, &mut session_mgr, &thread_pool);
         assert_eq!(list_resp0.status, "ok");
         let list_data0 = list_resp0.data.unwrap();
         assert_eq!(list_data0["page"], 0);
@@ -73,9 +73,63 @@ fn test_search_session_scid_and_pgn_pagination() {
             assert!(games0[0].get("match_count").is_some());
         }
 
-        // D. Out-of-bounds page
-        let list_req_oob = RequestMessage {
+        // D. Sorting across pages by Elo descending
+        let list_req_sort_elo = RequestMessage {
             id: Some(3),
+            command: "query_games".to_string(),
+            params: serde_json::json!({
+                "search_id": search_id,
+                "page": 0,
+                "page_size": 2,
+                "sort_by": "white_elo",
+                "sort_asc": false
+            }),
+        };
+        let list_resp_sort = handle_query_games(
+            &list_req_sort_elo,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+        );
+        assert_eq!(list_resp_sort.status, "ok");
+        let list_data_sort = list_resp_sort.data.unwrap();
+        let games_sort = list_data_sort["games"].as_array().unwrap();
+        if games_sort.len() >= 2 {
+            let elo0 = games_sort[0]["white_elo"].as_u64().unwrap_or(0);
+            let elo1 = games_sort[1]["white_elo"].as_u64().unwrap_or(0);
+            assert!(elo0 >= elo1, "Expected Elo0 ({}) >= Elo1 ({})", elo0, elo1);
+        }
+
+        // D2. Sorting by White player name ascending
+        let list_req_sort_white = RequestMessage {
+            id: Some(4),
+            command: "query_games".to_string(),
+            params: serde_json::json!({
+                "search_id": search_id,
+                "page": 0,
+                "page_size": 10,
+                "sort_by": "white",
+                "sort_asc": true
+            }),
+        };
+        let list_resp_white = handle_query_games(
+            &list_req_sort_white,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+        );
+        assert_eq!(list_resp_white.status, "ok");
+        let list_data_white = list_resp_white.data.unwrap();
+        let games_white = list_data_white["games"].as_array().unwrap();
+        if games_white.len() >= 2 {
+            let w0 = games_white[0]["white"].as_str().unwrap_or("");
+            let w1 = games_white[1]["white"].as_str().unwrap_or("");
+            assert!(w0 <= w1, "Expected White0 ({}) <= White1 ({})", w0, w1);
+        }
+
+        // E. Out-of-bounds page
+        let list_req_oob = RequestMessage {
+            id: Some(5),
             command: "query_games".to_string(),
             params: serde_json::json!({
                 "search_id": search_id,
@@ -84,15 +138,15 @@ fn test_search_session_scid_and_pgn_pagination() {
             }),
         };
         let list_resp_oob =
-            handle_query_games(&list_req_oob, &db_backend, &session_mgr, &thread_pool);
+            handle_query_games(&list_req_oob, &db_backend, &mut session_mgr, &thread_pool);
         assert_eq!(list_resp_oob.status, "ok");
         let list_data_oob = list_resp_oob.data.unwrap();
         assert_eq!(list_data_oob["games"].as_array().unwrap().len(), 0);
         assert_eq!(list_data_oob["total"], matched_count);
 
-        // E. Invalid search_id
+        // F. Invalid search_id
         let list_req_invalid = RequestMessage {
-            id: Some(4),
+            id: Some(6),
             command: "query_games".to_string(),
             params: serde_json::json!({
                 "search_id": "non_existent_search",
@@ -100,8 +154,12 @@ fn test_search_session_scid_and_pgn_pagination() {
                 "page_size": 10
             }),
         };
-        let list_resp_invalid =
-            handle_query_games(&list_req_invalid, &db_backend, &session_mgr, &thread_pool);
+        let list_resp_invalid = handle_query_games(
+            &list_req_invalid,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+        );
         assert_eq!(list_resp_invalid.status, "error");
         assert!(list_resp_invalid.error.unwrap().contains("not found"));
     }
@@ -133,11 +191,13 @@ fn test_search_session_scid_and_pgn_pagination() {
             params: serde_json::json!({
                 "search_id": pgn_search_id,
                 "page": 0,
-                "page_size": 10
+                "page_size": 10,
+                "sort_by": "white",
+                "sort_asc": true
             }),
         };
         let pgn_list_resp =
-            handle_query_games(&pgn_list_req, &pgn_backend, &session_mgr, &thread_pool);
+            handle_query_games(&pgn_list_req, &pgn_backend, &mut session_mgr, &thread_pool);
         assert_eq!(pgn_list_resp.status, "ok");
         let pgn_list_data = pgn_list_resp.data.unwrap();
         assert_eq!(pgn_list_data["total"], pgn_matches);
