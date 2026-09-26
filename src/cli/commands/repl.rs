@@ -260,6 +260,23 @@ pub fn handle_repl(initial_db_path: &Path, default_limit: usize) -> Result<()> {
                         eprintln!("Tree error: {:#}", e);
                     }
                 }
+                ".continuations" | ".hot" | ".cont" => {
+                    let fen_opt = if arg.is_empty() {
+                        None
+                    } else {
+                        Some(arg.to_string())
+                    };
+                    if let Err(e) = crate::cli::commands::continuations::handle_continuations(
+                        &current_path,
+                        fen_opt,
+                        8,
+                        10,
+                        1,
+                        0.0,
+                    ) {
+                        eprintln!("Continuations error: {:#}", e);
+                    }
+                }
                 _ => {
                     eprintln!(
                         "Unknown shell command: '{}'. Type '.help' for available commands.",
@@ -356,6 +373,7 @@ fn print_help() {
   .get <GAME_ID>        Print reconstructed PGN for a matching game
   .explain <QUERY>      Inspect AST, canonical DSL, and symmetry expansions
   .tree [FEN]           Inspect opening tree statistics for position
+  .continuations [FEN]  Query common multi-ply continuation lines
   .clear / clear        Clear terminal screen
   .exit / .quit         Exit the shell
 

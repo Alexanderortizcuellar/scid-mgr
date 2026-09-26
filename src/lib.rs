@@ -65,6 +65,7 @@
 
 pub mod benchmark;
 pub mod cli;
+pub mod continuation_index;
 pub mod db;
 pub mod pgn_db;
 pub mod pgn_io;
@@ -84,6 +85,10 @@ pub mod zero_copy_ingest {
 
 // Public re-exports for ergonomic library consumption
 pub use benchmark::{BenchmarkItem, BenchmarkReport};
+pub use continuation_index::{
+    ContinuationLine, ContinuationNode, ContinuationQuery, ContinuationResult, HotGraph,
+    HotGraphBuildConfig, HotGraphHeader, HotGraphMetadata, HotGraphQueryable, MmapHotGraph,
+};
 pub use db::{DbStats, GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
 pub use pgn_db::{CompactPgnRecord, PgnDatabaseWrapper, PgnNameTables};
 pub use position_index::{

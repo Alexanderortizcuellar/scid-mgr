@@ -301,7 +301,40 @@ fn test_square_set_algebra_and_bitboard_engine() {
     let q_truthiness = QueryParser::parse_str("B [c4, g5]").unwrap();
     assert!(GameSearchEvaluator::evaluate_pgn(&q_truthiness, opera_pgn).is_match);
 
-    // 8. Roundtripping to canonical DSL
+    // 8. Square Set Function Intersections & Operations
+    let q_atk_def = QueryParser::parse_str("attacks(A,a)&attacks(a,a)").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_atk_def, opera_pgn).is_match);
+
+    let q_atk_box = QueryParser::parse_str("attacks(K,r)&a1-b3").unwrap();
+    assert!(matches!(q_atk_box, SearchQuery::SquareSet(_)));
+
+    let q_atk_bracket = QueryParser::parse_str("attacks[K, r] & a1-b3").unwrap();
+    assert!(matches!(q_atk_bracket, SearchQuery::SquareSet(_)));
+
+    let q_atk_file_empty =
+        QueryParser::parse_str("attacks(white_pieces, [d1..d8]) & ~occupied").unwrap();
+    assert!(GameSearchEvaluator::evaluate_pgn(&q_atk_file_empty, opera_pgn).is_match);
+
+    // Juxtaposition range square set checks
+    let q_bq_range = QueryParser::parse_str("[BQ][a1..a8]").unwrap();
+    assert!(matches!(q_bq_range, SearchQuery::SquareSet(_)));
+    let exp_bq_range = crate::search::explain_query("[BQ][a1..a8]", &q_bq_range);
+    assert!(
+        exp_bq_range.canonical_dsl.contains("[BQ]")
+            && exp_bq_range.canonical_dsl.contains("&")
+            && exp_bq_range.canonical_dsl.contains("a1")
+    );
+
+    let q_bq_hyphen = QueryParser::parse_str("[BQ][a1-a8]").unwrap();
+    assert!(matches!(q_bq_hyphen, SearchQuery::SquareSet(_)));
+    let exp_bq_hyphen = crate::search::explain_query("[BQ][a1-a8]", &q_bq_hyphen);
+    assert!(
+        exp_bq_hyphen.canonical_dsl.contains("[BQ]")
+            && exp_bq_hyphen.canonical_dsl.contains("&")
+            && exp_bq_hyphen.canonical_dsl.contains("a1")
+    );
+
+    // 9. Roundtripping to canonical DSL
     let explained = crate::search::explain_query("attacks(R, k) >= 1", &q_double_attack);
     assert!(explained.canonical_dsl.contains("attacks(R, k) >= 1"));
 }
@@ -1151,22 +1184,17 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
     let q_no_bd1 = QueryParser::parse_str("Bd1 == []").expect("Failed to parse 'Bd1 == []'");
     // In startpos, d1 is occupied by White Queen (not Bishop), so Bd1 is empty set [] -> Bd1 == [] matches!
     assert!(crate::search::evaluator::matches_single_ply(
-        &q_no_bd1,
-        &pos_init,
-        0,
-        None
+        &q_no_bd1, &pos_init, 0, None
     ));
 
     // In pos_bd1, White Bishop is on d1, so Bd1 is {d1} != [] -> Bd1 == [] should NOT match:
     assert!(!crate::search::evaluator::matches_single_ply(
-        &q_no_bd1,
-        &pos_bd1,
-        0,
-        None
+        &q_no_bd1, &pos_bd1, 0, None
     ));
 
     // 9. Comparing two compound sets: `[A] == [BRK]`
-    let exp_set_cmp = QueryParser::explain("[A] == [BRK]").expect("Failed to explain '[A] == [BRK]'");
+    let exp_set_cmp =
+        QueryParser::explain("[A] == [BRK]").expect("Failed to explain '[A] == [BRK]'");
     assert_eq!(exp_set_cmp.canonical_dsl, "A == [BRK]");
 
     let q_set_cmp = QueryParser::parse_str("[A] == [BRK]").expect("Failed to parse '[A] == [BRK]'");
@@ -1174,17 +1202,10 @@ fn test_universal_square_set_and_bracketed_piece_placement_regression() {
     let fen_brk: Fen = "7k/8/8/8/8/5K2/4R3/3B4 b - - 0 1".parse().unwrap();
     let pos_brk: Chess = fen_brk.into_position(CastlingMode::Chess960).unwrap();
     assert!(crate::search::evaluator::matches_single_ply(
-        &q_set_cmp,
-        &pos_brk,
-        0,
-        None
+        &q_set_cmp, &pos_brk, 0, None
     ));
     // In startpos, White also has Queens, Knights, Pawns, so [A] != [BRK]
     assert!(!crate::search::evaluator::matches_single_ply(
-        &q_set_cmp,
-        &pos_init,
-        0,
-        None
+        &q_set_cmp, &pos_init, 0, None
     ));
 }
-

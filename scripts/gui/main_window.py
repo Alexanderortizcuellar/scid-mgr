@@ -12,7 +12,7 @@ from .backend_client import BackendClient
 from .models import VirtualScidTableModel
 from .widgets import (
     DatabaseControlWidget, FilterPanelWidget, GameTablePanelWidget,
-    GamePreviewPanelWidget, OpeningTreeWidget, CqlSearchWidget, ProtocolLogPanelWidget
+    GamePreviewPanelWidget, OpeningTreeWidget, ContinuationsWidget, CqlSearchWidget, ProtocolLogPanelWidget
 )
 from .dialogs.add_edit_game_dialog import AddEditGameDialog
 from .dialogs.search_progress_dialog import SearchProgressDialog
@@ -94,11 +94,15 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.opening_tree_widget, "🌲 Opening Tree")
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # Tab 3: Dedicated CQL / Search Engine Query Panel
+        # Tab 3: Common Continuations Explorer
+        self.continuations_widget = ContinuationsWidget(self.client, self)
+        self.tabs.addTab(self.continuations_widget, "📈 Continuations")
+
+        # Tab 4: Dedicated CQL / Search Engine Query Panel
         self.cql_search_widget = CqlSearchWidget(self.client, self)
         self.tabs.addTab(self.cql_search_widget, "🔎 CQL Search")
 
-        # Tab 4: Protocol Logs
+        # Tab 5: Protocol Logs
         self.log_panel = ProtocolLogPanelWidget(self)
         self.tabs.addTab(self.log_panel, "Protocol Logs")
 
@@ -272,8 +276,11 @@ class MainWindow(QMainWindow):
         self.client.send_request("undelete_game", {"index": self.selected_game_id})
 
     def on_tab_changed(self, index: int):
-        if "Opening Tree" in self.tabs.tabText(index):
+        tab_title = self.tabs.tabText(index)
+        if "Opening Tree" in tab_title:
             self.opening_tree_widget.refresh_current_position()
+        elif "Continuations" in tab_title:
+            self.continuations_widget.refresh_current_position()
 
     def update_ui_disconnected(self):
         self.db_panel.update_ui_disconnected()
@@ -349,14 +356,19 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"🔍 Searching: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
             return
 
-        if data.get("event") in ("build_pos_index_progress", "build_tree_progress"):
+        if data.get("event") in ("build_pos_index_progress", "build_tree_progress", "build_continuations_progress"):
             event = data.get("event")
             prog = data.get("data", {})
             scanned = prog.get("scanned", 0)
             total = prog.get("total", 0)
-            positions = prog.get("positions", 0)
+            positions = prog.get("positions", prog.get("nodes", 0))
             pct = prog.get("percent", 0.0)
-            task_name = "Tree Index (.tree.idx)" if event == "build_tree_progress" else "Position Booster (.pos.idx)"
+            if event == "build_tree_progress":
+                task_name = "Opening Tree (.tree.idx)"
+            elif event == "build_continuations_progress":
+                task_name = "Continuations Graph (.hot.idx)"
+            else:
+                task_name = "Position Booster (.pos.idx)"
             if hasattr(self.db_panel, "build_pos_dialog") and self.db_panel.build_pos_dialog and self.db_panel.build_pos_dialog.isVisible():
                 self.db_panel.build_pos_dialog.update_progress(scanned, total, positions, pct, task_name)
             self.status_bar.showMessage(f"⚡ Indexing [{task_name}]: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}")
@@ -414,11 +426,15 @@ class MainWindow(QMainWindow):
         if "moves" in resp_data and "white_pct" in resp_data:
             self.opening_tree_widget.on_tree_report(resp_data)
 
-        # 7. Handle Game Summaries response
+        # 7. Handle Common Continuations Report
+        if "lines" in resp_data and "starting_fen" in resp_data:
+            self.continuations_widget.on_continuations_report(resp_data)
+
+        # 8. Handle Game Summaries response
         if "game_summaries" in resp_data:
             self.opening_tree_widget.on_game_summaries_received(resp_data["game_summaries"])
 
-        # 8. Handle PGN response
+        # 9. Handle PGN response
         if "pgn" in resp_data:
             self.preview_panel.set_pgn_text(resp_data["pgn"])
 

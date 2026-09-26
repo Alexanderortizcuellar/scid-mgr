@@ -117,7 +117,7 @@ class DatabaseControlWidget(QWidget):
         db_actions_layout.addWidget(self.btn_settings)
 
         conn_layout.addLayout(db_actions_layout, 3, 0, 1, 3)
-        layout.addWidget(conn_group)
+        main_layout.addWidget(conn_group)
 
         # 2. Database Stats Bar
         self.stats_bar = QFrame()
@@ -165,13 +165,19 @@ class DatabaseControlWidget(QWidget):
         btn_refresh_info.clicked.connect(lambda: self.refresh_info_requested.emit())
         stats_layout.addWidget(btn_refresh_info)
 
-        layout.addWidget(self.stats_bar)
+        main_layout.addWidget(self.stats_bar)
 
     def auto_detect_defaults(self):
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         release_bin = os.path.join(project_root, "target", "release", "scid-mgr.exe" if sys.platform == "win32" else "scid-mgr")
+        debug_bin = os.path.join(project_root, "target", "debug", "scid-mgr.exe" if sys.platform == "win32" else "scid-mgr")
         
-        self.binary_input.setText(os.path.abspath(release_bin))
+        if os.path.exists(release_bin):
+            self.binary_input.setText(os.path.abspath(release_bin))
+        elif os.path.exists(debug_bin):
+            self.binary_input.setText(os.path.abspath(debug_bin))
+        else:
+            self.binary_input.setText(os.path.abspath(release_bin))
 
     def browse_binary(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -209,12 +215,18 @@ class DatabaseControlWidget(QWidget):
             bin_path = self.binary_input.text().strip()
             db_path = self.db_input.text().strip()
             if not bin_path or not os.path.exists(bin_path):
-                QMessageBox.warning(
-                    self,
-                    "Release Binary Missing",
-                    f"Cannot find release binary at:\n{bin_path}\n\nPlease compile it using: cargo build --release",
-                )
-                return
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+                debug_bin = os.path.join(project_root, "target", "debug", "scid-mgr.exe" if sys.platform == "win32" else "scid-mgr")
+                if os.path.exists(debug_bin):
+                    bin_path = os.path.abspath(debug_bin)
+                    self.binary_input.setText(bin_path)
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Binary Missing",
+                        f"Cannot find backend binary at:\n{bin_path}\n\nPlease compile it using: cargo build --release",
+                    )
+                    return
 
             settings = QSettings("chess-scid-rw", "ScidDatabaseManager")
             threads = int(settings.value("worker_threads", 0))
@@ -258,8 +270,8 @@ class DatabaseControlWidget(QWidget):
         if not self.client.is_running():
             QMessageBox.warning(self, "Backend Offline", "Please start backend and open a database first.")
             return
-        dlg = BuildPosIndexDialog(self.client, parent=self)
-        dlg.show()
+        self.build_pos_dialog = BuildPosIndexDialog(self.client, parent=self)
+        self.build_pos_dialog.show()
 
     def update_ui_connected(self):
         self.lbl_status.setText("Status: Connected")

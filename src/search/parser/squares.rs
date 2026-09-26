@@ -996,25 +996,43 @@ impl<'a> QueryParser<'a> {
         if let Some(Token::Ident(ref id)) = self.peek() {
             let id_low = id.to_lowercase();
             match id_low.as_str() {
-                "attacks" => {
+                "attacks" | "attack" => {
                     self.advance();
-                    self.expect_token(Token::LParen)?;
+                    let is_bracket = matches!(self.peek(), Some(Token::LBracket));
+                    if is_bracket {
+                        self.advance();
+                    } else {
+                        self.expect_token(Token::LParen)?;
+                    }
                     let attacker = self.parse_square_set_expr()?;
                     self.expect_token(Token::Comma)?;
                     let target = self.parse_square_set_expr()?;
-                    self.expect_token(Token::RParen)?;
+                    if is_bracket {
+                        self.expect_token(Token::RBracket)?;
+                    } else {
+                        self.expect_token(Token::RParen)?;
+                    }
                     return Ok(SquareSetExpr::Attacks {
                         attacker: Box::new(attacker),
                         target: Box::new(target),
                     });
                 }
-                "attackers" => {
+                "attackers" | "attacker" => {
                     self.advance();
-                    self.expect_token(Token::LParen)?;
+                    let is_bracket = matches!(self.peek(), Some(Token::LBracket));
+                    if is_bracket {
+                        self.advance();
+                    } else {
+                        self.expect_token(Token::LParen)?;
+                    }
                     let attacker = self.parse_square_set_expr()?;
                     self.expect_token(Token::Comma)?;
                     let target = self.parse_square_set_expr()?;
-                    self.expect_token(Token::RParen)?;
+                    if is_bracket {
+                        self.expect_token(Token::RBracket)?;
+                    } else {
+                        self.expect_token(Token::RParen)?;
+                    }
                     return Ok(SquareSetExpr::Attackers {
                         attacker: Box::new(attacker),
                         target: Box::new(target),
@@ -1022,13 +1040,22 @@ impl<'a> QueryParser<'a> {
                 }
                 "offset" => {
                     self.advance();
-                    self.expect_token(Token::LParen)?;
+                    let is_bracket = matches!(self.peek(), Some(Token::LBracket));
+                    if is_bracket {
+                        self.advance();
+                    } else {
+                        self.expect_token(Token::LParen)?;
+                    }
                     let target_expr = self.parse_square_set_expr()?;
                     self.expect_token(Token::Comma)?;
                     let dx = self.expect_number()?;
                     self.expect_token(Token::Comma)?;
                     let dy = self.expect_number()?;
-                    self.expect_token(Token::RParen)?;
+                    if is_bracket {
+                        self.expect_token(Token::RBracket)?;
+                    } else {
+                        self.expect_token(Token::RParen)?;
+                    }
 
                     // If static squares: fold directly
                     if let SquareSetExpr::Squares(bb) = target_expr {
@@ -1081,11 +1108,20 @@ impl<'a> QueryParser<'a> {
                 }
                 "between" => {
                     self.advance();
-                    self.expect_token(Token::LParen)?;
+                    let is_bracket = matches!(self.peek(), Some(Token::LBracket));
+                    if is_bracket {
+                        self.advance();
+                    } else {
+                        self.expect_token(Token::LParen)?;
+                    }
                     let from = self.parse_square_set_expr()?;
                     self.expect_token(Token::Comma)?;
                     let to = self.parse_square_set_expr()?;
-                    self.expect_token(Token::RParen)?;
+                    if is_bracket {
+                        self.expect_token(Token::RBracket)?;
+                    } else {
+                        self.expect_token(Token::RParen)?;
+                    }
                     return Ok(SquareSetExpr::Between {
                         from: Box::new(from),
                         to: Box::new(to),
@@ -1191,6 +1227,14 @@ impl<'a> QueryParser<'a> {
                     idx += 1;
                     continue;
                 }
+                Token::DotDot => {
+                    idx += 1;
+                    continue;
+                }
+                Token::Number(_) => {
+                    idx += 1;
+                    continue;
+                }
                 Token::Ident(ref s) => {
                     has_items = true;
                     let s_low = s.to_lowercase();
@@ -1199,8 +1243,15 @@ impl<'a> QueryParser<'a> {
                         || s_low == "light_squares"
                         || s_low == "dark_squares"
                         || s_low == "all_squares"
+                        || s_low == "ray"
+                        || s_low == "diag"
+                        || s_low == "diagonal"
                         || s == "."
                     {
+                        idx += 1;
+                        continue;
+                    }
+                    if super::helpers::parse_direction_ident(s).is_some() {
                         idx += 1;
                         continue;
                     }

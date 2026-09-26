@@ -55,6 +55,13 @@ class BuildPosIndexDialog(QDialog):
         self.chk_pos.setStyleSheet("font-weight: bold; color: #0d47a1;")
         box_targets.addWidget(self.chk_pos)
 
+        self.chk_hot = QCheckBox(
+            "📈 Common Continuations Index (.hot.idx) — Zero-copy binary graph for fast continuation exploration"
+        )
+        self.chk_hot.setChecked(True)
+        self.chk_hot.setStyleSheet("font-weight: bold; color: #e65100;")
+        box_targets.addWidget(self.chk_hot)
+
         layout.addWidget(grp_targets)
 
         # Options Form
@@ -131,26 +138,41 @@ class BuildPosIndexDialog(QDialog):
         if not self.isVisible():
             return
         event = data.get("event")
-        if event in ("build_pos_index_progress", "build_tree_progress"):
+        if event in ("build_pos_index_progress", "build_tree_progress", "build_continuations_progress"):
             prog = data.get("data", {})
             scanned = prog.get("scanned", 0)
             total = prog.get("total", 0)
-            positions = prog.get("positions", 0)
+            positions = prog.get("positions", prog.get("nodes", 0))
             pct = prog.get("percent", 0.0)
-            task_name = (
-                "Opening Tree (.tree.idx)"
-                if event == "build_tree_progress"
-                else "Position Booster (.pos.idx)"
-            )
+            if event == "build_tree_progress":
+                task_name = "Opening Tree (.tree.idx)"
+            elif event == "build_continuations_progress":
+                task_name = "Continuations Graph (.hot.idx)"
+            else:
+                task_name = "Position Booster (.pos.idx)"
             self.update_progress(scanned, total, positions, pct, task_name)
         elif data.get("status") == "ok":
             res_data = data.get("data", {})
             if (
-                "unique_positions" in res_data
+                ("unique_positions" in res_data or "node_count" in res_data)
                 and "elapsed_ms" in res_data
                 and "moves" not in res_data
             ):
                 self._handle_task_complete(res_data)
+        elif data.get("status") == "error":
+            err_msg = data.get("error", "Unknown backend error occurred")
+            self.lbl_progress.setText(f"❌ Error: {err_msg}")
+            self.lbl_progress.setStyleSheet("color: #c62828; font-weight: bold; font-size: 11px;")
+            self.btn_build.setEnabled(True)
+            self.chk_tree.setEnabled(True)
+            self.chk_pos.setEnabled(True)
+            self.chk_hot.setEnabled(True)
+            self.spin_depth.setEnabled(True)
+            self.spin_min_games.setEnabled(True)
+            self.spin_threads.setEnabled(True)
+            self.queue.clear()
+            self.current_task = None
+            QMessageBox.critical(self, "Indexing Error", f"Failed to build index:\n{err_msg}")
 
     def start_build(self):
         if not self.client.is_running():
@@ -162,6 +184,8 @@ class BuildPosIndexDialog(QDialog):
             self.queue.append("build_tree")
         if self.chk_pos.isChecked():
             self.queue.append("build_pos_index")
+        if self.chk_hot.isChecked():
+            self.queue.append("build_continuations")
 
         if not self.queue:
             QMessageBox.warning(
@@ -173,6 +197,7 @@ class BuildPosIndexDialog(QDialog):
         self.btn_view_diagnostics.setVisible(False)
         self.chk_tree.setEnabled(False)
         self.chk_pos.setEnabled(False)
+        self.chk_hot.setEnabled(False)
         self.spin_depth.setEnabled(False)
         self.spin_min_games.setEnabled(False)
         self.spin_threads.setEnabled(False)
@@ -188,11 +213,12 @@ class BuildPosIndexDialog(QDialog):
         threads = self.spin_threads.value()
         depth = self.spin_depth.value()
         min_g = self.spin_min_games.value()
-        task_label = (
-            "Opening Tree (.tree.idx)"
-            if self.current_task == "build_tree"
-            else "Position Booster (.pos.idx)"
-        )
+        if self.current_task == "build_tree":
+            task_label = "Opening Tree (.tree.idx)"
+        elif self.current_task == "build_continuations":
+            task_label = "Continuations Graph (.hot.idx)"
+        else:
+            task_label = "Position Booster (.pos.idx)"
         self.progress_bar.setValue(0)
         self.lbl_progress.setText(
             f"Starting {task_label} build using {threads} worker threads..."
@@ -221,21 +247,28 @@ class BuildPosIndexDialog(QDialog):
         self.progress_bar.setValue(100)
         summary_lines = []
         for task, res in self.results.items():
-            name = (
-                "Tree Index (.tree.idx)"
-                if task == "build_tree"
-                else "Position Booster (.pos.idx)"
-            )
-            pos_cnt = res.get("unique_positions", 0)
+            if task == "build_tree":
+                name = "Tree Index (.tree.idx)"
+                count = res.get("unique_positions", 0)
+                unit = "positions"
+            elif task == "build_continuations":
+                name = "Continuations (.hot.idx)"
+                count = res.get("node_count", 0)
+                unit = "nodes"
+            else:
+                name = "Position Booster (.pos.idx)"
+                count = res.get("unique_positions", 0)
+                unit = "positions"
             elapsed = res.get("elapsed_ms", 0.0)
             summary_lines.append(
-                f"✅ {name}: {pos_cnt:,} positions in {elapsed:,.0f} ms"
+                f"✅ {name}: {count:,} {unit} in {elapsed:,.0f} ms"
             )
 
         self.lbl_progress.setText(" | ".join(summary_lines))
         self.btn_build.setEnabled(True)
         self.chk_tree.setEnabled(True)
         self.chk_pos.setEnabled(True)
+        self.chk_hot.setEnabled(True)
         self.spin_depth.setEnabled(True)
         self.spin_min_games.setEnabled(True)
         self.spin_threads.setEnabled(True)

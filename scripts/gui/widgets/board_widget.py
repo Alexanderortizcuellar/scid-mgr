@@ -216,20 +216,42 @@ class ChessBoardEditorWidget(QWidget):
                     self.selected_square = square_index
             else:
                 if self.selected_square != square_index:
-                    p = self.board.piece_at(self.selected_square)
-                    if p:
-                        self.board.set_piece_at(square_index, p)
-                        self.board.remove_piece_at(self.selected_square)
+                    move = chess.Move(self.selected_square, square_index)
+                    piece = self.board.piece_at(self.selected_square)
+                    if piece and piece.piece_type == chess.PAWN:
+                        if (self.board.turn == chess.WHITE and chess.square_rank(square_index) == 7) or (
+                            self.board.turn == chess.BLACK and chess.square_rank(square_index) == 0
+                        ):
+                            move = chess.Move(self.selected_square, square_index, promotion=chess.QUEEN)
+
+                    if move in self.board.legal_moves:
+                        self.board.push(move)
+                    else:
+                        p = self.board.piece_at(self.selected_square)
+                        if p:
+                            self.board.set_piece_at(square_index, p)
+                            self.board.remove_piece_at(self.selected_square)
                 self.selected_square = None
 
         self.update_board_ui()
 
     def handle_drop(self, origin_idx, target_idx):
         if origin_idx != target_idx:
-            p = self.board.piece_at(origin_idx)
-            if p:
-                self.board.set_piece_at(target_idx, p)
-                self.board.remove_piece_at(origin_idx)
+            move = chess.Move(origin_idx, target_idx)
+            piece = self.board.piece_at(origin_idx)
+            if piece and piece.piece_type == chess.PAWN:
+                if (self.board.turn == chess.WHITE and chess.square_rank(target_idx) == 7) or (
+                    self.board.turn == chess.BLACK and chess.square_rank(target_idx) == 0
+                ):
+                    move = chess.Move(origin_idx, target_idx, promotion=chess.QUEEN)
+
+            if move in self.board.legal_moves:
+                self.board.push(move)
+            else:
+                p = self.board.piece_at(origin_idx)
+                if p:
+                    self.board.set_piece_at(target_idx, p)
+                    self.board.remove_piece_at(origin_idx)
         self.selected_square = None
         self.update_board_ui()
 

@@ -114,6 +114,25 @@ Searches by bitboard piece count and opposite/same-colored bishops.
   - `same_bishops`: `boolean`
 - **Returns**: `{ matches: [game_ids], match_count, total_games, elapsed_ms }`
 
+### `continuations`
+Calculates top multi-move continuation lines from any position using `.hot.idx` binary graph or dynamic candidate-accelerated search.
+- **Params**:
+  - `fen`: `string` (optional FEN position; defaults to starting board)
+  - `max_depth`: `number` (optional maximum plies, default: `8`)
+  - `max_lines`: `number` (optional maximum branches, default: `10`)
+  - `min_games`: `number` (optional minimum game occurrences, default: `1`)
+  - `min_percentage`: `number` (optional minimum share %, default: `0.0`)
+  - `include_tree`: `boolean` (optional, default: `false`)
+- **Returns**: `{ fen, total_games_processed, games_reaching_position, lines: [{ moves, formatted, games, percentage, white_wins, draws, black_wins }] }`
+
+### `build_continuations`
+Builds or rebuilds the `.hot.idx` binary graph in the background across worker threads, emitting streaming `build_continuations_progress` events.
+- **Params**:
+  - `output_path`: `string` (optional custom output path)
+  - `max_ply`: `number` (optional maximum ply depth, default: `16`)
+  - `min_games`: `number` (optional minimum game occurrences, default: `2`)
+- **Returns**: `{ status: "ok", output_path, total_games, total_nodes, total_edges, elapsed_ms }`
+
 ### `benchmark`
 Runs comprehensive multi-threaded benchmarks on the opened database.
 - **Params**:

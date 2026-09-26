@@ -72,6 +72,22 @@ pub enum BuildCommands {
         threads: Option<usize>,
     },
 
+    /// Build companion .hot.idx common continuations graph index
+    #[command(name = "continuations", aliases = ["hot", "cont", "hot-idx", "cont-idx"])]
+    Continuations {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Maximum ply depth to index (default: 24, i.e. 12 full moves)
+        #[arg(long, default_value = "24")]
+        max_ply: usize,
+
+        /// Minimum games reaching a position to include it in the index (default: 1)
+        #[arg(long, default_value = "1")]
+        min_games: usize,
+    },
+
     /// Build both companion indexes (.pos.idx and .tree.idx)
     #[command(name = "all")]
     All {
@@ -365,6 +381,34 @@ pub enum Commands {
         all_game_ids: bool,
     },
 
+    /// Query common multi-ply continuations from a board position (FEN or starting board)
+    #[command(name = "continuations", aliases = ["continuation", "hot", "cont"])]
+    Continuations {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Optional FEN position (defaults to initial board)
+        #[arg(long)]
+        fen: Option<String>,
+
+        /// Maximum depth in plies (half-moves) after the position (1..=20, default: 8)
+        #[arg(long, default_value = "8")]
+        max_depth: usize,
+
+        /// Maximum number of continuation lines returned (default: 10)
+        #[arg(long, default_value = "10")]
+        max_lines: usize,
+
+        /// Minimum number of games in which a continuation must occur (default: 1)
+        #[arg(long, default_value = "1")]
+        min_games: u64,
+
+        /// Minimum percentage of games reaching starting position (e.g. 0.5 for 0.5%)
+        #[arg(long, default_value = "0.0")]
+        min_percentage: f64,
+    },
+
     /// Run the interactive JSON-RPC server
     Interactive {
         /// Optional database path to auto-open
@@ -557,6 +601,13 @@ pub fn run() -> Result<()> {
             } => {
                 commands::tree::handle_build_tree(&db_path, max_ply, min_games, threads)?;
             }
+            BuildCommands::Continuations {
+                db_path,
+                max_ply,
+                min_games,
+            } => {
+                commands::continuations::handle_build_continuations(&db_path, max_ply, min_games)?;
+            }
             BuildCommands::All {
                 db_path,
                 max_ply,
@@ -573,6 +624,23 @@ pub fn run() -> Result<()> {
             all_game_ids,
         }) => {
             commands::tree::handle_tree(&db_path, fen, sample_games, all_game_ids)?;
+        }
+        Some(Commands::Continuations {
+            db_path,
+            fen,
+            max_depth,
+            max_lines,
+            min_games,
+            min_percentage,
+        }) => {
+            commands::continuations::handle_continuations(
+                &db_path,
+                fen,
+                max_depth,
+                max_lines,
+                min_games,
+                min_percentage,
+            )?;
         }
         Some(Commands::SortPgn {
             input_pgn,

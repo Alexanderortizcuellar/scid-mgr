@@ -13,13 +13,15 @@ This chapter covers geometric tactical predicates: Pins, Forks, Skewers, Trapped
 | **`skewer`** | Skewer along an attack ray | `skewer([attacker], [front_target], [rear_target])` |
 | **`trapped`** | Piece has 0 legal/safe departure moves | `trapped [piece]` |
 | **`outpost`** | Advanced protected square | `outpost [piece] on [square]` |
-| **`attacks(attacker, target)`** | Target squares attacked by attacker set | `attacks(R, k)` or `attacks(white, [d1..d8])` |
-| **`attackers(attacker, target)`** | Attacking piece squares that target squares | `attackers(white, e5)` |
+| **`attacks(attacker, target)`** / **`attacks[...]`** | Target squares attacked by attacker set | `attacks(R, k)` or `attacks[white, [d1..d8]]` |
+| **`attackers(attacker, target)`** / **`attackers[...]`** | Attacking piece squares that target squares | `attackers(white, e5)` or `attackers[white, e5]` |
 | **`ray(direction, origin)`** | Squares along a directional ray | `ray(up, d4)` or `ray(diagonal, [c1, f1])` |
-| **`between(from, to)`** | Squares strictly between two sets | `between(K, R)` |
-| **`offset(target, dx, dy)`** | Cartesian $(\Delta x, \Delta y)$ spatial offset | `offset(e3, 2, 1)` or `offset(N, 2, 1)` |
+| **`between(from, to)`** / **`between[...]`** | Squares strictly between two sets | `between(K, R)` or `between[K, R]` |
+| **`offset(target, dx, dy)`** / **`offset[...]`** | Cartesian $(\Delta x, \Delta y)$ spatial offset | `offset(e3, 2, 1)` or `offset[N, 2, 1]` |
 | **`distance(sq1, sq2)`** | Chebyshev distance between two squares `max(|dx|, |dy|)` | `distance(e1, e8) >= 5` |
 | **`is_attacked`** | Square attacked by color | `is_attacked e4 by black` |
+
+> 💡 **Parentheses `(...)` & Brackets `[...]` Flexibility**: All geometric functions (`attacks`, `attackers`, `between`, `offset`) accept both parentheses `(...)` and brackets `[...]` interchangeably. Square set algebra operators (`&`, `|`, `-`, `\`, `~`) can be freely chained with these functions.
 
 ---
 
@@ -78,6 +80,10 @@ Returns the subset of `target` squares attacked by any piece in `attacker`:
 attacks(R, k) >= 2                                      # King subjected to double rook check/attack
 attacks(white_pieces, [d1..d8]) > attacks(black_pieces, [d1..d8]) # Spatial file control dominance
 attacks(n, K) & ~occupied                               # Knight attacks on king while targeting escape squares
+attacks(A, a) & attacks(a, a)                           # Defended pieces: squares occupied by Black attacked by White AND defended by Black
+attacks(K, r) & a1-b3                                   # Squares where King attacks Rook within bounding box a1-b3
+attacks[K, r] & a1-b3                                   # Same expression using bracket syntax
+attacks(white_pieces, [d1..d8]) & ~occupied             # Unoccupied squares on d-file controlled by White
 btm and mate and not attacks(k, [A, _])                 # Canonical Smothered Mate: Black is checkmated and King has zero attacks on White pieces (A) or empty squares (_)
 ```
 

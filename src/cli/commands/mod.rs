@@ -1,5 +1,6 @@
 pub mod bench;
 pub mod check;
+pub mod continuations;
 pub mod import_export;
 pub mod index;
 pub mod info;

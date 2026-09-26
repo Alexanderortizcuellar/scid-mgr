@@ -43,6 +43,14 @@ Kd4 qd8 Pa5
 [A, _]       # Any White piece or empty squares
 ```
 
+### 4. Bracket Juxtaposition Syntax (`[PieceSet][SquareSet]`)
+Juxtaposition of a piece group and a square list or range behaves as a concise syntactic sugar for square set intersection (`&`):
+```text
+[BQ][a1..a8]       # Equivalent to [BQ] & [a1..a8] (White Bishops or Queens on file a)
+[Nn][c3, d5, e4]   # Equivalent to [Nn] & [c3, d5, e4] (Knights on specified squares)
+[Pp][d4-e5]        # Equivalent to [Pp] & [d4-e5] (Pawns in central rectangle)
+```
+
 ---
 
 ## 📐 Square Ranges, Areas & Diagonals

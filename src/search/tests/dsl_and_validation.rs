@@ -463,6 +463,8 @@ fn test_manual_examples_all_valid() {
         r#"attacks(k, _)"#,
         r#"attacks(k, empty)"#,
         r#"attacks(K, .)"#,
+        r#"attacks(A,a)&attacks(a,a)"#,
+        r#"attacks(K,r)&a1-b3"#,
         r#"is_attacked e4 by black"#,
         // Chapter 6: Material & Power
         r#"opposite_bishops and [Qq] == 0 and [Rr] == 0 and [Nn] == 0"#,

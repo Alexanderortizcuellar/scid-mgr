@@ -152,9 +152,7 @@ pub fn parse_compact_piece_placement(
 }
 
 /// Parse multi-char piece string like "A_", "Aa_", "qr", "RBN", "q_" into a SquareSetExpr union
-pub fn parse_multi_char_piece_specifier(
-    s: &str,
-) -> Option<crate::search::query::SquareSetExpr> {
+pub fn parse_multi_char_piece_specifier(s: &str) -> Option<crate::search::query::SquareSetExpr> {
     use crate::search::query::{SquareContent, SquareSetExpr};
     if s.len() <= 1 {
         return None;

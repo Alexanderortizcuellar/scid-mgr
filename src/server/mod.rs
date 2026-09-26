@@ -205,6 +205,18 @@ fn handle_command(
             )
         }
 
+        // Common Continuations Operations
+        "continuations" | "common_continuations" | "hot_continuations" | "get_continuations" => {
+            handlers::continuations::handle_continuations(req, current_db, current_pos_index)
+        }
+        "build_continuations" | "build_hot_index" | "build_hot" | "rebuild_continuations" => {
+            handlers::continuations::handle_build_continuations_index(
+                req,
+                current_db,
+                *current_thread_count,
+            )
+        }
+
         // Position Index Operations
         "unload_pos_index" => handlers::index::handle_unload_pos_index(req, current_pos_index),
         "pos_index_status" | "get_pos_index_status" => {
