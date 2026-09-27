@@ -1,7 +1,7 @@
 use scid_mgr::db::ScidDatabaseWrapper;
 use scid_mgr::pgn_db::PgnDatabaseWrapper;
 use scid_mgr::server::handlers::db::handle_query_games;
-use scid_mgr::server::handlers::search::handle_cql_search;
+use scid_mgr::server::handlers::search::{handle_cql_search, handle_search};
 use scid_mgr::server::search_session::SearchSessionManager;
 use scid_mgr::server::{DatabaseBackend, RequestMessage};
 use std::path::Path;
@@ -235,6 +235,48 @@ fn test_search_session_scid_and_pgn_pagination() {
         let list_mat_resp =
             handle_query_games(&list_mat_req, &db_backend, &mut session_mgr, &thread_pool);
         assert_eq!(list_mat_resp.status, "ok");
+
+        // I. Unified search handler test (Structured filter with headers + position)
+        let unified_req = RequestMessage {
+            id: Some(11),
+            command: "search".to_string(),
+            params: serde_json::json!({
+                "white": "Kasparov",
+                "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+            }),
+        };
+        let unified_resp = handle_search(&unified_req, &db_backend, &mut session_mgr, &thread_pool);
+        assert_eq!(unified_resp.status, "ok");
+        let unified_data = unified_resp.data.unwrap();
+        assert!(unified_data.get("search_id").is_some());
+        let unified_search_id = unified_data["search_id"].as_str().unwrap();
+
+        // Paginate unified search results
+        let list_unified_req = RequestMessage {
+            id: Some(12),
+            command: "query_games".to_string(),
+            params: serde_json::json!({
+                "search_id": unified_search_id,
+                "page": 0,
+                "page_size": 10
+            }),
+        };
+        let list_unified_resp =
+            handle_query_games(&list_unified_req, &db_backend, &mut session_mgr, &thread_pool);
+        assert_eq!(list_unified_resp.status, "ok");
+
+        // J. Unified search handler test (Pure CQL string)
+        let unified_cql_req = RequestMessage {
+            id: Some(13),
+            command: "search".to_string(),
+            params: serde_json::json!({
+                "query": "queens >= 1"
+            }),
+        };
+        let unified_cql_resp = handle_search(&unified_cql_req, &db_backend, &mut session_mgr, &thread_pool);
+        assert_eq!(unified_cql_resp.status, "ok");
+        let unified_cql_data = unified_cql_resp.data.unwrap();
+        assert!(unified_cql_data.get("search_id").is_some());
     }
 
     // 2. PGN Database Search Session Test

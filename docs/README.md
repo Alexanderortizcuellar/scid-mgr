@@ -18,7 +18,8 @@ Welcome to the comprehensive technical documentation for **`scid-mgr`** — an u
 | 📊 [**Benchmarks & Metrics**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/BENCHMARKS_AND_METRICS.md) | Empirical performance results on databases up to 10.35M games | Memory footprint, Sorting benchmarks, Material search timings, Ingest throughput |
 | 📜 [**CQLi Integration Guide**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/CQL_INTEGRATION_GUIDE.md) | Research and blueprint for running Chess Query Language (CQL) | Process piping, real-time match streaming `<ID>`, preset queries |
 | 🖥️ [**Search Session & GUI Integration**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/SEARCH_SESSION_AND_GUI_INTEGRATION.md) | 2-phase search session protocol & GUI navigation guide | `search_id` sessions, `matching_plies` vector, paginated `query_games`, move cursor auto-jumping |
-| 🔌 [**JSON-RPC Server API**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/API_REFERENCE.md) | Complete reference for frontend-backend communication | Command specifications, parameter tables, JSON payload examples |
+| 🔌 [**JSON-RPC Server API & Integration Guide**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/JSON_RPC_API_AND_INTEGRATION_GUIDE.md) | Dedicated reference and client integration guide | Full command specs, unified search API, streaming events, Python/Qt GUI integration pattern |
+| 📋 [**API Quick Reference**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/API_REFERENCE.md) | Summary of server commands & endpoints | Command specifications, parameter tables, JSON payload examples |
 
 ---
 

@@ -289,12 +289,15 @@ fn handle_command(
         "export_pgn" => handlers::import_export::handle_export_pgn(req, current_db),
         "benchmark" | "bench" => handlers::import_export::handle_benchmark(req, current_db),
 
-        // CQLite Search & Query Analysis
+        // Search & Query Operations
         "validate_dsl" | "validate_cql" => handlers::search::handle_validate_dsl(req),
         "explain_dsl" | "explain_cql" | "explain_query" | "explain" => {
             handlers::search::handle_explain_dsl(req)
         }
-        "search" | "search_query" | "query_search" | "dsl_search" | "cql_search" => {
+        "search" | "search_games" | "filter_search" => {
+            handlers::search::handle_search(req, current_db, session_mgr, thread_pool)
+        }
+        "search_cql" | "cql_search" | "search_query" | "query_search" | "dsl_search" => {
             handlers::search::handle_cql_search(req, current_db, session_mgr, thread_pool)
         }
 

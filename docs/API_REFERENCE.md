@@ -2,6 +2,9 @@
 
 The `scid-mgr` server communicates over standard input and standard output (`stdin` / `stdout`) using JSON Lines.
 
+> [!TIP]
+> For in-depth workflows, GUI architecture patterns, streaming events, and Python/Qt integration examples, see the dedicated [**JSON-RPC Server API & GUI Integration Guide**](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/JSON_RPC_API_AND_INTEGRATION_GUIDE.md).
+
 ---
 
 ## 1. Request & Response Format
@@ -184,8 +187,24 @@ Sorts all games in a source PGN file according to specified criteria and writes 
 ### `add_game`, `update_game`, `delete_game`, `undelete_game`, `compact`, `save`
 Mutation commands for editing games, marking deletions, reclaiming dead space, and writing companion files.
 
-### `search` (or `cql_search`, `dsl_search`)
-Executes a CQL search query, storing matching game IDs and matching plies in an in-memory `search_id` session. Automatically returns the cached `search_id` if the identical query is run on the same database. Emits streaming `search_progress` events.
+### `search` (or `search_games`, `filter_search`)
+Unified search endpoint. Accepts structured multi-criteria JSON filters (`white`, `black`, `player`, `eco`, `date`, `result`, `event`, `site`, `fen`, `material`, `cql`) or raw CQL queries. Executes multi-core filtering across the database and caches matching game IDs and `matching_plies` in a `search_id` session for pagination via `query_games`. Emits streaming `search_progress` events.
+- **Params**:
+  - `query` / `cql`: `string` (optional CQL query)
+  - `player`: `string` (matches White or Black)
+  - `white`: `string`
+  - `black`: `string`
+  - `result`: `string`
+  - `eco`: `string`
+  - `date`: `string`
+  - `event`: `string`
+  - `site`: `string`
+  - `fen`: `string`
+  - `material`: `object` (`MaterialFilter`)
+- **Returns**: `{ search_id: "search_1", total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
+
+### `search_cql` (or `cql_search`, `dsl_search`, `query_search`)
+Directly parses and executes a CQL query script, storing matching game IDs and `matching_plies` in an in-memory `search_id` session. Automatically returns the cached `search_id` if the identical query is run on the same database. Emits streaming `search_progress` events.
 - **Params**:
   - `query`: `string` (CQL query text)
   - `pgn_path`: `string` (optional custom PGN path)

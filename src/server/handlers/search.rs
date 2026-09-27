@@ -1,3 +1,4 @@
+use crate::db::GameFilter;
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::server::search_session::SearchSessionManager;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
@@ -65,6 +66,171 @@ pub fn handle_explain_dsl(req: &RequestMessage) -> ResponseMessage {
             })),
             error: Some(format!("{}", e)),
         },
+    }
+}
+
+pub fn handle_search(
+    req: &RequestMessage,
+    current_db: &Option<DatabaseBackend>,
+    session_mgr: &mut SearchSessionManager,
+    thread_pool: &rayon::ThreadPool,
+) -> ResponseMessage {
+    let id = req.id;
+    let query_param = req
+        .params
+        .get("query")
+        .or_else(|| req.params.get("cql"))
+        .or_else(|| {
+            req.params
+                .get("params")
+                .and_then(|p| p.get("query").or_else(|| p.get("cql")))
+        });
+
+    let has_structured_fields = req.params.get("player").is_some()
+        || req.params.get("white").is_some()
+        || req.params.get("black").is_some()
+        || req.params.get("eco").is_some()
+        || req.params.get("date").is_some()
+        || req.params.get("result").is_some()
+        || req.params.get("event").is_some()
+        || req.params.get("site").is_some()
+        || req.params.get("fen").is_some()
+        || req.params.get("material").is_some()
+        || req.params.get("include_deleted").is_some()
+        || req.params.get("only_deleted").is_some()
+        || req
+            .params
+            .get("params")
+            .map(|p| {
+                p.get("player").is_some()
+                    || p.get("white").is_some()
+                    || p.get("black").is_some()
+                    || p.get("eco").is_some()
+                    || p.get("date").is_some()
+                    || p.get("result").is_some()
+                    || p.get("event").is_some()
+                    || p.get("site").is_some()
+                    || p.get("fen").is_some()
+                    || p.get("material").is_some()
+                    || p.get("include_deleted").is_some()
+                    || p.get("only_deleted").is_some()
+            })
+            .unwrap_or(false);
+
+    // If only a raw CQL query string was provided without other filter fields, route to pure CQL search
+    if let (Some(q_val), false) = (query_param, has_structured_fields) {
+        if q_val.is_string() {
+            return handle_cql_search(req, current_db, session_mgr, thread_pool);
+        }
+    }
+
+    let db = match current_db.as_ref() {
+        Some(d) => d,
+        None => {
+            return ResponseMessage {
+                id,
+                status: "error".to_string(),
+                data: None,
+                error: Some("No database currently opened".to_string()),
+            };
+        }
+    };
+
+    let filter_value = req.params.get("params").unwrap_or(&req.params);
+    let filter: GameFilter = serde_json::from_value(filter_value.clone()).unwrap_or_default();
+    let query_key = serde_json::to_string(&filter).unwrap_or_else(|_| "filter".to_string());
+
+    let (total_games, db_key) = match db {
+        DatabaseBackend::Scid(s) => (
+            s.game_count(),
+            SearchSessionManager::db_key(s.index_path(), s.game_count()),
+        ),
+        DatabaseBackend::Pgn(p) => (
+            p.game_count(),
+            SearchSessionManager::db_key(&p.pgn_path, p.game_count()),
+        ),
+    };
+
+    // ⚡ Fast Cache Lookup: reuse identical query on unchanged database
+    if let Some(cached) = session_mgr.find_cached(&db_key, &query_key) {
+        let matched_count = cached.matches.len();
+        let total_searched = cached.total_searched;
+        let search_id = cached.search_id.clone();
+        return ResponseMessage {
+            id,
+            status: "ok".to_string(),
+            data: Some(serde_json::json!({
+                "search_id": search_id,
+                "total_searched": total_searched,
+                "matched_count": matched_count,
+                "duration_ms": 0,
+                "cached": true,
+            })),
+            error: None,
+        };
+    }
+
+    let start_time = Instant::now();
+    let match_results = thread_pool.install(|| match db {
+        DatabaseBackend::Scid(s) => {
+            s.search_filter_with_progress(&filter, |scanned, total, matches_len| {
+                let event_json = serde_json::json!({
+                    "event": "search_progress",
+                    "data": {
+                        "scanned": scanned,
+                        "total": total,
+                        "matches": matches_len,
+                        "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                    }
+                });
+                if let Ok(line) = serde_json::to_string(&event_json) {
+                    let mut out = io::stdout().lock();
+                    let _ = writeln!(out, "{}", line);
+                    let _ = out.flush();
+                }
+            })
+        }
+        DatabaseBackend::Pgn(p) => {
+            p.search_filter_with_progress(&filter, |scanned, total, matches_len| {
+                let event_json = serde_json::json!({
+                    "event": "search_progress",
+                    "data": {
+                        "scanned": scanned,
+                        "total": total,
+                        "matches": matches_len,
+                        "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                    }
+                });
+                if let Ok(line) = serde_json::to_string(&event_json) {
+                    let mut out = io::stdout().lock();
+                    let _ = writeln!(out, "{}", line);
+                    let _ = out.flush();
+                }
+            })
+        }
+    });
+
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    let matched_count = match_results.len();
+    let search_id = session_mgr.create_session(
+        &db_key,
+        &query_key,
+        total_games,
+        match_results,
+        duration_ms,
+    );
+
+    ResponseMessage {
+        id,
+        status: "ok".to_string(),
+        data: Some(serde_json::json!({
+            "search_id": search_id,
+            "total_searched": total_games,
+            "matched_count": matched_count,
+            "duration_ms": duration_ms,
+            "cached": false,
+        })),
+        error: None,
     }
 }
 
