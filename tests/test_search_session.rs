@@ -261,8 +261,12 @@ fn test_search_session_scid_and_pgn_pagination() {
                 "page_size": 10
             }),
         };
-        let list_unified_resp =
-            handle_query_games(&list_unified_req, &db_backend, &mut session_mgr, &thread_pool);
+        let list_unified_resp = handle_query_games(
+            &list_unified_req,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+        );
         assert_eq!(list_unified_resp.status, "ok");
 
         // J. Unified search handler test (Pure CQL string)
@@ -273,7 +277,12 @@ fn test_search_session_scid_and_pgn_pagination() {
                 "query": "queens >= 1"
             }),
         };
-        let unified_cql_resp = handle_search(&unified_cql_req, &db_backend, &mut session_mgr, &thread_pool);
+        let unified_cql_resp = handle_search(
+            &unified_cql_req,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+        );
         assert_eq!(unified_cql_resp.status, "ok");
         let unified_cql_data = unified_cql_resp.data.unwrap();
         assert!(unified_cql_data.get("search_id").is_some());

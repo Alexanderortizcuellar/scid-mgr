@@ -36,6 +36,7 @@ pub fn calculate_continuations_for_scid<P: AsRef<Path>>(
     let max_depth = query.max_depth;
     let max_scan_ply = 60;
 
+    #[allow(clippy::type_complexity)]
     let process_game = |game_id: usize| -> Option<(bool, Option<Vec<PackedMove>>, u32, u32, u32)> {
         if game_id >= entries.len() {
             return None;
@@ -54,10 +55,7 @@ pub fn calculate_continuations_for_scid<P: AsRef<Path>>(
         let blob = &mmap[start..end];
         let mut cursor = 0;
 
-        let mut pos = match crate::position_search::parse_start_position(blob, &mut cursor) {
-            Some(p) => p,
-            None => return None,
-        };
+        let mut pos = crate::position_search::parse_start_position(blob, &mut cursor)?;
 
         let (w_win, draw, b_win) = match entry.result {
             1 => (1, 0, 0),

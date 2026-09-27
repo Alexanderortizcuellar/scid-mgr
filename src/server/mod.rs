@@ -138,6 +138,7 @@ pub fn run_interactive_server(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_command(
     current_db: &mut Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,

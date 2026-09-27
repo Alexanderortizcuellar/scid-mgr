@@ -695,10 +695,7 @@ impl ScidDatabaseWrapper {
         let mat_matches = filter.material.as_ref().and_then(|m| {
             self.search_material_with_progress(m, &progress)
                 .ok()
-                .map(|vec| {
-                    vec.into_iter()
-                        .collect::<HashSet<usize>>()
-                })
+                .map(|vec| vec.into_iter().collect::<HashSet<usize>>())
         });
 
         let mut cql_plies_map: Option<HashMap<usize, Vec<usize>>> = None;
@@ -817,8 +814,10 @@ impl ScidDatabaseWrapper {
                         }
                     }
                     if let Some(ref m) = player_matches {
-                        let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
-                        let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        let w_ok =
+                            (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        let b_ok =
+                            (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
                         if !w_ok && !b_ok {
                             return None;
                         }
@@ -897,8 +896,10 @@ impl ScidDatabaseWrapper {
                         }
                     }
                     if let Some(ref m) = player_matches {
-                        let w_ok = (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
-                        let b_ok = (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
+                        let w_ok =
+                            (entry.white_id as usize) < m.len() && m[entry.white_id as usize];
+                        let b_ok =
+                            (entry.black_id as usize) < m.len() && m[entry.black_id as usize];
                         if !w_ok && !b_ok {
                             return None;
                         }
@@ -940,7 +941,11 @@ impl ScidDatabaseWrapper {
                 let plies = if let Some(ref c_map) = cql_plies_map {
                     c_map.get(&idx).cloned().unwrap_or_else(|| vec![0])
                 } else if let Some(ref p_map) = pos_plies_map {
-                    p_map.get(&idx).copied().map(|p| vec![p]).unwrap_or_else(|| vec![0])
+                    p_map
+                        .get(&idx)
+                        .copied()
+                        .map(|p| vec![p])
+                        .unwrap_or_else(|| vec![0])
                 } else {
                     vec![0]
                 };

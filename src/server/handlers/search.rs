@@ -212,13 +212,8 @@ pub fn handle_search(
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
     let matched_count = match_results.len();
-    let search_id = session_mgr.create_session(
-        &db_key,
-        &query_key,
-        total_games,
-        match_results,
-        duration_ms,
-    );
+    let search_id =
+        session_mgr.create_session(&db_key, &query_key, total_games, match_results, duration_ms);
 
     ResponseMessage {
         id,

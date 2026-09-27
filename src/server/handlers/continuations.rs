@@ -119,7 +119,7 @@ pub fn handle_continuations(
 
     if let Some(pos_idx) = current_pos_index.as_ref() {
         if let Some(postings) = pos_idx.get_all_position_games(target_hash) {
-            candidate_ids = Some(postings.into_iter().map(|id| id as usize).collect());
+            candidate_ids = Some(postings.into_iter().collect());
         } else {
             let empty_res = ContinuationResult {
                 starting_fen: fen_str.to_string(),

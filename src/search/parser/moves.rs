@@ -1437,7 +1437,8 @@ impl<'a> QueryParser<'a> {
                     let s_clone = s.clone();
                     self.advance();
                     let s_low = s_clone.to_lowercase();
-                    if s_low == "all" || s_low == "all_squares" || s_low == "board" || s_low == "." {
+                    if s_low == "all" || s_low == "all_squares" || s_low == "board" || s_low == "."
+                    {
                         squares.extend(!shakmaty::Bitboard::EMPTY);
                     } else if s_low == "light" || s_low == "light_squares" {
                         squares.extend(shakmaty::Bitboard::LIGHT_SQUARES);

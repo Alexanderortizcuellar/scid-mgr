@@ -922,6 +922,8 @@ fn test_move_to_empty_and_universal_square_syntax() {
 
     // 5. Evaluate move from B to _ on Opera Game (e.g. 3. Bg5 is White Bishop moving to empty square g5)
     let res = GameSearchEvaluator::evaluate_pgn(&q_from_b_to_empty, OPERA_GAME);
-    assert!(res.is_match, "Opera game contains Bishop moves to empty squares");
+    assert!(
+        res.is_match,
+        "Opera game contains Bishop moves to empty squares"
+    );
 }
-
