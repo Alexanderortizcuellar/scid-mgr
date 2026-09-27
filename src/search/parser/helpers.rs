@@ -573,7 +573,9 @@ pub fn parse_target_part(rhs: &str, pat: &mut crate::search::query::MovePattern)
             let mut target_pieces = Vec::new();
             for part in pieces_inner.split(',') {
                 let trimmed = part.trim();
-                if let Some((t_color, t_role)) = parse_piece_specifier(trimmed) {
+                if trimmed == "_" || trimmed.eq_ignore_ascii_case("empty") {
+                    target_pieces.push(SquareContent::Empty);
+                } else if let Some((t_color, t_role)) = parse_piece_specifier(trimmed) {
                     let content = match (t_color, t_role) {
                         (Some(c), Some(r)) => {
                             SquareContent::Piece(shakmaty::Piece { color: c, role: r })

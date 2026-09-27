@@ -47,7 +47,7 @@ Opens a database on disk (`.si5`, `.si4`, or `.pgn`).
 - **Returns**: Database metadata (`stats`).
 
 ### `query_games` (or `get_games`)
-Queries, filters, sorts, and paginates games. When `search_id` is supplied, paginates through the cached search result set and resolves game metadata and `matching_plies` on-demand for the requested page slice.
+Queries, filters, sorts, and paginates games. When `search_id` is supplied, paginates through the cached search result set and resolves game metadata and `matching_plies` on-demand for the requested page slice (see [Search Session & GUI Integration Guide](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/SEARCH_SESSION_AND_GUI_INTEGRATION.md) for full workflow and UI examples).
 - **Params**:
   - `search_id`: `string` (optional; paginates through results of a previous `search` session)
   - `page`: `number` (0-indexed, default: 0)

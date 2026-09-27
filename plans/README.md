@@ -16,6 +16,7 @@
 | **06** | [**`06_HIGH_LEVEL_TACTICAL_AND_MOBILITY_FILTERS_PLAN.md`**](./06_HIGH_LEVEL_TACTICAL_AND_MOBILITY_FILTERS_PLAN.md) | Tactical & Mobility Filters | 📋 Architecture Draft | High-level tactical detection: `hanging`, `overloaded` (defending multiple targets/threats), and `static_for` (immobility / idle piece tracking). |
 | **07** | [**`07_TEMPORAL_INVARIANTS_AND_SACRIFICES_PLAN.md`**](./07_TEMPORAL_INVARIANTS_AND_SACRIFICES_PLAN.md) | Temporal Invariants & Sacrifices | 📋 Architecture Draft | Motif recurrence (`repeat`), tactical investment & recovery (`sacrifice`), material delta tracking (`material_change`), and game-long persistence (`always`). |
 | **08** | [**`08_KING_SAFETY_ITERATORS_AND_GENERALIZED_VARIABLES_PLAN.md`**](./08_KING_SAFETY_ITERATORS_AND_GENERALIZED_VARIABLES_PLAN.md) | King Safety, Iterators & Variables | 📋 Architecture Draft | `king_safety` (shield & attack metrics), quantified board loops (`for_square`, `for_piece`, `any_...`, `all_...`), generalized `let $var = ...` binding. |
+| **09** | [**`mmap_and_hybrid_memory_architecture_plan.md`**](./mmap_and_hybrid_memory_architecture_plan.md) | Zero-Copy Mmap & Hybrid RAM Engine | 📋 Architecture Draft | Zero-copy mmap header index, instant database open (<5ms), <50MB RAM for 11M+ games, on-demand RAM search accelerators, COW mutation overlay. |
 
 ---
 

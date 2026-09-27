@@ -884,3 +884,44 @@ fn test_move_promotion_keyword_boundary_and_roles() {
     assert!(QueryParser::parse_str("move previous from P promote X").is_err());
     assert!(QueryParser::parse_str("move previous from P promote [X]").is_err());
 }
+
+#[test]
+fn test_move_to_empty_and_universal_square_syntax() {
+    // 1. Parse move to _
+    let q_to_empty = QueryParser::parse_str("move to _").unwrap();
+    if let SearchQuery::Move(ref m) = q_to_empty {
+        assert_eq!(m.to_pieces, Some(vec![SquareContent::Empty]));
+    } else {
+        panic!("Expected Move query");
+    }
+
+    // 2. Parse move from B to _
+    let q_from_b_to_empty = QueryParser::parse_str("move from B to _").unwrap();
+    if let SearchQuery::Move(ref m) = q_from_b_to_empty {
+        assert_eq!(m.to_pieces, Some(vec![SquareContent::Empty]));
+        assert!(m.from_pieces.is_some());
+    } else {
+        panic!("Expected Move query");
+    }
+
+    // 3. Parse move from [B, N] to [_]
+    let q_bracket_empty = QueryParser::parse_str("move from [B, N] to [_]").unwrap();
+    if let SearchQuery::Move(ref m) = q_bracket_empty {
+        assert_eq!(m.to_pieces, Some(vec![SquareContent::Empty]));
+    } else {
+        panic!("Expected Move query");
+    }
+
+    // 4. Parse move to . (universal squares)
+    let q_to_all = QueryParser::parse_str("move to .").unwrap();
+    if let SearchQuery::Move(ref m) = q_to_all {
+        assert_eq!(m.to_squares.as_ref().map(|s| s.len()), Some(64));
+    } else {
+        panic!("Expected Move query");
+    }
+
+    // 5. Evaluate move from B to _ on Opera Game (e.g. 3. Bg5 is White Bishop moving to empty square g5)
+    let res = GameSearchEvaluator::evaluate_pgn(&q_from_b_to_empty, OPERA_GAME);
+    assert!(res.is_match, "Opera game contains Bishop moves to empty squares");
+}
+

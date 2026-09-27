@@ -428,7 +428,7 @@ impl<'a> QueryParser<'a> {
             } else if id_low == "occupied" || id_low == "pieces" || id_low == "any_piece" {
                 self.advance();
                 SquareContent::Occupied
-            } else if id_low == "empty" {
+            } else if id_clone == "_" || id_low == "empty" {
                 self.advance();
                 SquareContent::Empty
             } else if let Some((color, role)) = parse_piece_specifier(&id_clone) {

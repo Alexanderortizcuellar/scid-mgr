@@ -1437,7 +1437,9 @@ impl<'a> QueryParser<'a> {
                     let s_clone = s.clone();
                     self.advance();
                     let s_low = s_clone.to_lowercase();
-                    if s_low == "light" || s_low == "light_squares" {
+                    if s_low == "all" || s_low == "all_squares" || s_low == "board" || s_low == "." {
+                        squares.extend(!shakmaty::Bitboard::EMPTY);
+                    } else if s_low == "light" || s_low == "light_squares" {
                         squares.extend(shakmaty::Bitboard::LIGHT_SQUARES);
                     } else if s_low == "dark" || s_low == "dark_squares" {
                         squares.extend(shakmaty::Bitboard::DARK_SQUARES);
@@ -1447,7 +1449,7 @@ impl<'a> QueryParser<'a> {
                         pieces.push(SquareContent::Color(Color::Black));
                     } else if s_low == "occupied" || s_low == "pieces" || s_low == "any_piece" {
                         pieces.push(SquareContent::Occupied);
-                    } else if s_low == "empty" {
+                    } else if s_low == "empty" || s_clone == "_" {
                         pieces.push(SquareContent::Empty);
                     } else if let Ok(sq) = Square::from_str(&s_low) {
                         squares.push(sq);
@@ -1501,6 +1503,13 @@ impl<'a> QueryParser<'a> {
         if let Some(Token::Ident(ref s)) = self.peek() {
             let s_clone = s.clone();
             let s_low = s_clone.to_lowercase();
+            if s_low == "all" || s_low == "all_squares" || s_low == "board" || s_low == "." {
+                self.advance();
+                return Ok((
+                    Some((!shakmaty::Bitboard::EMPTY).into_iter().collect()),
+                    None,
+                ));
+            }
             if s_low == "diag" || s_low == "diagonal" || s_low == "ray" {
                 let sqs = self.parse_square_set()?;
                 return Ok((Some(sqs), None));
@@ -1531,7 +1540,7 @@ impl<'a> QueryParser<'a> {
                 self.advance();
                 return Ok((None, Some(vec![SquareContent::Occupied])));
             }
-            if s_low == "empty" {
+            if s_low == "empty" || s_clone == "_" {
                 self.advance();
                 return Ok((None, Some(vec![SquareContent::Empty])));
             }
