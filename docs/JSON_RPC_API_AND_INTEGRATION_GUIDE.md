@@ -98,11 +98,15 @@ Opens a database on disk (`.si5`, `.si4`, or `.pgn`). Automatically checks compa
         "db_type": "SCID",
         "game_count": 10352410,
         "deleted_count": 0,
-        "index_path": "C:/chess/databases/Mega2026.si5",
-        "has_pos_index": true,
-        "has_tree_index": true,
-        "has_hot_index": true,
-        "has_feat_index": true
+        "path": "C:/chess/databases/Mega2026.si5",
+        "pos_index_status": "valid",
+        "pos_index_unique_positions": 4120300,
+        "tree_index_status": "valid",
+        "tree_index_unique_positions": 120500,
+        "hot_index_status": "valid",
+        "hot_index_nodes": 85400,
+        "feat_index_status": "valid",
+        "feat_index_features": 47
       }
     }
   }

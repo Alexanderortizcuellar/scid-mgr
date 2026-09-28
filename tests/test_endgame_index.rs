@@ -254,3 +254,34 @@ fn test_json_rpc_endgames_handlers() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_handle_check_all_four_indexes() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("check_test.pgn");
+    let mut file = std::fs::File::create(&pgn_path)?;
+    file.write_all(ENDGAME_PGN.as_bytes())?;
+    file.flush()?;
+
+    // 1. Initial check before any companion indexes are built
+    scid_mgr::cli::commands::check::handle_check(&pgn_path, true, false)?;
+    scid_mgr::cli::commands::check::handle_check(&pgn_path, true, true)?;
+
+    // 2. Build endgame index (.feat.idx)
+    scid_mgr::cli::commands::endgames::handle_build_endgames(&pgn_path, None)?;
+
+    // 3. Build position index (.pos.idx)
+    scid_mgr::cli::commands::index::handle_build_pos_idx(&pgn_path, 24, 0, 1, None)?;
+
+    // 4. Build tree index (.tree.idx)
+    scid_mgr::cli::commands::tree::handle_build_tree(&pgn_path, 24, 0, None)?;
+
+    // 5. Build continuations index (.hot.idx)
+    scid_mgr::cli::commands::continuations::handle_build_continuations(&pgn_path, 16, 1)?;
+
+    // 6. Check again with all 4 indexes generated (text and json output)
+    scid_mgr::cli::commands::check::handle_check(&pgn_path, true, false)?;
+    scid_mgr::cli::commands::check::handle_check(&pgn_path, true, true)?;
+
+    Ok(())
+}

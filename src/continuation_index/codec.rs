@@ -164,4 +164,37 @@ impl MmapHotGraph {
     pub fn total_database_games(&self) -> u64 {
         self.header.db_game_count
     }
+
+    /// Fast header-only verification of companion `.hot.idx` (< 0.001 ms)
+    pub fn check_status<P: AsRef<Path>>(
+        db_path: P,
+        expected_game_count: usize,
+    ) -> (crate::position_index::IndexStatus, Option<HotGraphHeader>) {
+        let p = db_path.as_ref();
+        let hot_path = resolve_companion_hot_path(p);
+        if !hot_path.exists() {
+            return (crate::position_index::IndexStatus::Missing, None);
+        }
+
+        let mut file = match File::open(&hot_path) {
+            Ok(f) => f,
+            Err(_) => return (crate::position_index::IndexStatus::Missing, None),
+        };
+
+        let mut header_buf = [0u8; HEADER_SIZE];
+        if std::io::Read::read_exact(&mut file, &mut header_buf).is_err() {
+            return (crate::position_index::IndexStatus::Outdated, None);
+        }
+
+        let header = match HotGraphHeader::read_from_slice(&header_buf) {
+            Ok(h) => h,
+            Err(_) => return (crate::position_index::IndexStatus::Outdated, None),
+        };
+
+        if header.db_game_count as usize != expected_game_count {
+            return (crate::position_index::IndexStatus::Outdated, Some(header));
+        }
+
+        (crate::position_index::IndexStatus::Valid, Some(header))
+    }
 }

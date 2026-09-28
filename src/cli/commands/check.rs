@@ -1,4 +1,6 @@
+use crate::continuation_index::codec::{resolve_companion_hot_path, MmapHotGraph};
 use crate::db::ScidDatabaseWrapper;
+use crate::endgame_index::serializer::{resolve_companion_feat_path, MmapFeatureIndex};
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::PositionIndex;
 use crate::tree_index::TreeIndex;
@@ -18,6 +20,8 @@ pub struct DatabaseCheckReport {
     pub events_count: usize,
     pub position_index: Option<IndexCheckReport>,
     pub tree_index: Option<IndexCheckReport>,
+    pub hot_index: Option<IndexCheckReport>,
+    pub feat_index: Option<IndexCheckReport>,
     pub overall_status: String,
 }
 
@@ -72,10 +76,11 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
             )
         };
 
-    // Check Position Index (.pos.idx)
+    // 1. Check Position Index (.pos.idx)
     let pos_idx_res = PositionIndex::load(db_path);
     let pos_idx_path = db_path.with_extension("pos.idx");
-    let pos_idx_exists = pos_idx_path.exists();
+    let pos_idx_exists = pos_idx_path.exists()
+        || Path::new(&format!("{}.pos.idx", db_path.to_string_lossy())).exists();
 
     let (pos_report, pos_diag_struct) = if pos_idx_exists {
         match pos_idx_res {
@@ -136,10 +141,11 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         (None, None)
     };
 
-    // Check Tree Index (.tree.idx)
+    // 2. Check Tree Index (.tree.idx)
     let tree_idx_res = TreeIndex::load(db_path);
     let tree_idx_path = db_path.with_extension("tree.idx");
-    let tree_idx_exists = tree_idx_path.exists();
+    let tree_idx_exists = tree_idx_path.exists()
+        || Path::new(&format!("{}.tree.idx", db_path.to_string_lossy())).exists();
 
     let (tree_report, tree_diag_struct) = if tree_idx_exists {
         match tree_idx_res {
@@ -200,8 +206,151 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         (None, None)
     };
 
+    // 3. Check Continuations Hot Graph Index (.hot.idx)
+    let hot_idx_path = resolve_companion_hot_path(db_path);
+    let hot_idx_exists = hot_idx_path.exists();
+
+    let (hot_report, hot_diag_struct) = if hot_idx_exists {
+        match MmapHotGraph::open(&hot_idx_path) {
+            Ok(graph) => {
+                let indexed_games = graph.header.db_game_count as usize;
+                let in_sync = indexed_games == total_games;
+                let file_size = std::fs::metadata(&hot_idx_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let status_message = if in_sync {
+                    "Synchronized (Up to date)".to_string()
+                } else {
+                    format!(
+                        "Out of sync: indexed {} games vs database {} games (Rebuild recommended)",
+                        indexed_games, total_games
+                    )
+                };
+
+                let detailed_diagnostics = if detailed {
+                    Some(serde_json::json!({
+                        "node_count": graph.header.node_count,
+                        "edge_count": graph.header.edge_count,
+                        "hash_count": graph.header.hash_count,
+                        "max_ply": graph.header.max_ply,
+                        "min_games": graph.header.min_games,
+                    }))
+                } else {
+                    None
+                };
+
+                (
+                    Some(IndexCheckReport {
+                        path: hot_idx_path.to_string_lossy().to_string(),
+                        exists: true,
+                        valid: true,
+                        in_sync,
+                        indexed_games,
+                        db_games: total_games,
+                        unique_positions: graph.header.node_count,
+                        file_size_bytes: file_size,
+                        status_message,
+                        detailed_diagnostics,
+                    }),
+                    Some((
+                        graph.header.node_count,
+                        graph.header.edge_count,
+                        graph.header.max_ply,
+                        graph.header.min_games,
+                    )),
+                )
+            }
+            Err(e) => (
+                Some(IndexCheckReport {
+                    path: hot_idx_path.to_string_lossy().to_string(),
+                    exists: true,
+                    valid: false,
+                    in_sync: false,
+                    indexed_games: 0,
+                    db_games: total_games,
+                    unique_positions: 0,
+                    file_size_bytes: 0,
+                    status_message: format!("Corrupted or incompatible header: {}", e),
+                    detailed_diagnostics: None,
+                }),
+                None,
+            ),
+        }
+    } else {
+        (None, None)
+    };
+
+    // 4. Check Endgame Feature Index (.feat.idx)
+    let feat_idx_path = resolve_companion_feat_path(db_path);
+    let feat_idx_exists = feat_idx_path.exists();
+
+    let (feat_report, feat_diag_struct) = if feat_idx_exists {
+        match MmapFeatureIndex::open(&feat_idx_path) {
+            Ok(idx) => {
+                let indexed_games = idx.header().game_count as usize;
+                let in_sync = indexed_games == total_games;
+                let file_size = std::fs::metadata(&feat_idx_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let status_message = if in_sync {
+                    "Synchronized (Up to date)".to_string()
+                } else {
+                    format!(
+                        "Out of sync: indexed {} games vs database {} games (Rebuild recommended)",
+                        indexed_games, total_games
+                    )
+                };
+
+                let detailed_diagnostics = if detailed {
+                    Some(serde_json::json!({
+                        "catalog_version": idx.header().catalog_version,
+                        "endgame_bit_count": idx.header().endgame_bit_count,
+                        "record_size": idx.header().record_size,
+                    }))
+                } else {
+                    None
+                };
+
+                (
+                    Some(IndexCheckReport {
+                        path: feat_idx_path.to_string_lossy().to_string(),
+                        exists: true,
+                        valid: true,
+                        in_sync,
+                        indexed_games,
+                        db_games: total_games,
+                        unique_positions: idx.header().endgame_bit_count as u32,
+                        file_size_bytes: file_size,
+                        status_message,
+                        detailed_diagnostics,
+                    }),
+                    Some((idx.header().catalog_version, idx.header().endgame_bit_count)),
+                )
+            }
+            Err(e) => (
+                Some(IndexCheckReport {
+                    path: feat_idx_path.to_string_lossy().to_string(),
+                    exists: true,
+                    valid: false,
+                    in_sync: false,
+                    indexed_games: 0,
+                    db_games: total_games,
+                    unique_positions: 0,
+                    file_size_bytes: 0,
+                    status_message: format!("Corrupted or incompatible header: {}", e),
+                    detailed_diagnostics: None,
+                }),
+                None,
+            ),
+        }
+    } else {
+        (None, None)
+    };
+
     let all_in_sync = pos_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
-        && tree_report.as_ref().map(|r| r.in_sync).unwrap_or(true);
+        && tree_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
+        && hot_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
+        && feat_report.as_ref().map(|r| r.in_sync).unwrap_or(true);
 
     let overall_status = if !db_valid {
         "Database Error".to_string()
@@ -222,6 +371,8 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         events_count,
         position_index: pos_report,
         tree_index: tree_report,
+        hot_index: hot_report,
+        feat_index: feat_report,
         overall_status,
     };
 
@@ -246,8 +397,9 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
     println!(" Status:     [OK] Valid database files");
     println!("------------------------------------------------------------");
 
-    // Position Index
     println!(" Companion Indexes:");
+
+    // 1. Position Index
     if let Some(pos) = &report.position_index {
         if pos.valid {
             let status_tag = if pos.in_sync { "[OK]" } else { "[WARN]" };
@@ -289,7 +441,7 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         );
     }
 
-    // Tree Index
+    // 2. Tree Index
     if let Some(tree) = &report.tree_index {
         if tree.valid {
             let status_tag = if tree.in_sync { "[OK]" } else { "[WARN]" };
@@ -322,6 +474,65 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         }
     } else {
         println!("  [--] Opening Tree Index (.tree.idx): Not generated (Build with 'scid-mgr build-tree')");
+    }
+
+    // 3. Continuations Hot Graph Index
+    if let Some(hot) = &report.hot_index {
+        if hot.valid {
+            let status_tag = if hot.in_sync { "[OK]" } else { "[WARN]" };
+            println!(
+                "  {} Continuations Hot Index (.hot.idx):\n       Status:           {}\n       Hot Nodes:        {}\n       Size:             {:.2} MB",
+                status_tag,
+                hot.status_message,
+                hot.unique_positions,
+                hot.file_size_bytes as f64 / 1_048_576.0
+            );
+
+            if let Some((nodes, edges, max_ply, min_games)) = &hot_diag_struct {
+                println!("       --- Detailed Continuations Diagnostics ---");
+                println!("       Total Graph Nodes:  {}", nodes);
+                println!("       Total Move Edges:   {}", edges);
+                println!("       Max Search Depth:   {} plies", max_ply);
+                println!("       Min Games Cutoff:   {} games", min_games);
+            }
+        } else {
+            println!(
+                "  [ERROR] Continuations Hot Index (.hot.idx):\n       Status: {}",
+                hot.status_message
+            );
+        }
+    } else {
+        println!("  [--] Continuations Hot Index (.hot.idx): Not generated (Build with 'scid-mgr build-continuations')");
+    }
+
+    // 4. Endgame Feature Index
+    if let Some(feat) = &report.feat_index {
+        if feat.valid {
+            let status_tag = if feat.in_sync { "[OK]" } else { "[WARN]" };
+            println!(
+                "  {} Endgame Feature Index (.feat.idx):\n       Status:           {}\n       Indexed Features: {}\n       Size:             {:.2} MB",
+                status_tag,
+                feat.status_message,
+                feat.unique_positions,
+                feat.file_size_bytes as f64 / 1_048_576.0
+            );
+
+            if let Some((cat_ver, bit_count)) = &feat_diag_struct {
+                println!("       --- Detailed Endgame Diagnostics ---");
+                println!("       Catalog Version:    v{}", cat_ver);
+                println!(
+                    "       Active Features:    {} endgame taxonomy bits",
+                    bit_count
+                );
+            }
+        } else {
+            println!(
+                "  [ERROR] Endgame Feature Index (.feat.idx):\n       Status: {}",
+                feat.status_message
+            );
+        }
+    } else {
+        println!("  [--] Endgame Feature Index (.feat.idx): Not generated (Build with 'scid-mgr build-endgames')");
     }
 
     println!("============================================================");

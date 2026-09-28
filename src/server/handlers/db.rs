@@ -1,4 +1,6 @@
+use crate::continuation_index::codec::MmapHotGraph;
 use crate::db::{GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
+use crate::endgame_index::serializer::MmapFeatureIndex;
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::{IndexStatus, PositionIndex};
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
@@ -26,7 +28,7 @@ pub fn handle_open_db(
                 status: "error".to_string(),
                 data: None,
                 error: Some("Missing 'path' parameter".to_string()),
-            }
+            };
         }
     };
 
@@ -56,6 +58,26 @@ pub fn handle_open_db(
                     .map(|h| h.unique_positions)
                     .unwrap_or(0);
 
+                let (hot_status, hot_header_opt) = MmapHotGraph::check_status(path, total_games);
+                let hot_status_str = match hot_status {
+                    IndexStatus::Valid => "valid",
+                    IndexStatus::Outdated => "outdated",
+                    IndexStatus::Missing => "missing",
+                };
+                let hot_nodes = hot_header_opt.as_ref().map(|h| h.node_count).unwrap_or(0);
+
+                let (feat_status, feat_header_opt) =
+                    MmapFeatureIndex::check_status(path, total_games);
+                let feat_status_str = match feat_status {
+                    IndexStatus::Valid => "valid",
+                    IndexStatus::Outdated => "outdated",
+                    IndexStatus::Missing => "missing",
+                };
+                let feat_count = feat_header_opt
+                    .as_ref()
+                    .map(|h| h.endgame_bit_count as u32)
+                    .unwrap_or(0);
+
                 *current_pos_index = None;
                 *current_tree_index = None;
 
@@ -78,11 +100,19 @@ pub fn handle_open_db(
                             "pos_index_unique_positions": pos_count,
                             "tree_index_status": tree_status_str,
                             "tree_index_unique_positions": tree_pos_count,
+                            "hot_index_status": hot_status_str,
+                            "hot_index_nodes": hot_nodes,
+                            "feat_index_status": feat_status_str,
+                            "feat_index_features": feat_count,
                         },
                         "pos_index_status": status_str,
                         "pos_index_unique_positions": pos_count,
                         "tree_index_status": tree_status_str,
                         "tree_index_unique_positions": tree_pos_count,
+                        "hot_index_status": hot_status_str,
+                        "hot_index_nodes": hot_nodes,
+                        "feat_index_status": feat_status_str,
+                        "feat_index_features": feat_count,
                         "format": "pgn",
                         "total_games": total_games
                     })),
@@ -121,6 +151,26 @@ pub fn handle_open_db(
                     .map(|h| h.unique_positions)
                     .unwrap_or(0);
 
+                let (hot_status, hot_header_opt) = MmapHotGraph::check_status(path, total_games);
+                let hot_status_str = match hot_status {
+                    IndexStatus::Valid => "valid",
+                    IndexStatus::Outdated => "outdated",
+                    IndexStatus::Missing => "missing",
+                };
+                let hot_nodes = hot_header_opt.as_ref().map(|h| h.node_count).unwrap_or(0);
+
+                let (feat_status, feat_header_opt) =
+                    MmapFeatureIndex::check_status(path, total_games);
+                let feat_status_str = match feat_status {
+                    IndexStatus::Valid => "valid",
+                    IndexStatus::Outdated => "outdated",
+                    IndexStatus::Missing => "missing",
+                };
+                let feat_count = feat_header_opt
+                    .as_ref()
+                    .map(|h| h.endgame_bit_count as u32)
+                    .unwrap_or(0);
+
                 *current_pos_index = None;
                 *current_tree_index = None;
 
@@ -141,6 +191,19 @@ pub fn handle_open_db(
                         "tree_index_unique_positions".to_string(),
                         serde_json::json!(tree_pos_count),
                     );
+                    obj.insert(
+                        "hot_index_status".to_string(),
+                        serde_json::json!(hot_status_str),
+                    );
+                    obj.insert("hot_index_nodes".to_string(), serde_json::json!(hot_nodes));
+                    obj.insert(
+                        "feat_index_status".to_string(),
+                        serde_json::json!(feat_status_str),
+                    );
+                    obj.insert(
+                        "feat_index_features".to_string(),
+                        serde_json::json!(feat_count),
+                    );
                 }
 
                 *current_db = Some(DatabaseBackend::Scid(db));
@@ -153,8 +216,10 @@ pub fn handle_open_db(
                         "pos_index_unique_positions": pos_count,
                         "tree_index_status": tree_status_str,
                         "tree_index_unique_positions": tree_pos_count,
-                        "format": stats.get("format").and_then(|v| v.as_str()).unwrap_or("si5"),
-                        "total_games": total_games
+                        "hot_index_status": hot_status_str,
+                        "hot_index_nodes": hot_nodes,
+                        "feat_index_status": feat_status_str,
+                        "feat_index_features": feat_count,
                     })),
                     error: None,
                 }
