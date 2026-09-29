@@ -100,6 +100,18 @@ pub enum BuildCommands {
         catalog: Option<PathBuf>,
     },
 
+    /// Build companion .boost.idx 16-bit flat move stream search booster
+    #[command(name = "booster", aliases = ["boost", "search-booster"])]
+    Booster {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Custom output path for .boost.idx file (optional)
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
     /// Build both companion indexes (.pos.idx and .tree.idx)
     #[command(name = "all")]
     All {
@@ -650,6 +662,9 @@ pub fn run() -> Result<()> {
             }
             BuildCommands::Endgames { db_path, catalog } => {
                 commands::endgames::handle_build_endgames(&db_path, catalog.as_deref())?;
+            }
+            BuildCommands::Booster { db_path, output } => {
+                commands::booster::handle_build_booster(&db_path, output)?;
             }
             BuildCommands::All {
                 db_path,

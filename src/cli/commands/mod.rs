@@ -1,4 +1,5 @@
 pub mod bench;
+pub mod booster;
 pub mod check;
 pub mod continuations;
 pub mod endgames;

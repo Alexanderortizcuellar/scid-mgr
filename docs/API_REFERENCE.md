@@ -139,6 +139,11 @@ Builds or rebuilds the `.hot.idx` binary graph in the background across worker t
   - `min_games`: `number` (optional minimum game occurrences, default: `2`)
 - **Returns**: `{ status: "ok", output_path, total_games, total_nodes, total_edges, elapsed_ms }`
 
+### `build booster` (CLI)
+Builds the 16-bit uncompressed `.boost.idx` Search Booster accelerator for SCID (`.si5`/`.si4`) or PGN databases.
+- **CLI Usage**: `scid-mgr build booster <DB_PATH> [-o <OUTPUT_PATH>]`
+- **Output**: Generates `<db_name>.boost.idx` containing 64-byte header, 8-byte game directory table, and continuous 16-bit move stream.
+
 ### `endgames`
 Calculates endgame popularity distribution and occurrence statistics across the database or for games reaching a specific position using the companion `.feat.idx` index.
 - **Params**:

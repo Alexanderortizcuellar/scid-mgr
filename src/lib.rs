@@ -74,6 +74,7 @@ pub mod pgn_io;
 pub mod position_index;
 pub mod position_search;
 pub mod search;
+pub mod search_booster;
 pub mod server;
 pub mod tree_index;
 
@@ -107,6 +108,10 @@ pub use search::{
     ComparisonOp, GameSearchEvaluator, HeaderMatcher, HeaderPredicate, MaterialPredicate,
     MovePattern, MoveRecord, PathMatcher, PathPattern, PositionMatcher, PositionPattern,
     QueryMatchResult, SearchQuery, SquareContent,
+};
+pub use search_booster::{
+    resolve_companion_booster_path, BoostGameEntry, BoostHeader, BoostIndexBuilder, BoostMatch,
+    BoostMove, BoostSearchEvaluator, FastReplayState, MmapBoostIndex,
 };
 pub use tree_index::{
     OpeningTreeMoveView, OpeningTreeReport, TreeIndex, TreeIndexDiagnostics, TreeIndexHeader,
