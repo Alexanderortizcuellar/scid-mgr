@@ -10,15 +10,16 @@ Transformation blocks automatically expand a search query across geometric board
 
 | Keyword | Description | Transformation Applied |
 | :--- | :--- | :--- |
+| **`flip`** / **`flip:spatial`** | All 8 spatial $D_4$ geometric symmetries (rotations & reflections) | Standard CQL bare `flip` expansion |
 | **`flipcolor`** / **`invertcolor`** | Inverts White $\leftrightarrow$ Black (pieces, colors, headers, turns) | Color Inversion |
-| **`flipvertical`** / **`flip_v`** | Vertical reflection across ranks 4 and 5 | Ranks: $1 \leftrightarrow 8, 2 \leftrightarrow 7, \dots$ |
-| **`fliphorizontal`** / **`flip_h`** | Horizontal reflection across files d and e | Files: $a \leftrightarrow h, b \leftrightarrow g, \dots$ |
-| **`rotate90`** | 90° clockwise board rotation | $(f, r) \rightarrow (r, 7-f)$ |
-| **`rotate180`** | 180° board rotation | $(f, r) \rightarrow (7-f, 7-r)$ |
-| **`rotate270`** | 270° clockwise board rotation | $(f, r) \rightarrow (7-r, f)$ |
-| **`flipmaindiagonal`** / **`flip_diag`** | Reflection along the main diagonal $a1-h8$ | $(f, r) \rightarrow (r, f)$ |
-| **`flipantidiagonal`** / **`flip_antidiag`** | Reflection along the anti-diagonal $a8-h1$ | $(f, r) \rightarrow (7-r, 7-f)$ |
-| **`flip:all`** | All 8 geometric board symmetries + color inversion | Expands into 8 geometric symmetry branches |
+| **`flipvertical`** / **`flip vertical`** / **`flip_v`** | Vertical reflection across ranks 4 and 5 | Ranks: $1 \leftrightarrow 8, 2 \leftrightarrow 7, \dots$ |
+| **`fliphorizontal`** / **`flip horizontal`** / **`flip_h`** | Horizontal reflection across files d and e | Files: $a \leftrightarrow h, b \leftrightarrow g, \dots$ |
+| **`rotate90`** / **`flip rotate90`** | 90° clockwise / counter-clockwise board rotation | $(f, r) \rightarrow (r, 7-f)$ |
+| **`rotate180`** / **`flip rotate180`** | 180° board rotation | $(f, r) \rightarrow (7-f, 7-r)$ |
+| **`rotate270`** / **`flip rotate270`** | 270° board rotation | $(f, r) \rightarrow (7-r, f)$ |
+| **`flipmaindiagonal`** / **`flip maindiagonal`** | Reflection along the main diagonal $a1-h8$ | $(f, r) \rightarrow (r, f)$ |
+| **`flipantidiagonal`** / **`flip antidiagonal`** | Reflection along the anti-diagonal $a8-h1$ | $(f, r) \rightarrow (7-r, 7-f)$ |
+| **`flip:all`** / **`flip all`** | All 8 geometric board symmetries + color inversion | Expands into 16 total symmetry branches |
 | **`symm:all`** | Complete geometric symmetry expansion | Evaluates query under all board reflections and rotations |
 
 ### 2. Spatial Shift Transformations

@@ -220,6 +220,32 @@ fn test_query_explain_and_to_dsl() {
     assert!(dsl.contains("player \"Morphy\""));
     assert!(dsl.contains("wtm"));
     assert!(dsl.contains("legal count == 0"));
+
+    // 5. Compound query with symmetry: rotate90 {Nf6 Rg8 kh8} and mate
+    let rot_exp = QueryParser::explain("rotate90 {Nf6 Rg8 kh8} and mate").unwrap();
+    assert!(rot_exp.has_symmetries);
+    assert_eq!(rot_exp.branches.len(), 4);
+    assert!(rot_exp.branches[0].dsl.contains("checkmate"));
+    assert!(rot_exp.branches[1].dsl.contains("checkmate"));
+    assert!(rot_exp.branches[2].dsl.contains("checkmate"));
+    assert!(rot_exp.branches[3].dsl.contains("checkmate"));
+    assert!(rot_exp.branches[0].dsl.contains("N on f6"));
+    assert!(rot_exp.branches[1].dsl.contains("N on f3"));
+    assert!(rot_exp.branches[2].dsl.contains("N on c3"));
+    assert!(rot_exp.branches[3].dsl.contains("N on c6"));
+
+    // 6. Bare flip expands to 8 spatial symmetries (Option A)
+    let bare_flip_exp = QueryParser::explain("flip {Nf6 Rg8 kh8}").unwrap();
+    assert!(bare_flip_exp.has_symmetries);
+    assert_eq!(bare_flip_exp.branches.len(), 8);
+
+    // 7. flip rotate90 without colon expands to 4 rotations
+    let flip_rot_exp = QueryParser::explain("flip rotate90 {Nf6 Rg8 kh8}").unwrap();
+    assert_eq!(flip_rot_exp.branches.len(), 4);
+
+    // 8. Deduplication in explain for color-neutral/symmetric query under flip:all
+    let dup_exp = QueryParser::explain("flip:all { [Nn] on f6 }").unwrap();
+    assert_eq!(dup_exp.branches.len(), 6); // 6 distinct branches after deduplication
 }
 
 #[test]

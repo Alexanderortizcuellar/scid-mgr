@@ -995,37 +995,42 @@ impl<'a> QueryParser<'a> {
                 }
                 "symmetry" | "flip" => {
                     self.advance();
-                    let mut sym = if key == "flip" {
-                        crate::search::transform::BoardSymmetry::HorizontalMirror
-                    } else {
-                        crate::search::transform::BoardSymmetry::AnySpatialSymmetry
-                    };
+                    let mut sym = crate::search::transform::BoardSymmetry::AnySpatialSymmetry;
 
                     if matches!(self.peek(), Some(Token::Colon) | Some(Token::Eq)) {
                         self.advance();
                         let mode_str = self.expect_ident()?;
                         sym = match mode_str.to_lowercase().as_str() {
-                            "horizontal" | "h" | "lr" => {
+                            "id" | "identity" | "none" => {
+                                crate::search::transform::BoardSymmetry::Identity
+                            }
+                            "horizontal" | "h" | "lr" | "fliphorizontal" | "flip_horizontal" => {
                                 crate::search::transform::BoardSymmetry::HorizontalMirror
                             }
-                            "vertical" | "v" | "ud" => {
+                            "vertical" | "v" | "ud" | "flipvertical" | "flip_vertical" => {
                                 crate::search::transform::BoardSymmetry::VerticalMirror
                             }
-                            "maindiagonal" | "main_diagonal" | "diagonal" | "diag" => {
+                            "maindiagonal" | "main_diagonal" | "diagonal" | "diag"
+                            | "flipmaindiagonal" => {
                                 crate::search::transform::BoardSymmetry::MainDiagonal
                             }
-                            "antidiagonal" | "anti_diagonal" | "antidiag" => {
+                            "antidiagonal" | "anti_diagonal" | "antidiag" | "flipantidiagonal" => {
                                 crate::search::transform::BoardSymmetry::AntiDiagonal
                             }
-                            "rotate" | "rot" | "180" | "rotate180" => {
+                            "rotate" | "rot" | "all_rotations" | "rotate90" | "rotate_90"
+                            | "rot90" | "90" => {
+                                crate::search::transform::BoardSymmetry::AllRotations
+                            }
+                            "rotate180" | "rotate_180" | "rot180" | "180" => {
                                 crate::search::transform::BoardSymmetry::Rotate180
                             }
-                            "90" | "rotate90" => crate::search::transform::BoardSymmetry::Rotate90,
-                            "270" | "rotate270" => {
+                            "rotate270" | "rotate_270" | "rot270" | "270" => {
                                 crate::search::transform::BoardSymmetry::Rotate270
                             }
-                            "color" | "c" => crate::search::transform::BoardSymmetry::ColorInvert,
-                            "color_horizontal" => {
+                            "color" | "c" | "flipcolor" | "flip_color" => {
+                                crate::search::transform::BoardSymmetry::ColorInvert
+                            }
+                            "color_horizontal" | "colorhorizontal" => {
                                 crate::search::transform::BoardSymmetry::ColorInvertHorizontal
                             }
                             "spatial" => {
@@ -1044,31 +1049,36 @@ impl<'a> QueryParser<'a> {
                     } else if let Some(Token::Ident(ref id)) = self.peek() {
                         let id_low = id.to_lowercase();
                         let matched_sym = match id_low.as_str() {
-                            "horizontal" | "h" | "lr" => {
+                            "id" | "identity" | "none" => {
+                                Some(crate::search::transform::BoardSymmetry::Identity)
+                            }
+                            "horizontal" | "h" | "lr" | "fliphorizontal" | "flip_horizontal" => {
                                 Some(crate::search::transform::BoardSymmetry::HorizontalMirror)
                             }
-                            "vertical" | "v" | "ud" => {
+                            "vertical" | "v" | "ud" | "flipvertical" | "flip_vertical" => {
                                 Some(crate::search::transform::BoardSymmetry::VerticalMirror)
                             }
-                            "maindiagonal" | "main_diagonal" | "diagonal" | "diag" => {
+                            "maindiagonal" | "main_diagonal" | "diagonal" | "diag"
+                            | "flipmaindiagonal" => {
                                 Some(crate::search::transform::BoardSymmetry::MainDiagonal)
                             }
-                            "antidiagonal" | "anti_diagonal" | "antidiag" => {
+                            "antidiagonal" | "anti_diagonal" | "antidiag" | "flipantidiagonal" => {
                                 Some(crate::search::transform::BoardSymmetry::AntiDiagonal)
                             }
-                            "rotate" | "rot" | "180" | "rotate180" => {
+                            "rotate" | "rot" | "all_rotations" | "rotate90" | "rotate_90"
+                            | "rot90" | "90" => {
+                                Some(crate::search::transform::BoardSymmetry::AllRotations)
+                            }
+                            "rotate180" | "rotate_180" | "rot180" | "180" => {
                                 Some(crate::search::transform::BoardSymmetry::Rotate180)
                             }
-                            "90" | "rotate90" => {
-                                Some(crate::search::transform::BoardSymmetry::Rotate90)
-                            }
-                            "270" | "rotate270" => {
+                            "rotate270" | "rotate_270" | "rot270" | "270" => {
                                 Some(crate::search::transform::BoardSymmetry::Rotate270)
                             }
-                            "color" | "c" => {
+                            "color" | "c" | "flipcolor" | "flip_color" => {
                                 Some(crate::search::transform::BoardSymmetry::ColorInvert)
                             }
-                            "color_horizontal" => {
+                            "color_horizontal" | "colorhorizontal" => {
                                 Some(crate::search::transform::BoardSymmetry::ColorInvertHorizontal)
                             }
                             "spatial" => {

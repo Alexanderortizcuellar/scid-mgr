@@ -269,3 +269,21 @@ Search for a positional theme and the exact tactical move played from that posit
 Bc4 bb6 Pa5 and path [bxf2+ Kxf2]
 ```
 
+### 5. `move` Keyword Expressions Inside `path` and `cql_path`
+Paths support structured `move from ... to ...` clauses alongside compact SAN moves:
+```text
+path [move from e4 to f6, move from d7 to d5]
+cql_path [move from e2 to e4, check, move from e7 to e5]
+```
+
+### 6. Consecutive Repeated Checks (`--+{3}` or `move check{3}`)
+Search for a sequence of 3 consecutive checks by any piece:
+```text
+path [--+{3}]
+# Or explicitly using move syntax:
+path [move check{3}]
+# In CQL path:
+cql_path [(move check){3}]
+```
+
+

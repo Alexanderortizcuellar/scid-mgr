@@ -1251,30 +1251,31 @@ fn symmetry_label(sym: BoardSymmetry) -> &'static str {
     }
 }
 
-pub fn explain_query(original_input: &str, query: &SearchQuery) -> QueryExplanation {
-    let canonical_dsl = query.to_dsl();
-    let is_header_only = query.is_header_only();
-    let has_symmetries = contains_symmetry(query);
-
-    let mut branches = Vec::new();
-
+fn expand_query_branches(query: &SearchQuery) -> Vec<(String, SearchQuery)> {
     match query {
         SearchQuery::Symmetric {
             query: inner,
             symmetry,
         } => {
-            let expanded_syms = symmetry.expand();
-            for sym in expanded_syms {
+            let mut branches = Vec::new();
+            for sym in symmetry.expand() {
                 let transformed = sym.transform_query(inner);
-                let dsl = transformed.to_dsl();
-                let mut fens = Vec::new();
-                collect_fens(&transformed, &mut fens);
-                branches.push(QueryBranch {
-                    symmetry_name: symmetry_label(sym).to_string(),
-                    dsl,
-                    transformed_fens: fens,
-                });
+                let label = symmetry_label(sym).to_string();
+                let sub_branches = expand_query_branches(&transformed);
+                for (sub_label, sub_q) in sub_branches {
+                    let combined_label = if sub_label == "Identity (original)"
+                        || sub_label == "Original (Identity)"
+                    {
+                        label.clone()
+                    } else if label == "Identity (original)" || label == "Original (Identity)" {
+                        sub_label
+                    } else {
+                        format!("{label} + {sub_label}")
+                    };
+                    branches.push((combined_label, sub_q));
+                }
             }
+            branches
         }
         SearchQuery::Shift { mode, query: inner } => {
             let offsets: Vec<(i8, i8)> = match mode {
@@ -1295,10 +1296,11 @@ pub fn explain_query(original_input: &str, query: &SearchQuery) -> QueryExplanat
                 }
             };
 
+            let mut branches = Vec::new();
             for (df, dr) in offsets {
                 if let Some(shifted) = crate::search::transform::shift_query(inner, df, dr) {
                     let label = if df == 0 && dr == 0 {
-                        "Original (Shift +0)".to_string()
+                        "Identity (original)".to_string()
                     } else if df == 0 {
                         format!("Shift Rank {:+}", dr)
                     } else if dr == 0 {
@@ -1306,47 +1308,235 @@ pub fn explain_query(original_input: &str, query: &SearchQuery) -> QueryExplanat
                     } else {
                         format!("Shift (File {:+}, Rank {:+})", df, dr)
                     };
-                    let dsl = shifted.to_dsl();
-                    let mut fens = Vec::new();
-                    collect_fens(&shifted, &mut fens);
-                    branches.push(QueryBranch {
-                        symmetry_name: label,
-                        dsl,
-                        transformed_fens: fens,
-                    });
+                    let sub_branches = expand_query_branches(&shifted);
+                    for (sub_label, sub_q) in sub_branches {
+                        let combined_label = if sub_label == "Identity (original)"
+                            || sub_label == "Original (Identity)"
+                        {
+                            label.clone()
+                        } else if label == "Identity (original)" || label == "Original (Identity)" {
+                            sub_label
+                        } else {
+                            format!("{label} + {sub_label}")
+                        };
+                        branches.push((combined_label, sub_q));
+                    }
                 }
             }
+            branches
         }
         SearchQuery::Position(PositionPattern::Symmetric {
             pattern: inner_pat,
             symmetry,
         }) => {
-            let expanded_syms = symmetry.expand();
-            for sym in expanded_syms {
+            let mut branches = Vec::new();
+            for sym in symmetry.expand() {
                 let transformed_pat = sym.transform_position_pattern(inner_pat);
-                let dsl = transformed_pat.to_dsl();
-                let mut fens = Vec::new();
-                if let PositionPattern::ExactFen(fen) = &transformed_pat {
-                    fens.push(fen.clone());
-                } else if let PositionPattern::PiecePlacement(pl) = &transformed_pat {
-                    fens.push(pl.clone());
-                }
-                branches.push(QueryBranch {
-                    symmetry_name: symmetry_label(sym).to_string(),
-                    dsl,
-                    transformed_fens: fens,
-                });
+                branches.push((
+                    symmetry_label(sym).to_string(),
+                    SearchQuery::Position(transformed_pat),
+                ));
+            }
+            branches
+        }
+        SearchQuery::And(subs) => {
+            if subs.is_empty() {
+                return vec![(
+                    "Identity (original)".to_string(),
+                    SearchQuery::And(Vec::new()),
+                )];
+            }
+            let sub_expanded: Vec<Vec<(String, SearchQuery)>> =
+                subs.iter().map(expand_query_branches).collect();
+
+            cartesian_product(&sub_expanded, |parts| {
+                SearchQuery::And(parts.iter().map(|q| (*q).clone()).collect())
+            })
+        }
+        SearchQuery::Or(subs) => {
+            if subs.is_empty() {
+                return vec![(
+                    "Identity (original)".to_string(),
+                    SearchQuery::Or(Vec::new()),
+                )];
+            }
+            let sub_expanded: Vec<Vec<(String, SearchQuery)>> =
+                subs.iter().map(expand_query_branches).collect();
+
+            cartesian_product(&sub_expanded, |parts| {
+                SearchQuery::Or(parts.iter().map(|q| (*q).clone()).collect())
+            })
+        }
+        SearchQuery::Not(sub) => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| (label, SearchQuery::Not(Box::new(q))))
+            .collect(),
+        SearchQuery::Parent(sub) => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| (label, SearchQuery::Parent(Box::new(q))))
+            .collect(),
+        SearchQuery::Child(sub) => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| (label, SearchQuery::Child(Box::new(q))))
+            .collect(),
+        SearchQuery::Initial(sub) => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| (label, SearchQuery::Initial(Box::new(q))))
+            .collect(),
+        SearchQuery::Terminal(sub) => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| (label, SearchQuery::Terminal(Box::new(q))))
+            .collect(),
+        SearchQuery::Play {
+            move_pattern,
+            outcome_query,
+        } => expand_query_branches(outcome_query)
+            .into_iter()
+            .map(|(label, q)| {
+                (
+                    label,
+                    SearchQuery::Play {
+                        move_pattern: move_pattern.clone(),
+                        outcome_query: Box::new(q),
+                    },
+                )
+            })
+            .collect(),
+        SearchQuery::WhatIf {
+            mutations,
+            query: sub,
+        } => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| {
+                (
+                    label,
+                    SearchQuery::WhatIf {
+                        mutations: mutations.clone(),
+                        query: Box::new(q),
+                    },
+                )
+            })
+            .collect(),
+        SearchQuery::PlyRange { range, query: sub } => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| {
+                (
+                    label,
+                    SearchQuery::PlyRange {
+                        range: range.clone(),
+                        query: Box::new(q),
+                    },
+                )
+            })
+            .collect(),
+        SearchQuery::Occurrences {
+            min,
+            max,
+            query: sub,
+        } => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| {
+                (
+                    label,
+                    SearchQuery::Occurrences {
+                        min: *min,
+                        max: *max,
+                        query: Box::new(q),
+                    },
+                )
+            })
+            .collect(),
+        SearchQuery::VariableBinding {
+            var_name,
+            domain,
+            query: sub,
+        } => expand_query_branches(sub)
+            .into_iter()
+            .map(|(label, q)| {
+                (
+                    label,
+                    SearchQuery::VariableBinding {
+                        var_name: var_name.clone(),
+                        domain: domain.clone(),
+                        query: Box::new(q),
+                    },
+                )
+            })
+            .collect(),
+        _ => vec![("Identity (original)".to_string(), query.clone())],
+    }
+}
+
+fn cartesian_product<F>(
+    sub_expanded: &[Vec<(String, SearchQuery)>],
+    combine: F,
+) -> Vec<(String, SearchQuery)>
+where
+    F: Fn(&[&SearchQuery]) -> SearchQuery,
+{
+    let mut current_results: Vec<(Vec<String>, Vec<&SearchQuery>)> = vec![(Vec::new(), Vec::new())];
+
+    for list in sub_expanded {
+        let mut next_results = Vec::new();
+        for (acc_labels, acc_queries) in &current_results {
+            for (label, query) in list {
+                let mut next_labels = acc_labels.clone();
+                next_labels.push(label.clone());
+                let mut next_queries = acc_queries.clone();
+                next_queries.push(query);
+                next_results.push((next_labels, next_queries));
             }
         }
-        _ => {
+        current_results = next_results;
+    }
+
+    current_results
+        .into_iter()
+        .map(|(labels, queries)| {
+            let meaningful_labels: Vec<String> = labels
+                .into_iter()
+                .filter(|l| l != "Identity (original)" && l != "Original (Identity)")
+                .collect();
+            let final_label = if meaningful_labels.is_empty() {
+                "Identity (original)".to_string()
+            } else {
+                meaningful_labels.join(" + ")
+            };
+            (final_label, combine(&queries))
+        })
+        .collect()
+}
+
+pub fn explain_query(original_input: &str, query: &SearchQuery) -> QueryExplanation {
+    let canonical_dsl = query.to_dsl();
+    let is_header_only = query.is_header_only();
+    let has_symmetries = contains_symmetry(query);
+
+    let raw_branches = expand_query_branches(query);
+    let mut seen_dsl = std::collections::HashSet::new();
+    let mut branches = Vec::new();
+
+    for (label, branch_query) in raw_branches {
+        let dsl = branch_query.to_dsl();
+        if seen_dsl.insert(dsl.clone()) {
             let mut fens = Vec::new();
-            collect_fens(query, &mut fens);
+            collect_fens(&branch_query, &mut fens);
             branches.push(QueryBranch {
-                symmetry_name: "Original (Identity)".to_string(),
-                dsl: canonical_dsl.clone(),
+                symmetry_name: label,
+                dsl,
                 transformed_fens: fens,
             });
         }
+    }
+
+    if branches.is_empty() {
+        let mut fens = Vec::new();
+        collect_fens(query, &mut fens);
+        branches.push(QueryBranch {
+            symmetry_name: "Identity (original)".to_string(),
+            dsl: canonical_dsl.clone(),
+            transformed_fens: fens,
+        });
     }
 
     QueryExplanation {

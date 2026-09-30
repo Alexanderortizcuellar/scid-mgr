@@ -147,12 +147,15 @@ impl<'a> QueryParser<'a> {
                 if token.is_empty() || (token.ends_with('.') && !token.starts_with('.')) {
                     continue;
                 }
-                if token == "..." || token == "--*" || token == "_*" || token == "*" {
+                let (tok_str, repeat_min, repeat_max) = parse_token_repetition(token);
+                if tok_str == "..." || tok_str == "--*" || tok_str == "_*" || tok_str == "*" {
                     steps.push(PathStep::Gap { min: 0, max: None });
-                } else if token == "--+" || token == "_+" || token == "+" {
+                } else if (tok_str == "--+" || tok_str == "_+" || tok_str == "+")
+                    && repeat_min == 1
+                    && repeat_max == Some(1)
+                {
                     steps.push(PathStep::Gap { min: 1, max: None });
                 } else {
-                    let (tok_str, repeat_min, repeat_max) = parse_token_repetition(token);
                     if let Some(pat) = super::helpers::parse_path_move_token(tok_str) {
                         validate_single_color_step(&pat, single_color, tok_str, pos)?;
                         validate_move_pattern(&pat, pos)?;
@@ -175,10 +178,22 @@ impl<'a> QueryParser<'a> {
             }));
         }
 
-        if let Some(Token::LBracket) = self.peek() {
+        let closing_token = if let Some(Token::LBracket) = self.peek() {
             self.advance();
+            Some(Token::RBracket)
+        } else if let Some(Token::LBrace) = self.peek() {
+            self.advance();
+            Some(Token::RBrace)
+        } else if let Some(Token::LParen) = self.peek() {
+            self.advance();
+            Some(Token::RParen)
+        } else {
+            None
+        };
+
+        if let Some(closing) = closing_token {
             while let Some(tok) = self.peek() {
-                if let Token::RBracket = tok {
+                if std::mem::discriminant(tok) == std::mem::discriminant(&closing) {
                     self.advance();
                     break;
                 }
@@ -233,6 +248,51 @@ impl<'a> QueryParser<'a> {
                 }
 
                 if let Token::Ident(s) = tok {
+                    let s_low = s.to_lowercase();
+                    if s_low == "move" || s_low == "legal" {
+                        let is_legal = s_low == "legal";
+                        self.advance();
+                        let move_query = self.parse_move_filter(is_legal)?;
+                        if let SearchQuery::Move(pat) = move_query {
+                            let mut repeat_min = 1;
+                            let mut repeat_max = Some(1);
+                            if let Some(Token::LBrace) = self.peek() {
+                                self.advance();
+                                let mut min = 0;
+                                let mut max = None;
+                                if let Some(Token::Number(n)) = self.peek() {
+                                    min = *n as usize;
+                                    max = Some(min);
+                                    self.advance();
+                                }
+                                if let Some(Token::Comma) = self.peek() {
+                                    self.advance();
+                                    if let Some(Token::Number(n2)) = self.peek() {
+                                        max = Some(*n2 as usize);
+                                        self.advance();
+                                    } else {
+                                        max = None;
+                                    }
+                                }
+                                if let Some(Token::RBrace) = self.peek() {
+                                    self.advance();
+                                }
+                                repeat_min = min;
+                                repeat_max = max;
+                            }
+
+                            validate_single_color_step(&pat, single_color, "move", pos)?;
+                            validate_move_pattern(&pat, pos)?;
+                            moves.push(pat.clone());
+                            steps.push(PathStep::Move {
+                                pattern: pat,
+                                repeat_min,
+                                repeat_max,
+                            });
+                        }
+                        continue;
+                    }
+
                     let mut full_token = s.clone();
                     self.advance();
 
@@ -378,7 +438,10 @@ impl<'a> QueryParser<'a> {
                         steps.push(PathStep::Gap { min: 0, max: None });
                         continue;
                     }
-                    if full_token == "--+" || full_token == "_+" || full_token == "+" {
+                    if (full_token == "--+" || full_token == "_+" || full_token == "+")
+                        && repeat_min == 1
+                        && repeat_max == Some(1)
+                    {
                         steps.push(PathStep::Gap { min: 1, max: None });
                         continue;
                     }
@@ -605,6 +668,26 @@ impl<'a> QueryParser<'a> {
                     return Ok(CqlPathConstituent::Filter(Box::new(SearchQuery::Position(
                         PositionPattern::Turn(Color::Black),
                     ))));
+                }
+                "move" | "legal" => {
+                    let is_legal = id_low == "legal";
+                    self.advance();
+                    let move_query = self.parse_move_filter(is_legal)?;
+                    if let SearchQuery::Move(pat) = move_query {
+                        validate_single_color_step(&pat, single_color, "move", pos)?;
+                        validate_move_pattern(&pat, pos)?;
+                        let mut constituent = CqlPathConstituent::Move(pat);
+                        if let Some((rep_min, rep_max)) =
+                            self.parse_cql_path_repetition_quantifier()
+                        {
+                            constituent = CqlPathConstituent::Repetition {
+                                constituent: Box::new(constituent),
+                                min: rep_min,
+                                max: rep_max,
+                            };
+                        }
+                        return Ok(constituent);
+                    }
                 }
                 _ => {}
             }
@@ -1317,7 +1400,22 @@ impl<'a> QueryParser<'a> {
             }
         }
 
-        // 4. Otherwise parse as a Move token
+        // 4. Check for move or legal keyword
+        if let Some(Token::Ident(ref id)) = self.peek() {
+            let id_low = id.to_lowercase();
+            if id_low == "move" || id_low == "legal" {
+                let is_legal = id_low == "legal";
+                self.advance();
+                let move_query = self.parse_move_filter(is_legal)?;
+                if let SearchQuery::Move(pat) = move_query {
+                    validate_single_color_step(&pat, single_color, "move", pos)?;
+                    validate_move_pattern(&pat, pos)?;
+                    return Ok(CqlPathConstituent::Move(pat));
+                }
+            }
+        }
+
+        // 5. Otherwise parse as a Move token
         let tok = self.peek().cloned().ok_or_else(|| {
             ParseError::new("Unexpected end of tokens in line filter".to_string(), pos)
         })?;

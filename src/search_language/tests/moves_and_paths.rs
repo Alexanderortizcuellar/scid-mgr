@@ -927,3 +927,57 @@ fn test_move_to_empty_and_universal_square_syntax() {
         "Opera game contains Bishop moves to empty squares"
     );
 }
+
+#[test]
+fn test_path_and_cql_path_move_syntax_and_round_trip() {
+    use shakmaty::Square;
+
+    // 1. Path with move from ... to ... syntax in brackets
+    let q_path_moves =
+        QueryParser::parse_str("path [move from e4 to f6, move from d7 to d5]").unwrap();
+    if let SearchQuery::Path(ref pat) = q_path_moves {
+        assert_eq!(pat.moves.len(), 2);
+        assert_eq!(pat.moves[0].from, Some(Square::E4));
+        assert_eq!(pat.moves[0].to, Some(Square::F6));
+        assert_eq!(pat.moves[1].from, Some(Square::D7));
+        assert_eq!(pat.moves[1].to, Some(Square::D5));
+    } else {
+        panic!("Expected Path query");
+    }
+
+    // 2. Round-trip explain test for path
+    let exp_path = QueryParser::explain("path [move from e4 to f6, move from d7 to d5]").unwrap();
+    let re_parsed = QueryParser::parse_str(&exp_path.canonical_dsl).unwrap();
+    assert_eq!(q_path_moves, re_parsed);
+
+    // 3. CQL Path with move clauses and state filters
+    let q_cql_path =
+        QueryParser::parse_str("cql_path [move from e2 to e4, check, move from e7 to e5]").unwrap();
+    if let SearchQuery::CqlPath(ref pat) = q_cql_path {
+        assert_eq!(pat.constituents.len(), 3);
+        assert!(matches!(pat.constituents[0], CqlPathConstituent::Move(_)));
+        assert!(matches!(pat.constituents[1], CqlPathConstituent::Filter(_)));
+        assert!(matches!(pat.constituents[2], CqlPathConstituent::Move(_)));
+    } else {
+        panic!("Expected CqlPath query");
+    }
+
+    // 4. Round-trip explain test for cql_path
+    let exp_cql =
+        QueryParser::explain("cql_path [move from e2 to e4, check, move from e7 to e5]").unwrap();
+    let re_parsed_cql = QueryParser::parse_str(&exp_cql.canonical_dsl).unwrap();
+    assert_eq!(q_cql_path, re_parsed_cql);
+
+    // 5. Sequence of 3 checks with --+{3} in path and cql_path
+    let exp_path_checks = QueryParser::explain("path [--+{3}]").unwrap();
+    assert_eq!(exp_path_checks.canonical_dsl, "path { move check{3} }");
+
+    let exp_cql_path_checks = QueryParser::explain("cql_path [--+{3}]").unwrap();
+    assert_eq!(
+        exp_cql_path_checks.canonical_dsl,
+        "cql_path { move check{3} }"
+    );
+
+    let exp_path_str_checks = QueryParser::explain("path \"--+{3}\"").unwrap();
+    assert_eq!(exp_path_str_checks.canonical_dsl, "path { move check{3} }");
+}
