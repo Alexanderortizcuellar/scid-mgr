@@ -3,6 +3,7 @@ use crate::db::ScidDatabaseWrapper;
 use crate::endgame_index::serializer::{resolve_companion_feat_path, MmapFeatureIndex};
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::PositionIndex;
+use crate::search_booster::{resolve_companion_booster_path, MmapBoostIndex};
 use crate::tree_index::TreeIndex;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,8 @@ pub struct DatabaseCheckReport {
     pub deleted_games: usize,
     pub players_count: usize,
     pub events_count: usize,
+    #[serde(default)]
+    pub booster_index: Option<IndexCheckReport>,
     pub position_index: Option<IndexCheckReport>,
     pub tree_index: Option<IndexCheckReport>,
     pub hot_index: Option<IndexCheckReport>,
@@ -76,7 +79,73 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
             )
         };
 
-    // 1. Check Position Index (.pos.idx)
+    // 1. Check Search Booster Index (.boost.idx)
+    let booster_idx_path = resolve_companion_booster_path(db_path);
+    let booster_idx_exists = booster_idx_path.exists();
+
+    let (booster_report, booster_diag_struct) = if booster_idx_exists {
+        match MmapBoostIndex::open(&booster_idx_path) {
+            Ok(idx) => {
+                let indexed_games = idx.header.db_game_count as usize;
+                let in_sync = indexed_games == total_games;
+                let file_size = std::fs::metadata(&booster_idx_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let status_message = if in_sync {
+                    "Synchronized (Up to date)".to_string()
+                } else {
+                    format!(
+                        "Out of sync: indexed {} games vs database {} games (Rebuild recommended)",
+                        indexed_games, total_games
+                    )
+                };
+
+                let detailed_diagnostics = if detailed {
+                    Some(serde_json::json!({
+                        "total_plies": idx.header.total_plies,
+                        "bytes_per_game": if indexed_games > 0 { file_size as f64 / indexed_games as f64 } else { 0.0 }
+                    }))
+                } else {
+                    None
+                };
+
+                (
+                    Some(IndexCheckReport {
+                        path: booster_idx_path.to_string_lossy().to_string(),
+                        exists: true,
+                        valid: true,
+                        in_sync,
+                        indexed_games,
+                        db_games: total_games,
+                        unique_positions: 0,
+                        file_size_bytes: file_size,
+                        status_message,
+                        detailed_diagnostics,
+                    }),
+                    Some((idx.header.total_plies, file_size)),
+                )
+            }
+            Err(e) => (
+                Some(IndexCheckReport {
+                    path: booster_idx_path.to_string_lossy().to_string(),
+                    exists: true,
+                    valid: false,
+                    in_sync: false,
+                    indexed_games: 0,
+                    db_games: total_games,
+                    unique_positions: 0,
+                    file_size_bytes: 0,
+                    status_message: format!("Corrupted or incompatible header: {}", e),
+                    detailed_diagnostics: None,
+                }),
+                None,
+            ),
+        }
+    } else {
+        (None, None)
+    };
+
+    // 2. Check Position Index (.pos.idx)
     let pos_idx_res = PositionIndex::load(db_path);
     let pos_idx_path = db_path.with_extension("pos.idx");
     let pos_idx_exists = pos_idx_path.exists()
@@ -347,7 +416,8 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         (None, None)
     };
 
-    let all_in_sync = pos_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
+    let all_in_sync = booster_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
+        && pos_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
         && tree_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
         && hot_report.as_ref().map(|r| r.in_sync).unwrap_or(true)
         && feat_report.as_ref().map(|r| r.in_sync).unwrap_or(true);
@@ -369,6 +439,7 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
         deleted_games,
         players_count,
         events_count,
+        booster_index: booster_report,
         position_index: pos_report,
         tree_index: tree_report,
         hot_index: hot_report,
@@ -399,7 +470,38 @@ pub fn handle_check(db_path: &Path, detailed: bool, json: bool) -> Result<()> {
 
     println!(" Companion Indexes:");
 
-    // 1. Position Index
+    // 1. Search Booster (.boost.idx)
+    if let Some(boost) = &report.booster_index {
+        if boost.valid {
+            let status_tag = if boost.in_sync { "[OK]" } else { "[WARN]" };
+            println!(
+                "  {} ⚡ Search Booster (.boost.idx):\n       Status:           {}\n       Games Indexed:    {}\n       Size:             {:.2} MB",
+                status_tag,
+                boost.status_message,
+                boost.indexed_games,
+                boost.file_size_bytes as f64 / 1_048_576.0
+            );
+            if let Some((plies, size)) = booster_diag_struct {
+                let bpg = if boost.indexed_games > 0 {
+                    size as f64 / boost.indexed_games as f64
+                } else {
+                    0.0
+                };
+                println!("       Total Plies:      {} ({:.1} B/game)", plies, bpg);
+            }
+        } else {
+            println!(
+                "  [ERROR] ⚡ Search Booster (.boost.idx):\n       Status: {}",
+                boost.status_message
+            );
+        }
+    } else {
+        println!(
+            "  [--] ⚡ Search Booster (.boost.idx): Not generated (Build with 'scid-mgr build booster <DB>')"
+        );
+    }
+
+    // 2. Position Index
     if let Some(pos) = &report.position_index {
         if pos.valid {
             let status_tag = if pos.in_sync { "[OK]" } else { "[WARN]" };

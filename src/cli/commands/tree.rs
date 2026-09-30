@@ -76,10 +76,80 @@ pub fn handle_tree(
     _all_game_ids: bool,
 ) -> Result<()> {
     let fen_str = fen.as_deref().unwrap_or("");
-    let mut tree_report = TreeIndex::load(db_path)
-        .ok()
-        .and_then(|idx| idx.query_tree(fen_str));
+    let mut tree_report = None;
 
+    // 1. Try ultra-fast dynamic calculation from .boost.idx
+    let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+            let lower = db_path.to_string_lossy().to_lowercase();
+            let max_sample_ids = if _all_game_ids {
+                None
+            } else {
+                Some(_sample_games)
+            };
+            if lower.ends_with(".pgn") {
+                if let Ok(pgn_db) = PgnDatabaseWrapper::open(db_path) {
+                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                        pgn_db.entries.get(gid).map(|e| {
+                            let res = match e.result {
+                                1 => 1,
+                                2 => 2,
+                                3 => 3,
+                                _ => 0,
+                            };
+                            let year = if e.date > 0 {
+                                Some((e.date / 10000) as u16)
+                            } else {
+                                None
+                            };
+                            crate::search_booster::BoostGameMeta::new(
+                                res,
+                                e.white_elo,
+                                e.black_elo,
+                                year,
+                            )
+                        })
+                    };
+                    tree_report = evaluator
+                        .calculate_opening_tree(fen_str, None, max_sample_ids, Some(meta_lookup))
+                        .ok()
+                        .flatten();
+                }
+            } else if let Ok(scid_db) = ScidDatabaseWrapper::open(db_path) {
+                let entries = scid_db.entries();
+                let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                    entries.get(gid).map(|e| {
+                        let year = if e.date > 0 {
+                            Some((e.date / 10000) as u16)
+                        } else {
+                            None
+                        };
+                        crate::search_booster::BoostGameMeta::new(
+                            e.result,
+                            e.white_elo,
+                            e.black_elo,
+                            year,
+                        )
+                    })
+                };
+                tree_report = evaluator
+                    .calculate_opening_tree(fen_str, None, max_sample_ids, Some(meta_lookup))
+                    .ok()
+                    .flatten();
+            }
+        }
+    }
+
+    // 2. Fallback to legacy .tree.idx
+    if tree_report.is_none() {
+        tree_report = TreeIndex::load(db_path)
+            .ok()
+            .and_then(|idx| idx.query_tree(fen_str));
+    }
+
+    // 3. Fallback to dynamic replay scan
     if tree_report.is_none() {
         let lower = db_path.to_string_lossy().to_lowercase();
         if lower.ends_with(".pgn") {

@@ -28,7 +28,19 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum BuildCommands {
-    /// Build companion .pos.idx position index for ultra-fast candidate searches
+    /// [Recommended] Build unified .boost.idx search booster for ultra-fast position searches, opening trees, and continuations
+    #[command(name = "booster", aliases = ["boost", "search-booster"])]
+    Booster {
+        /// Path to .si5, .si4, or .pgn database
+        #[arg(value_name = "DB_PATH")]
+        db_path: PathBuf,
+
+        /// Custom output path for .boost.idx file (optional)
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// [Legacy - consider using booster] Build companion .pos.idx position index for candidate searches
     #[command(name = "pos-idx", alias = "pos")]
     PosIdx {
         /// Path to .si5, .si4, or .pgn database
@@ -52,7 +64,7 @@ pub enum BuildCommands {
         threads: Option<usize>,
     },
 
-    /// Build companion .tree.idx opening tree statistics index
+    /// [Legacy - consider using booster] Build companion .tree.idx opening tree statistics index
     #[command(name = "tree", alias = "tree-idx")]
     Tree {
         /// Path to .si5, .si4, or .pgn database
@@ -72,7 +84,7 @@ pub enum BuildCommands {
         threads: Option<usize>,
     },
 
-    /// Build companion .hot.idx common continuations graph index
+    /// [Legacy - consider using booster] Build companion .hot.idx common continuations graph index
     #[command(name = "continuations", aliases = ["hot", "cont", "hot-idx", "cont-idx"])]
     Continuations {
         /// Path to .si5, .si4, or .pgn database
@@ -100,19 +112,7 @@ pub enum BuildCommands {
         catalog: Option<PathBuf>,
     },
 
-    /// Build companion .boost.idx 16-bit flat move stream search booster
-    #[command(name = "booster", aliases = ["boost", "search-booster"])]
-    Booster {
-        /// Path to .si5, .si4, or .pgn database
-        #[arg(value_name = "DB_PATH")]
-        db_path: PathBuf,
-
-        /// Custom output path for .boost.idx file (optional)
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Build both companion indexes (.pos.idx and .tree.idx)
+    /// [Legacy] Build companion indexes (.pos.idx and .tree.idx)
     #[command(name = "all")]
     All {
         /// Path to .si5, .si4, or .pgn database

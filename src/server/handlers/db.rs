@@ -3,6 +3,7 @@ use crate::db::{GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
 use crate::endgame_index::serializer::MmapFeatureIndex;
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::{IndexStatus, PositionIndex};
+use crate::search_booster::MmapBoostIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use crate::tree_index::TreeIndex;
 use std::io::{self, Write};
@@ -38,6 +39,18 @@ pub fn handle_open_db(
             Ok(pgn) => {
                 let total_games = pgn.game_count();
                 let pgn_path_str = pgn.pgn_path.to_string_lossy().to_string();
+
+                let (boost_status, boost_header_opt) =
+                    MmapBoostIndex::check_status(path, total_games);
+                let boost_status_str = match boost_status {
+                    IndexStatus::Valid => "valid",
+                    IndexStatus::Outdated => "outdated",
+                    IndexStatus::Missing => "missing",
+                };
+                let boost_plies = boost_header_opt
+                    .as_ref()
+                    .map(|h| h.total_plies)
+                    .unwrap_or(0);
 
                 let (idx_status, header_opt) = PositionIndex::check_status(path, total_games);
                 let status_str = match idx_status {
@@ -96,6 +109,9 @@ pub fn handle_open_db(
                             "sites_count": 0,
                             "rounds_count": 0,
                             "path": pgn_path_str,
+                            "booster_index_status": boost_status_str,
+                            "booster_index_plies": boost_plies,
+                            "has_booster": boost_status == IndexStatus::Valid,
                             "pos_index_status": status_str,
                             "pos_index_unique_positions": pos_count,
                             "tree_index_status": tree_status_str,
@@ -105,6 +121,9 @@ pub fn handle_open_db(
                             "feat_index_status": feat_status_str,
                             "feat_index_features": feat_count,
                         },
+                        "booster_index_status": boost_status_str,
+                        "booster_index_plies": boost_plies,
+                        "has_booster": boost_status == IndexStatus::Valid,
                         "pos_index_status": status_str,
                         "pos_index_unique_positions": pos_count,
                         "tree_index_status": tree_status_str,
@@ -131,6 +150,18 @@ pub fn handle_open_db(
             Ok(db) => {
                 let total_games = db.game_count();
                 let mut stats = serde_json::to_value(db.stats()).unwrap_or_default();
+
+                let (boost_status, boost_header_opt) =
+                    MmapBoostIndex::check_status(path, total_games);
+                let boost_status_str = match boost_status {
+                    IndexStatus::Valid => "valid",
+                    IndexStatus::Outdated => "outdated",
+                    IndexStatus::Missing => "missing",
+                };
+                let boost_plies = boost_header_opt
+                    .as_ref()
+                    .map(|h| h.total_plies)
+                    .unwrap_or(0);
 
                 let (idx_status, header_opt) = PositionIndex::check_status(path, total_games);
                 let status_str = match idx_status {
@@ -176,6 +207,18 @@ pub fn handle_open_db(
 
                 if let Some(obj) = stats.as_object_mut() {
                     obj.insert(
+                        "booster_index_status".to_string(),
+                        serde_json::json!(boost_status_str),
+                    );
+                    obj.insert(
+                        "booster_index_plies".to_string(),
+                        serde_json::json!(boost_plies),
+                    );
+                    obj.insert(
+                        "has_booster".to_string(),
+                        serde_json::json!(boost_status == IndexStatus::Valid),
+                    );
+                    obj.insert(
                         "pos_index_status".to_string(),
                         serde_json::json!(status_str),
                     );
@@ -212,6 +255,9 @@ pub fn handle_open_db(
                     status: "ok".to_string(),
                     data: Some(serde_json::json!({
                         "stats": stats,
+                        "booster_index_status": boost_status_str,
+                        "booster_index_plies": boost_plies,
+                        "has_booster": boost_status == IndexStatus::Valid,
                         "pos_index_status": status_str,
                         "pos_index_unique_positions": pos_count,
                         "tree_index_status": tree_status_str,
@@ -302,6 +348,22 @@ pub fn handle_info_stats(
         }
     };
 
+    let (db_path, total_games) = match db {
+        DatabaseBackend::Scid(s) => (s.index_path().to_path_buf(), s.game_count()),
+        DatabaseBackend::Pgn(p) => (p.pgn_path.clone(), p.game_count()),
+    };
+
+    let (boost_status, boost_header_opt) = MmapBoostIndex::check_status(&db_path, total_games);
+    let boost_status_str = match boost_status {
+        IndexStatus::Valid => "valid",
+        IndexStatus::Outdated => "outdated",
+        IndexStatus::Missing => "missing",
+    };
+    let boost_plies = boost_header_opt
+        .as_ref()
+        .map(|h| h.total_plies)
+        .unwrap_or(0);
+
     match db {
         DatabaseBackend::Scid(s) => {
             let stats = s.stats();
@@ -318,6 +380,9 @@ pub fn handle_info_stats(
                     "events_count": stats.events_count,
                     "sites_count": stats.sites_count,
                     "rounds_count": stats.rounds_count,
+                    "booster_index_status": boost_status_str,
+                    "booster_index_plies": boost_plies,
+                    "has_booster": boost_status == IndexStatus::Valid,
                 })),
                 error: None,
             }
@@ -337,7 +402,10 @@ pub fn handle_info_stats(
                         "events_count": 0,
                         "sites_count": 0,
                         "rounds_count": 0,
-                        "path": p.pgn_path.to_string_lossy().to_string()
+                        "path": p.pgn_path.to_string_lossy().to_string(),
+                        "booster_index_status": boost_status_str,
+                        "booster_index_plies": boost_plies,
+                        "has_booster": boost_status == IndexStatus::Valid,
                     },
                     "format": "pgn",
                     "total_games": total,
@@ -347,6 +415,9 @@ pub fn handle_info_stats(
                     "events_count": 0,
                     "sites_count": 0,
                     "rounds_count": 0,
+                    "booster_index_status": boost_status_str,
+                    "booster_index_plies": boost_plies,
+                    "has_booster": boost_status == IndexStatus::Valid,
                 })),
                 error: None,
             }

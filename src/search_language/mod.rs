@@ -1,6 +1,6 @@
-//! # Chess Search & Query Engine (`scid_mgr::search`)
+//! # Chess Query Language & DSL Engine (`scid_mgr::search_language`)
 //!
-//! A modular, CQL-inspired chess search engine for pattern matching,
+//! A modular, CQL-inspired chess query language engine for pattern matching,
 //! move-sequence paths, board configurations, and metadata filtering.
 
 pub mod annotation;

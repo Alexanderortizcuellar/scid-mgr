@@ -139,6 +139,17 @@ Builds or rebuilds the `.hot.idx` binary graph in the background across worker t
   - `min_games`: `number` (optional minimum game occurrences, default: `2`)
 - **Returns**: `{ status: "ok", output_path, total_games, total_nodes, total_edges, elapsed_ms }`
 
+### `booster_status`
+Checks the companion `.boost.idx` 16-bit Search Booster status (`valid`, `outdated`, `missing`), indexed plies, and game counts.
+- **Returns**: `{ status: "valid" | "outdated" | "missing", path: string, header?: { version, db_game_count, total_plies, ... }, loaded: boolean, db_path: string }`
+
+### `build_booster`
+Constructs or rebuilds the 16-bit uncompressed `.boost.idx` Search Booster accelerator for SCID (`.si5`/`.si4`) or PGN databases in parallel across worker threads. Emits streaming `build_booster_progress` events.
+- **Params**:
+  - `output_path`: `string` (optional custom output path)
+  - `threads`: `number` (optional worker thread count)
+- **Returns**: `{ status: "ok", output_path: string, total_games: number, total_plies: number, elapsed_ms: number }`
+
 ### `build booster` (CLI)
 Builds the 16-bit uncompressed `.boost.idx` Search Booster accelerator for SCID (`.si5`/`.si4`) or PGN databases.
 - **CLI Usage**: `scid-mgr build booster <DB_PATH> [-o <OUTPUT_PATH>]`

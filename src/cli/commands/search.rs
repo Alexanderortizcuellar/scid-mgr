@@ -194,6 +194,72 @@ pub fn handle_explain(query: &str, json: bool) -> Result<()> {
 
 pub fn handle_search_pos(db_path: &Path, fen: &str, max_ply: usize) -> Result<()> {
     let path_str = db_path.to_string_lossy().to_lowercase();
+    let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            let start = std::time::Instant::now();
+            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+            if let Ok(matches) = evaluator.search_position(fen, Some(max_ply)) {
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let total_games = boost_idx.game_count();
+
+                let summaries = if path_str.ends_with(".pgn") {
+                    let pgn_db = PgnDatabaseWrapper::open(db_path)?;
+                    let mut summs = std::collections::HashMap::new();
+                    for m in matches.iter().take(50) {
+                        let g = pgn_db.get_summary(m.game_id);
+                        summs.insert(m.game_id, (g.white, g.black, g.result, g.date));
+                    }
+                    summs
+                } else {
+                    let db = ScidDatabaseWrapper::open(db_path)?;
+                    let mut summs = std::collections::HashMap::new();
+                    for m in matches.iter().take(50) {
+                        if let Some(g) = db.get_game_summary(m.game_id) {
+                            summs.insert(m.game_id, (g.white, g.black, g.result, g.date));
+                        }
+                    }
+                    summs
+                };
+
+                println!(
+                    "⚡ Search Booster position scan completed in {:.2} ms across {} games:",
+                    elapsed_ms, total_games
+                );
+                println!("Found {} matching games.\n", matches.len());
+
+                println!(
+                    "{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
+                    "ID", "Ply", "White", "Black", "Result", "Date"
+                );
+                println!(
+                    "{:-<6}-+-{:-<5}-+-{:-<20}-+-{:-<20}-+-{:-<7}-+-{:-<10}",
+                    "", "", "", "", "", ""
+                );
+
+                for m in matches.iter().take(50) {
+                    if let Some((w, b, r, d)) = summaries.get(&m.game_id) {
+                        let first_ply = m.matching_plies.first().copied().unwrap_or(0);
+                        println!(
+                            "{:<6} | {:<5} | {:<20} | {:<20} | {:<7} | {:<10}",
+                            m.game_id,
+                            first_ply,
+                            truncate_str(w, 20),
+                            truncate_str(b, 20),
+                            r,
+                            d
+                        );
+                    }
+                }
+                if matches.len() > 50 {
+                    println!("... (showing first 50 of {} matches)", matches.len());
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let (result, summaries) = if path_str.ends_with(".pgn") {
         let pgn_db = PgnDatabaseWrapper::open(db_path)?;
         let res = pgn_db.search_position(fen, None, None, Some(max_ply), |_, _, _| {})?;

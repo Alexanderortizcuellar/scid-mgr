@@ -334,3 +334,226 @@ fn test_boost_index_build_and_search_scid() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("games.pgn");
+    std::fs::write(&pgn_path, TEST_PGN)?;
+
+    let booster_path = resolve_companion_booster_path(&pgn_path);
+    BoostIndexBuilder::build_for_pgn(&pgn_path, Some(booster_path.clone()), None)?;
+
+    let index = MmapBoostIndex::open(&booster_path)?;
+    let evaluator = BoostSearchEvaluator::new(&index);
+
+    // Mock metadata provider for the 4 games:
+    // Game 0: London Immortal (1-0, 2600 / 2500, 1851)
+    // Game 1: Paris Opera (1-0, 2700 / 2400, 1858)
+    // Game 2: Sicilian (1/2-1/2, 2300 / 2300, 2024)
+    // Game 3: Promo (*)
+    let meta_lookup = |gid: usize| -> Option<scid_mgr::search_booster::BoostGameMeta> {
+        match gid {
+            0 => Some(scid_mgr::search_booster::BoostGameMeta::new(
+                1,
+                2600,
+                2500,
+                Some(1851),
+            )),
+            1 => Some(scid_mgr::search_booster::BoostGameMeta::new(
+                1,
+                2700,
+                2400,
+                Some(1858),
+            )),
+            2 => Some(scid_mgr::search_booster::BoostGameMeta::new(
+                3,
+                2300,
+                2300,
+                Some(2024),
+            )),
+            3 => Some(scid_mgr::search_booster::BoostGameMeta::new(
+                0,
+                0,
+                0,
+                Some(2026),
+            )),
+            _ => None,
+        }
+    };
+
+    // 1. Opening Tree for starting position
+    let tree_rep = evaluator
+        .calculate_opening_tree("", None, Some(10), Some(meta_lookup))?
+        .expect("Tree report should exist for start position");
+
+    assert_eq!(tree_rep.total_games, 4);
+    assert_eq!(tree_rep.white_wins, 2);
+    assert_eq!(tree_rep.draws, 1);
+    assert_eq!(tree_rep.moves.len(), 1); // Only 1. e4 was played in all 4 games
+
+    let e4_move = &tree_rep.moves[0];
+    assert_eq!(e4_move.san, "e4");
+    assert_eq!(e4_move.uci, "e2e4");
+    assert_eq!(e4_move.total_games, 4);
+    assert_eq!(e4_move.white_wins, 2);
+    assert_eq!(e4_move.draws, 1);
+    assert_eq!(e4_move.white_pct, 50.0);
+    assert_eq!(e4_move.draw_pct, 25.0);
+    assert_eq!(e4_move.black_pct, 0.0);
+    assert_eq!(e4_move.avg_white_elo, Some(2533)); // (2600 + 2700 + 2300) / 3 = 2533
+    assert_eq!(e4_move.last_played, Some("2026".to_string()));
+
+    // 2. Opening Tree after 1. e4
+    let after_e4_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+    let e4_tree = evaluator
+        .calculate_opening_tree(after_e4_fen, None, Some(10), Some(meta_lookup))?
+        .expect("Tree report should exist after 1. e4");
+
+    assert_eq!(e4_tree.total_games, 4);
+    assert_eq!(e4_tree.moves.len(), 3); // e5 (2), c5 (1), d5 (1)
+    assert_eq!(e4_tree.moves[0].san, "e5");
+    assert_eq!(e4_tree.moves[0].total_games, 2);
+    assert_eq!(e4_tree.moves[0].white_wins, 2);
+    assert_eq!(e4_tree.moves[0].white_pct, 100.0);
+
+    // 3. Dynamic Continuation Queries
+    let query = scid_mgr::continuation_index::ContinuationQuery {
+        position: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string(),
+        max_depth: 4,
+        max_lines: 5,
+        min_games: 1,
+        min_percentage: 0.0,
+        hot_idx: None,
+        pos_idx: None,
+    };
+
+    let cont_res = evaluator
+        .calculate_continuations(&query, None, Some(meta_lookup))?
+        .expect("Continuation result should exist");
+
+    assert_eq!(cont_res.total_games_processed, 4);
+    assert_eq!(cont_res.games_reaching_position, 4);
+    assert!(!cont_res.lines.is_empty());
+
+    // Check top continuation line (e4)
+    let top_line = &cont_res.lines[0];
+    assert!(top_line.moves[0] == "e4");
+    assert!(top_line.games >= 1);
+
+    Ok(())
+}
+
+#[test]
+fn test_server_booster_json_rpc() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("server_booster_test.pgn");
+    std::fs::write(&pgn_path, TEST_PGN)?;
+
+    let mut current_db = None;
+    let mut current_pos_index = None;
+    let mut current_tree_index = None;
+    let mut session_mgr = scid_mgr::server::search_session::SearchSessionManager::new();
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(2).build()?;
+
+    // 1. Open database via RPC
+    let open_req = scid_mgr::server::RequestMessage {
+        id: Some(1),
+        command: "open".to_string(),
+        params: serde_json::json!({ "path": pgn_path.to_str().unwrap() }),
+    };
+    let open_resp = scid_mgr::server::handlers::db::handle_open_db(
+        &open_req,
+        &mut current_db,
+        &mut current_pos_index,
+        &mut current_tree_index,
+    );
+    assert_eq!(open_resp.status, "ok");
+    let open_data = open_resp.data.unwrap();
+    assert_eq!(open_data["booster_index_status"], "missing");
+
+    // 2. Build Booster via RPC
+    let build_req = scid_mgr::server::RequestMessage {
+        id: Some(2),
+        command: "build_booster".to_string(),
+        params: serde_json::json!({}),
+    };
+    let build_resp =
+        scid_mgr::server::handlers::index::handle_build_booster(&build_req, &current_db);
+    assert_eq!(build_resp.status, "ok");
+    let build_data = build_resp.data.unwrap();
+    assert_eq!(build_data["status"], "valid");
+    assert_eq!(build_data["games_indexed"], 4);
+
+    // 3. Check Booster Status via RPC
+    let status_req = scid_mgr::server::RequestMessage {
+        id: Some(3),
+        command: "booster_status".to_string(),
+        params: serde_json::json!({}),
+    };
+    let status_resp =
+        scid_mgr::server::handlers::index::handle_booster_status(&status_req, &current_db);
+    assert_eq!(status_resp.status, "ok");
+    let status_data = status_resp.data.unwrap();
+    assert_eq!(status_data["status"], "valid");
+
+    // 4. Position Search via RPC (should auto-use booster)
+    let pos_req = scid_mgr::server::RequestMessage {
+        id: Some(4),
+        command: "search_position".to_string(),
+        params: serde_json::json!({
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        }),
+    };
+    let pos_resp = scid_mgr::server::handlers::position::handle_search_position(
+        &pos_req,
+        &current_db,
+        &mut current_pos_index,
+        &mut session_mgr,
+        &thread_pool,
+    );
+    assert_eq!(pos_resp.status, "ok");
+    let pos_data = pos_resp.data.unwrap();
+    assert_eq!(pos_data["engine"], "search_booster");
+    assert_eq!(pos_data["matched_count"], 4);
+
+    // 5. Opening Tree via RPC (should auto-use booster)
+    let tree_req = scid_mgr::server::RequestMessage {
+        id: Some(5),
+        command: "opening_tree".to_string(),
+        params: serde_json::json!({
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        }),
+    };
+    let tree_resp = scid_mgr::server::handlers::tree::handle_opening_tree(
+        &tree_req,
+        &current_db,
+        &mut current_pos_index,
+        &mut current_tree_index,
+    );
+    assert_eq!(tree_resp.status, "ok");
+    let tree_data = tree_resp.data.unwrap();
+    assert_eq!(tree_data["total_games"], 4);
+    assert_eq!(tree_data["moves"][0]["san"], "e4");
+
+    // 6. Continuations via RPC (should auto-use booster)
+    let cont_req = scid_mgr::server::RequestMessage {
+        id: Some(6),
+        command: "continuations".to_string(),
+        params: serde_json::json!({
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "max_depth": 4
+        }),
+    };
+    let cont_resp = scid_mgr::server::handlers::continuations::handle_continuations(
+        &cont_req,
+        &current_db,
+        &mut current_pos_index,
+    );
+    assert_eq!(cont_resp.status, "ok");
+    let cont_data = cont_resp.data.unwrap();
+    assert_eq!(cont_data["total_games_processed"], 4);
+    assert!(!cont_data["lines"].as_array().unwrap().is_empty());
+
+    Ok(())
+}

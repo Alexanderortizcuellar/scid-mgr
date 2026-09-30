@@ -1,10 +1,18 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use shakmaty::fen::Fen;
-use shakmaty::{CastlingMode, Chess, Position, Role, Square};
+use shakmaty::zobrist::{Zobrist64, ZobristHash};
+use shakmaty::{CastlingMode, Chess, EnPassantMode, Position, Role, Square};
+use std::collections::HashMap;
+
+use crate::continuation_index::{
+    format_continuation_moves, parse_fen_fullmove, ContinuationLine, ContinuationQuery,
+    ContinuationResult,
+};
+use crate::tree_index::{OpeningTreeMoveView, OpeningTreeReport};
 
 use super::codec::MmapBoostIndex;
-use super::types::BoostMove;
+use super::types::{BoostGameMeta, BoostMove};
 
 /// Lightweight 64-byte scratchpad board for sub-nanosecond move application
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,5 +348,470 @@ impl<'a> BoostSearchEvaluator<'a> {
         sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         Ok(sorted)
+    }
+
+    /// Calculates a complete, dynamic opening tree report from the booster stream with rich W/D/L stats, ELO averages, and sample games
+    pub fn calculate_opening_tree<F>(
+        &self,
+        target_fen: &str,
+        target_game_ids: Option<&[usize]>,
+        max_sample_ids: Option<usize>,
+        meta_lookup: Option<F>,
+    ) -> Result<Option<OpeningTreeReport>>
+    where
+        F: Fn(usize) -> Option<BoostGameMeta> + Sync + Send,
+    {
+        let fen_to_parse = if target_fen.trim().is_empty() {
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        } else {
+            target_fen.trim()
+        };
+
+        let fen: Fen = fen_to_parse
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid FEN '{}': {}", fen_to_parse, e))?;
+        let target_pos: Chess = fen
+            .into_position(CastlingMode::Standard)
+            .map_err(|e| anyhow::anyhow!("Invalid chess position from FEN: {}", e))?;
+
+        let target_board = chess_to_board_array(&target_pos);
+        let target_hash_val: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
+        let target_hash = target_hash_val.0;
+
+        let sample_cap = max_sample_ids.unwrap_or(20);
+
+        #[derive(Debug, Clone, Default)]
+        struct MoveStatsAcc {
+            total_games: u32,
+            white_wins: u32,
+            draws: u32,
+            black_wins: u32,
+            white_elo_sum: u64,
+            black_elo_sum: u64,
+            elo_game_count: u32,
+            max_year: Option<u16>,
+            sample_game_ids: Vec<u32>,
+        }
+
+        #[derive(Debug, Clone, Default)]
+        struct TreeAcc {
+            total_games: u32,
+            white_wins: u32,
+            draws: u32,
+            black_wins: u32,
+            moves: HashMap<u16, MoveStatsAcc>,
+            sample_game_ids: Vec<u32>,
+        }
+
+        let total_games_in_index = self.index.game_count();
+
+        let process_game = |gid: usize, acc: &mut TreeAcc| {
+            let _entry = match self.index.get_game_entry(gid) {
+                Some(e) if !e.is_deleted() => e,
+                _ => return,
+            };
+            let moves = match self.index.get_game_moves(gid) {
+                Some(m) => m,
+                None => return,
+            };
+
+            let mut replay = FastReplayState::new();
+            let mut hit_ply: Option<usize> = None;
+
+            if replay.board == target_board {
+                hit_ply = Some(0);
+            } else {
+                for (ply_idx, &m) in moves.iter().enumerate() {
+                    replay.apply_move(m);
+                    if replay.board == target_board {
+                        hit_ply = Some(ply_idx + 1);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(ply) = hit_ply {
+                let meta = meta_lookup
+                    .as_ref()
+                    .and_then(|f| f(gid))
+                    .unwrap_or_default();
+                let (w_win, draw, b_win) = match meta.result {
+                    1 => (1, 0, 0),
+                    2 => (0, 0, 1),
+                    3 => (0, 1, 0),
+                    _ => (0, 0, 0),
+                };
+
+                acc.total_games += 1;
+                acc.white_wins += w_win;
+                acc.draws += draw;
+                acc.black_wins += b_win;
+                if acc.sample_game_ids.len() < sample_cap {
+                    acc.sample_game_ids.push(gid as u32);
+                }
+
+                if ply < moves.len() {
+                    let next_move = moves[ply].0;
+                    let m_acc = acc.moves.entry(next_move).or_default();
+                    m_acc.total_games += 1;
+                    m_acc.white_wins += w_win;
+                    m_acc.draws += draw;
+                    m_acc.black_wins += b_win;
+                    if meta.white_elo > 0 && meta.black_elo > 0 {
+                        m_acc.white_elo_sum += meta.white_elo as u64;
+                        m_acc.black_elo_sum += meta.black_elo as u64;
+                        m_acc.elo_game_count += 1;
+                    }
+                    if let Some(y) = meta.year {
+                        m_acc.max_year = Some(m_acc.max_year.map_or(y, |prev| prev.max(y)));
+                    }
+                    if m_acc.sample_game_ids.len() < sample_cap {
+                        m_acc.sample_game_ids.push(gid as u32);
+                    }
+                }
+            }
+        };
+
+        let merged_acc: TreeAcc = if let Some(gids) = target_game_ids {
+            gids.par_iter()
+                .fold(TreeAcc::default, |mut acc, &gid| {
+                    if gid < total_games_in_index {
+                        process_game(gid, &mut acc);
+                    }
+                    acc
+                })
+                .reduce(TreeAcc::default, |mut a, b| {
+                    a.total_games += b.total_games;
+                    a.white_wins += b.white_wins;
+                    a.draws += b.draws;
+                    a.black_wins += b.black_wins;
+                    if a.sample_game_ids.len() < sample_cap {
+                        for id in b.sample_game_ids {
+                            if a.sample_game_ids.len() >= sample_cap {
+                                break;
+                            }
+                            a.sample_game_ids.push(id);
+                        }
+                    }
+                    for (k, v) in b.moves {
+                        let ma = a.moves.entry(k).or_default();
+                        ma.total_games += v.total_games;
+                        ma.white_wins += v.white_wins;
+                        ma.draws += v.draws;
+                        ma.black_wins += v.black_wins;
+                        ma.white_elo_sum += v.white_elo_sum;
+                        ma.black_elo_sum += v.black_elo_sum;
+                        ma.elo_game_count += v.elo_game_count;
+                        ma.max_year = match (ma.max_year, v.max_year) {
+                            (Some(y1), Some(y2)) => Some(y1.max(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
+                        if ma.sample_game_ids.len() < sample_cap {
+                            for id in v.sample_game_ids {
+                                if ma.sample_game_ids.len() >= sample_cap {
+                                    break;
+                                }
+                                ma.sample_game_ids.push(id);
+                            }
+                        }
+                    }
+                    a
+                })
+        } else {
+            (0..total_games_in_index)
+                .into_par_iter()
+                .fold(TreeAcc::default, |mut acc, gid| {
+                    process_game(gid, &mut acc);
+                    acc
+                })
+                .reduce(TreeAcc::default, |mut a, b| {
+                    a.total_games += b.total_games;
+                    a.white_wins += b.white_wins;
+                    a.draws += b.draws;
+                    a.black_wins += b.black_wins;
+                    if a.sample_game_ids.len() < sample_cap {
+                        for id in b.sample_game_ids {
+                            if a.sample_game_ids.len() >= sample_cap {
+                                break;
+                            }
+                            a.sample_game_ids.push(id);
+                        }
+                    }
+                    for (k, v) in b.moves {
+                        let ma = a.moves.entry(k).or_default();
+                        ma.total_games += v.total_games;
+                        ma.white_wins += v.white_wins;
+                        ma.draws += v.draws;
+                        ma.black_wins += v.black_wins;
+                        ma.white_elo_sum += v.white_elo_sum;
+                        ma.black_elo_sum += v.black_elo_sum;
+                        ma.elo_game_count += v.elo_game_count;
+                        ma.max_year = match (ma.max_year, v.max_year) {
+                            (Some(y1), Some(y2)) => Some(y1.max(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
+                        if ma.sample_game_ids.len() < sample_cap {
+                            for id in v.sample_game_ids {
+                                if ma.sample_game_ids.len() >= sample_cap {
+                                    break;
+                                }
+                                ma.sample_game_ids.push(id);
+                            }
+                        }
+                    }
+                    a
+                })
+        };
+
+        if merged_acc.total_games == 0 {
+            return Ok(None);
+        }
+
+        let white_pct = (merged_acc.white_wins as f64 / merged_acc.total_games as f64) * 100.0;
+        let draw_pct = (merged_acc.draws as f64 / merged_acc.total_games as f64) * 100.0;
+        let black_pct = (merged_acc.black_wins as f64 / merged_acc.total_games as f64) * 100.0;
+
+        let mut move_views: Vec<OpeningTreeMoveView> = merged_acc
+            .moves
+            .into_iter()
+            .map(|(packed, m_stat)| {
+                let bm = BoostMove(packed);
+                let san = bm
+                    .to_san_string(&target_pos)
+                    .unwrap_or_else(|| bm.to_uci_string());
+                let uci = bm.to_uci_string();
+                let m_white_pct = (m_stat.white_wins as f64 / m_stat.total_games as f64) * 100.0;
+                let m_draw_pct = (m_stat.draws as f64 / m_stat.total_games as f64) * 100.0;
+                let m_black_pct = (m_stat.black_wins as f64 / m_stat.total_games as f64) * 100.0;
+
+                let avg_white_elo = if m_stat.elo_game_count > 0 {
+                    Some((m_stat.white_elo_sum / m_stat.elo_game_count as u64) as u32)
+                } else {
+                    None
+                };
+                let avg_black_elo = if m_stat.elo_game_count > 0 {
+                    Some((m_stat.black_elo_sum / m_stat.elo_game_count as u64) as u32)
+                } else {
+                    None
+                };
+
+                OpeningTreeMoveView {
+                    san,
+                    uci,
+                    total_games: m_stat.total_games,
+                    white_pct: m_white_pct,
+                    draw_pct: m_draw_pct,
+                    black_pct: m_black_pct,
+                    white_wins: m_stat.white_wins,
+                    draws: m_stat.draws,
+                    black_wins: m_stat.black_wins,
+                    avg_white_elo,
+                    avg_black_elo,
+                    last_played: m_stat.max_year.map(|y| y.to_string()),
+                    sample_game_ids: m_stat.sample_game_ids,
+                }
+            })
+            .collect();
+
+        move_views.sort_by_key(|m| std::cmp::Reverse(m.total_games));
+
+        Ok(Some(OpeningTreeReport {
+            fen: fen_to_parse.to_string(),
+            zobrist_hash: target_hash,
+            total_games: merged_acc.total_games,
+            white_wins: merged_acc.white_wins,
+            draws: merged_acc.draws,
+            black_wins: merged_acc.black_wins,
+            white_pct,
+            draw_pct,
+            black_pct,
+            moves: move_views,
+            sample_game_ids: merged_acc.sample_game_ids,
+            sample_games: Vec::new(),
+        }))
+    }
+
+    /// Calculates rich continuation lines and branch tree directly from the booster stream
+    pub fn calculate_continuations<F>(
+        &self,
+        query: &ContinuationQuery,
+        target_game_ids: Option<&[usize]>,
+        meta_lookup: Option<F>,
+    ) -> Result<Option<ContinuationResult>>
+    where
+        F: Fn(usize) -> Option<BoostGameMeta> + Sync + Send,
+    {
+        let start_pos = query.validate()?;
+        let target_board = chess_to_board_array(&start_pos);
+        let start_fullmove = parse_fen_fullmove(&query.position);
+
+        #[derive(Debug, Clone, Default)]
+        struct PathStats {
+            games: u64,
+            white_wins: u64,
+            draws: u64,
+            black_wins: u64,
+        }
+
+        #[derive(Debug, Clone, Default)]
+        struct ContAcc {
+            total_processed: u64,
+            games_reaching: u64,
+            paths: HashMap<Vec<u16>, PathStats>,
+        }
+
+        let total_games_in_index = self.index.game_count();
+        let max_depth = query.max_depth;
+
+        let process_game = |gid: usize, acc: &mut ContAcc| {
+            acc.total_processed += 1;
+            let _entry = match self.index.get_game_entry(gid) {
+                Some(e) if !e.is_deleted() => e,
+                _ => return,
+            };
+            let moves = match self.index.get_game_moves(gid) {
+                Some(m) => m,
+                None => return,
+            };
+
+            let mut replay = FastReplayState::new();
+            let mut hit_ply: Option<usize> = None;
+
+            if replay.board == target_board {
+                hit_ply = Some(0);
+            } else {
+                for (ply_idx, &m) in moves.iter().enumerate() {
+                    replay.apply_move(m);
+                    if replay.board == target_board {
+                        hit_ply = Some(ply_idx + 1);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(ply) = hit_ply {
+                acc.games_reaching += 1;
+                let meta = meta_lookup
+                    .as_ref()
+                    .and_then(|f| f(gid))
+                    .unwrap_or_default();
+                let (w_win, draw, b_win) = match meta.result {
+                    1 => (1u64, 0u64, 0u64),
+                    2 => (0u64, 0u64, 1u64),
+                    3 => (0u64, 1u64, 0u64),
+                    _ => (0u64, 0u64, 0u64),
+                };
+
+                if ply < moves.len() {
+                    let end = (ply + max_depth).min(moves.len());
+                    let path: Vec<u16> = moves[ply..end].iter().map(|m| m.0).collect();
+                    let st = acc.paths.entry(path).or_default();
+                    st.games += 1;
+                    st.white_wins += w_win;
+                    st.draws += draw;
+                    st.black_wins += b_win;
+                }
+            }
+        };
+
+        let merged_acc: ContAcc = if let Some(gids) = target_game_ids {
+            gids.par_iter()
+                .fold(ContAcc::default, |mut acc, &gid| {
+                    if gid < total_games_in_index {
+                        process_game(gid, &mut acc);
+                    }
+                    acc
+                })
+                .reduce(ContAcc::default, |mut a, b| {
+                    a.total_processed += b.total_processed;
+                    a.games_reaching += b.games_reaching;
+                    for (k, v) in b.paths {
+                        let st = a.paths.entry(k).or_default();
+                        st.games += v.games;
+                        st.white_wins += v.white_wins;
+                        st.draws += v.draws;
+                        st.black_wins += v.black_wins;
+                    }
+                    a
+                })
+        } else {
+            (0..total_games_in_index)
+                .into_par_iter()
+                .fold(ContAcc::default, |mut acc, gid| {
+                    process_game(gid, &mut acc);
+                    acc
+                })
+                .reduce(ContAcc::default, |mut a, b| {
+                    a.total_processed += b.total_processed;
+                    a.games_reaching += b.games_reaching;
+                    for (k, v) in b.paths {
+                        let st = a.paths.entry(k).or_default();
+                        st.games += v.games;
+                        st.white_wins += v.white_wins;
+                        st.draws += v.draws;
+                        st.black_wins += v.black_wins;
+                    }
+                    a
+                })
+        };
+
+        let mut lines = Vec::new();
+        if merged_acc.games_reaching > 0 {
+            for (path, stats) in merged_acc.paths {
+                let percentage = (stats.games as f64 / merged_acc.games_reaching as f64) * 100.0;
+                if stats.games >= query.min_games && percentage >= query.min_percentage {
+                    let mut sim_pos = start_pos.clone();
+                    let mut san_moves = Vec::with_capacity(path.len());
+
+                    for pm in path {
+                        let bm = BoostMove(pm);
+                        if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
+                            let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
+                                &mut sim_pos,
+                                &m,
+                            );
+                            san_moves.push(san_plus.to_string());
+                        } else {
+                            san_moves.push(bm.to_uci_string());
+                        }
+                    }
+
+                    let formatted =
+                        format_continuation_moves(&start_pos, start_fullmove, &san_moves);
+                    lines.push(ContinuationLine {
+                        moves: san_moves,
+                        formatted,
+                        games: stats.games,
+                        percentage,
+                        white_wins: stats.white_wins,
+                        draws: stats.draws,
+                        black_wins: stats.black_wins,
+                    });
+                }
+            }
+
+            lines.sort_by(|a, b| {
+                b.games
+                    .cmp(&a.games)
+                    .then_with(|| b.moves.len().cmp(&a.moves.len()))
+                    .then_with(|| a.moves.cmp(&b.moves))
+            });
+
+            if lines.len() > query.max_lines {
+                lines.truncate(query.max_lines);
+            }
+        }
+
+        Ok(Some(ContinuationResult {
+            starting_fen: Fen::from_position(start_pos, EnPassantMode::Legal).to_string(),
+            total_games_processed: merged_acc.total_processed,
+            games_reaching_position: merged_acc.games_reaching,
+            lines,
+            tree: None,
+        }))
     }
 }

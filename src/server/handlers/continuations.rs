@@ -90,9 +90,77 @@ pub fn handle_continuations(
         DatabaseBackend::Pgn(p) => p.pgn_path.as_path(),
     };
 
+    // 1. Ultra-Fast Search Booster (.boost.idx) calculation
+    let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+            let cont_res = match db {
+                DatabaseBackend::Scid(s) => {
+                    let entries = s.entries();
+                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                        entries.get(gid).map(|e| {
+                            let year = if e.date > 0 {
+                                Some((e.date / 10000) as u16)
+                            } else {
+                                None
+                            };
+                            crate::search_booster::BoostGameMeta::new(
+                                e.result,
+                                e.white_elo,
+                                e.black_elo,
+                                year,
+                            )
+                        })
+                    };
+                    evaluator
+                        .calculate_continuations(&query, None, Some(meta_lookup))
+                        .ok()
+                        .flatten()
+                }
+                DatabaseBackend::Pgn(p) => {
+                    let entries = &p.entries;
+                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                        entries.get(gid).map(|e| {
+                            let res = match e.result {
+                                1 => 1,
+                                2 => 2,
+                                3 => 3,
+                                _ => 0,
+                            };
+                            let year = if e.date > 0 {
+                                Some((e.date / 10000) as u16)
+                            } else {
+                                None
+                            };
+                            crate::search_booster::BoostGameMeta::new(
+                                res,
+                                e.white_elo,
+                                e.black_elo,
+                                year,
+                            )
+                        })
+                    };
+                    evaluator
+                        .calculate_continuations(&query, None, Some(meta_lookup))
+                        .ok()
+                        .flatten()
+                }
+            };
+            if let Some(res) = cont_res {
+                return ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::to_value(res).unwrap_or(json!({}))),
+                    error: None,
+                };
+            }
+        }
+    }
+
     let hot_path = resolve_companion_hot_path(db_path);
 
-    // 1. Fast Memory-Mapped Hot Graph path if companion index exists
+    // 2. Fast Memory-Mapped Hot Graph path if companion index exists (legacy)
     if hot_path.exists() {
         if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
             let res = mmap_hot.query_continuations(

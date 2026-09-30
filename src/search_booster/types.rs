@@ -1,10 +1,31 @@
 use serde::{Deserialize, Serialize};
-use shakmaty::{CastlingSide, Move, Role};
+use shakmaty::{CastlingSide, Move, Position, Role};
 
 pub const BOOSTER_MAGIC: &[u8; 8] = b"SCIDBST1";
 pub const BOOSTER_VERSION: u32 = 1;
 pub const HEADER_SIZE: usize = 64;
 pub const GAME_ENTRY_SIZE: usize = 8;
+
+/// Compact game metadata structure for opening tree and continuation calculations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BoostGameMeta {
+    /// 1 = White Win (1-0), 2 = Black Win (0-1), 3 = Draw (1/2-1/2), other = unknown
+    pub result: u8,
+    pub white_elo: u16,
+    pub black_elo: u16,
+    pub year: Option<u16>,
+}
+
+impl BoostGameMeta {
+    pub fn new(result: u8, white_elo: u16, black_elo: u16, year: Option<u16>) -> Self {
+        Self {
+            result,
+            white_elo,
+            black_elo,
+            year,
+        }
+    }
+}
 
 /// Compact 16-bit representation of a chess move:
 /// - Bits 0..=5   (6 bits): Destination Square (0..=63)
@@ -171,6 +192,35 @@ impl BoostMove {
         };
 
         Self::new(from, to, flags)
+    }
+
+    /// Converts a `BoostMove` into a legal `shakmaty::Move` given the current position
+    pub fn to_shakmaty_move(self, pos: &shakmaty::Chess) -> Option<shakmaty::Move> {
+        let from_sq = shakmaty::Square::new(self.from() as u32);
+        let to_sq = shakmaty::Square::new(self.to() as u32);
+        let promo = self.promotion_role();
+
+        if self.is_castle_kingside() {
+            pos.legal_moves().into_iter().find(|m| {
+                m.is_castle() && m.castling_side() == Some(shakmaty::CastlingSide::KingSide)
+            })
+        } else if self.is_castle_queenside() {
+            pos.legal_moves().into_iter().find(|m| {
+                m.is_castle() && m.castling_side() == Some(shakmaty::CastlingSide::QueenSide)
+            })
+        } else {
+            pos.legal_moves()
+                .into_iter()
+                .find(|m| m.from() == Some(from_sq) && m.to() == to_sq && m.promotion() == promo)
+        }
+    }
+
+    /// Generates standard SAN string (e.g. "e4", "Nf3+", "O-O") given the position
+    pub fn to_san_string(self, pos: &shakmaty::Chess) -> Option<String> {
+        let mv = self.to_shakmaty_move(pos)?;
+        let mut child = pos.clone();
+        let san = shakmaty::san::SanPlus::from_move_and_play_unchecked(&mut child, &mv);
+        Some(san.to_string())
     }
 }
 

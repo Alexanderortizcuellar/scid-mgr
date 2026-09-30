@@ -244,3 +244,132 @@ pub fn handle_build_pos_index(
         },
     }
 }
+
+pub fn handle_booster_status(
+    req: &RequestMessage,
+    current_db: &Option<DatabaseBackend>,
+) -> ResponseMessage {
+    let id = req.id;
+    let db = match current_db {
+        Some(db) => db,
+        None => {
+            return ResponseMessage {
+                id,
+                status: "error".to_string(),
+                data: None,
+                error: Some("No database currently opened".to_string()),
+            };
+        }
+    };
+
+    let (db_path, game_count) = match db {
+        DatabaseBackend::Scid(s) => (s.index_path().to_path_buf(), s.game_count()),
+        DatabaseBackend::Pgn(p) => (p.pgn_path.clone(), p.game_count()),
+    };
+
+    let (status, header) =
+        crate::search_booster::MmapBoostIndex::check_status(&db_path, game_count);
+    let status_str = match status {
+        IndexStatus::Valid => "valid",
+        IndexStatus::Outdated => "outdated",
+        IndexStatus::Missing => "missing",
+    };
+
+    let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
+    let file_size = if booster_path.exists() {
+        std::fs::metadata(&booster_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    ResponseMessage {
+        id,
+        status: "ok".to_string(),
+        data: Some(serde_json::json!({
+            "status": status_str,
+            "header": header,
+            "path": booster_path.to_string_lossy(),
+            "file_size_bytes": file_size,
+            "total_plies": header.as_ref().map(|h| h.total_plies).unwrap_or(0),
+            "games_indexed": header.as_ref().map(|h| h.db_game_count).unwrap_or(0),
+        })),
+        error: None,
+    }
+}
+
+pub fn handle_build_booster(
+    req: &RequestMessage,
+    current_db: &Option<DatabaseBackend>,
+) -> ResponseMessage {
+    let id = req.id;
+    let db = match current_db {
+        Some(db) => db,
+        None => {
+            return ResponseMessage {
+                id,
+                status: "error".to_string(),
+                data: None,
+                error: Some("No database currently opened".to_string()),
+            };
+        }
+    };
+
+    let start = Instant::now();
+    let progress_cb: crate::search_booster::BoosterProgressCallback = std::sync::Arc::new(
+        |scanned: usize, total: usize, plies: usize| {
+            let event_json = serde_json::json!({
+                "event": "build_booster_progress",
+                "data": {
+                    "scanned": scanned,
+                    "total": total,
+                    "plies": plies,
+                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                }
+            });
+            if let Ok(line) = serde_json::to_string(&event_json) {
+                let mut out = io::stdout().lock();
+                let _ = writeln!(out, "{}", line);
+                let _ = out.flush();
+            }
+        },
+    );
+
+    let res = match db {
+        DatabaseBackend::Scid(s) => {
+            crate::search_booster::BoostIndexBuilder::build_for_scid(s, None, Some(progress_cb))
+        }
+        DatabaseBackend::Pgn(p) => crate::search_booster::BoostIndexBuilder::build_for_pgn(
+            &p.pgn_path,
+            None,
+            Some(progress_cb),
+        ),
+    };
+
+    match res {
+        Ok((path, games, plies, elapsed_ms)) => {
+            let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            ResponseMessage {
+                id,
+                status: "ok".to_string(),
+                data: Some(serde_json::json!({
+                    "status": "valid",
+                    "path": path.to_string_lossy(),
+                    "games_indexed": games,
+                    "total_plies": plies,
+                    "elapsed_ms": elapsed_ms,
+                    "total_duration_ms": start.elapsed().as_millis(),
+                    "file_size_bytes": file_size,
+                })),
+                error: None,
+            }
+        }
+        Err(e) => ResponseMessage {
+            id,
+            status: "error".to_string(),
+            data: None,
+            error: Some(format!("Failed to build search booster: {}", e)),
+        },
+    }
+}

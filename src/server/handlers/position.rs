@@ -114,13 +114,58 @@ pub fn handle_search_position(
 
     let start_time = Instant::now();
 
-    // ⚡ Instant Sub-Millisecond candidate lookup if PositionIndex is active
+    // ⚡ 1. Ultra-Fast Search Booster (.boost.idx) Scan
+    let db_path = match db {
+        DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+        DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+    };
+    let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            if boost_idx.num_games() == total_games {
+                let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+                if let Ok(boost_matches) = evaluator.search_position(fen, max_ply) {
+                    let matches: Vec<ScidMatchResult> = boost_matches
+                        .into_iter()
+                        .map(|bm| ScidMatchResult {
+                            game_id: bm.game_id,
+                            match_details: QueryMatchResult {
+                                is_match: true,
+                                matching_plies: bm.matching_plies.clone(),
+                                match_count: bm.matching_plies.len(),
+                            },
+                        })
+                        .collect();
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let matched_count = matches.len();
+                    let search_id = session_mgr.create_session(
+                        &db_key,
+                        &query_key,
+                        total_games,
+                        matches,
+                        duration_ms,
+                    );
+                    return ResponseMessage {
+                        id,
+                        status: "ok".to_string(),
+                        data: Some(serde_json::json!({
+                            "search_id": search_id,
+                            "total_searched": total_games,
+                            "matched_count": matched_count,
+                            "duration_ms": duration_ms,
+                            "engine": "search_booster",
+                            "cached": false,
+                        })),
+                        error: None,
+                    };
+                }
+            }
+        }
+    }
+
+    // ⚡ 2. Instant Sub-Millisecond candidate lookup if PositionIndex is active
     if is_exact && turn_param.is_none() {
         if current_pos_index.is_none() {
-            let db_path = match db {
-                DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
-                DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
-            };
             *current_pos_index = PositionIndex::load(&db_path).ok();
         }
 

@@ -236,6 +236,14 @@ fn handle_command(
             handlers::endgames::handle_build_endgames(req, current_db)
         }
 
+        // Search Booster Operations
+        "booster_status" | "get_booster_status" => {
+            handlers::index::handle_booster_status(req, current_db)
+        }
+        "build_booster" | "build_search_booster" | "rebuild_booster" => {
+            handlers::index::handle_build_booster(req, current_db)
+        }
+
         // Position Index Operations
         "unload_pos_index" => handlers::index::handle_unload_pos_index(req, current_pos_index),
         "pos_index_status" | "get_pos_index_status" => {

@@ -92,20 +92,94 @@ pub fn handle_opening_tree(
 
     let mut report = None;
 
-    // 1. Try fast lookup from .tree.idx file
-    if current_tree_index.is_none() {
-        let db_path = match db {
-            DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
-            DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
-        };
-        *current_tree_index = TreeIndex::load(&db_path).ok();
+    let db_path = match db {
+        DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
+        DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
+    };
+
+    // 1. Try ultra-fast dynamic calculation from .boost.idx file
+    let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+            match db {
+                DatabaseBackend::Scid(s) => {
+                    let entries = s.entries();
+                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                        entries.get(gid).map(|e| {
+                            let year = if e.date > 0 {
+                                Some((e.date / 10000) as u16)
+                            } else {
+                                None
+                            };
+                            crate::search_booster::BoostGameMeta::new(
+                                e.result,
+                                e.white_elo,
+                                e.black_elo,
+                                year,
+                            )
+                        })
+                    };
+                    report = evaluator
+                        .calculate_opening_tree(
+                            fen,
+                            target_game_ids.as_deref(),
+                            max_sample_ids,
+                            Some(meta_lookup),
+                        )
+                        .ok()
+                        .flatten();
+                }
+                DatabaseBackend::Pgn(p) => {
+                    let entries = &p.entries;
+                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                        entries.get(gid).map(|e| {
+                            let res = match e.result {
+                                1 => 1,
+                                2 => 2,
+                                3 => 3,
+                                _ => 0,
+                            };
+                            let year = if e.date > 0 {
+                                Some((e.date / 10000) as u16)
+                            } else {
+                                None
+                            };
+                            crate::search_booster::BoostGameMeta::new(
+                                res,
+                                e.white_elo,
+                                e.black_elo,
+                                year,
+                            )
+                        })
+                    };
+                    report = evaluator
+                        .calculate_opening_tree(
+                            fen,
+                            target_game_ids.as_deref(),
+                            max_sample_ids,
+                            Some(meta_lookup),
+                        )
+                        .ok()
+                        .flatten();
+                }
+            }
+        }
     }
 
-    if let Some(tree_idx) = current_tree_index.as_ref() {
-        report = tree_idx.query_tree_with_options(fen, target_game_ids.as_deref(), max_sample_ids);
+    // 2. Try fast lookup from .tree.idx file (legacy)
+    if report.is_none() {
+        if current_tree_index.is_none() {
+            *current_tree_index = TreeIndex::load(&db_path).ok();
+        }
+
+        if let Some(tree_idx) = current_tree_index.as_ref() {
+            report =
+                tree_idx.query_tree_with_options(fen, target_game_ids.as_deref(), max_sample_ids);
+        }
     }
 
-    // 2. Dynamic Fallback: If .tree.idx is missing or position is beyond max depth
+    // 3. Dynamic Fallback: If .boost.idx and .tree.idx are missing
     if report.is_none() {
         report = match db {
             DatabaseBackend::Scid(s) => TreeIndex::calculate_tree_for_scid(

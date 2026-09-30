@@ -73,12 +73,15 @@ pub mod pgn_db;
 pub mod pgn_io;
 pub mod position_index;
 pub mod position_search;
-pub mod search;
 pub mod search_booster;
+pub mod search_language;
 pub mod server;
 pub mod tree_index;
 
 // Backward-compatibility module aliases
+pub mod search {
+    pub use crate::search_language::*;
+}
 pub mod pgn_utils {
     pub use crate::pgn_io::*;
 }
@@ -104,14 +107,14 @@ pub use position_index::{
     PositionPostingList,
 };
 pub use position_search::{MaterialFilter, PositionMatch, PositionSearchResult};
-pub use search::{
+pub use search_booster::{
+    resolve_companion_booster_path, BoostGameEntry, BoostGameMeta, BoostHeader, BoostIndexBuilder,
+    BoostMatch, BoostMove, BoostSearchEvaluator, FastReplayState, MmapBoostIndex,
+};
+pub use search_language::{
     ComparisonOp, GameSearchEvaluator, HeaderMatcher, HeaderPredicate, MaterialPredicate,
     MovePattern, MoveRecord, PathMatcher, PathPattern, PositionMatcher, PositionPattern,
     QueryMatchResult, SearchQuery, SquareContent,
-};
-pub use search_booster::{
-    resolve_companion_booster_path, BoostGameEntry, BoostHeader, BoostIndexBuilder, BoostMatch,
-    BoostMove, BoostSearchEvaluator, FastReplayState, MmapBoostIndex,
 };
 pub use tree_index::{
     OpeningTreeMoveView, OpeningTreeReport, TreeIndex, TreeIndexDiagnostics, TreeIndexHeader,
