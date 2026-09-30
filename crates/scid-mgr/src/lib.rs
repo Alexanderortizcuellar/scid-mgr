@@ -73,15 +73,27 @@ pub mod pgn_db;
 pub mod pgn_io;
 pub mod position_index;
 pub mod position_search;
+pub mod search_adapter;
 pub mod search_booster;
-pub mod search_language;
 pub mod server;
 pub mod tree_index;
 
-// Backward-compatibility module aliases
+// Re-export cql_lang as search_language and search for full backward-compatibility
 pub mod search {
-    pub use crate::search_language::*;
+    pub use crate::search_adapter::*;
+    pub use cql_lang::*;
+    pub mod scid_adapter {
+        pub use crate::search_adapter::*;
+    }
 }
+pub mod search_language {
+    pub use crate::search_adapter::*;
+    pub use cql_lang::*;
+    pub mod scid_adapter {
+        pub use crate::search_adapter::*;
+    }
+}
+pub use search_adapter::{ScidMatchResult, ScidSearchAdapter};
 pub mod pgn_utils {
     pub use crate::pgn_io::*;
 }

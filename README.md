@@ -66,15 +66,29 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
 
 ---
 
-## 📦 Using as a Rust Library (`scid_mgr`)
+## 📦 Cargo Workspace Architecture
 
-`scid-mgr` is distributed both as a standalone CLI / JSON-RPC executable (`scid-mgr`) and as a reusable Rust library crate (`scid_mgr`).
+The project is organized as a modular Cargo workspace:
 
-Add it to your `Cargo.toml`:
+- [**`crates/cql-lang`**](crates/cql-lang/): Pure in-memory Chess Query Language (CQLite) compiler, AST, query parser, and evaluator.
+  - Zero disk I/O, pure bitboard evaluation on `shakmaty`.
+  - WASM-ready (`wasm32-unknown-unknown`) for browser and web worker execution.
+- [**`crates/scid-mgr`**](crates/scid-mgr/): SCID / PGN database engine, companion index builders, JSON-RPC server daemon, and CLI tool.
 
+---
+
+## 📦 Using as a Rust Library
+
+### 1. Pure Query Language (`cql-lang`)
 ```toml
 [dependencies]
-scid_mgr = { path = "path/to/scid-mgr" }
+cql-lang = { path = "path/to/scid-mgr/crates/cql-lang" }
+```
+
+### 2. Full Database Engine (`scid-mgr`)
+```toml
+[dependencies]
+scid-mgr = { path = "path/to/scid-mgr/crates/scid-mgr" }
 ```
 
 ### Library Code Example

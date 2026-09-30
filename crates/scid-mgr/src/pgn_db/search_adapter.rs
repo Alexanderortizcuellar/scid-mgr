@@ -179,7 +179,7 @@ impl PgnDatabaseWrapper {
                     let game_id = start + chunk_idx * chunk_size + offset;
 
                     // Fast in-memory header pre-filter before reading PGN text from mmap
-                    if let Some(false) = crate::search::evaluator::quick_check_pgn_entry_headers(
+                    if let Some(false) = crate::search_adapter::quick_check_pgn_entry_headers(
                         query,
                         entry,
                         &self.names,
@@ -189,7 +189,7 @@ impl PgnDatabaseWrapper {
 
                     // Fast-path: Header-only query that matched in-memory
                     if query.is_header_only() {
-                        if let Some(true) = crate::search::evaluator::quick_check_pgn_entry_headers(
+                        if let Some(true) = crate::search_adapter::quick_check_pgn_entry_headers(
                             query,
                             entry,
                             &self.names,

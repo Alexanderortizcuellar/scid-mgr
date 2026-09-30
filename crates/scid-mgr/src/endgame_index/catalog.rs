@@ -72,7 +72,7 @@ pub struct EndgameCatalog {
 impl EndgameCatalog {
     pub fn default_catalog() -> Self {
         // Embed the 47 standard v2.0 catalog definitions
-        let yaml_str = include_str!("../../catalog/endgames.yaml");
+        let yaml_str = include_str!("../../../../catalog/endgames.yaml");
         Self::parse_yaml(yaml_str).expect("Failed to parse embedded default endgame catalog")
     }
 

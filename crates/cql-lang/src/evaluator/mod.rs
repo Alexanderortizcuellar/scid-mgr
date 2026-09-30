@@ -9,10 +9,7 @@ use std::str::FromStr;
 use crate::search::path::MoveRecord;
 use crate::search::query::SearchQuery;
 
-pub use matcher::{
-    evaluate_with_timeline_env, matches_single_ply, quick_check_entry_headers,
-    quick_check_headers_only, quick_check_pgn_entry_headers,
-};
+pub use matcher::{evaluate_with_timeline_env, matches_single_ply, quick_check_headers_only};
 pub use replayer::{
     evaluate_pgn_streaming, parse_pgn_headers_and_moves, replay_game, split_pgn_headers_and_moves,
 };

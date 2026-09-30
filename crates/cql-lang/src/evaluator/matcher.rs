@@ -865,58 +865,6 @@ pub fn quick_check_headers_only(
     }
 }
 
-pub fn quick_check_entry_headers(
-    query: &SearchQuery,
-    entry: &chess_scid_rw::entry::IndexEntry,
-    names: &chess_scid_rw::names::NameTables,
-) -> Option<bool> {
-    match query {
-        SearchQuery::Header(pred) => HeaderMatcher::matches_entry(pred, entry, names),
-        SearchQuery::And(sub_queries) => {
-            let mut all_true = true;
-            for q in sub_queries {
-                match quick_check_entry_headers(q, entry, names) {
-                    Some(false) => return Some(false),
-                    Some(true) => {}
-                    None => all_true = false,
-                }
-            }
-            if all_true && !sub_queries.is_empty() {
-                Some(true)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-pub fn quick_check_pgn_entry_headers(
-    query: &SearchQuery,
-    entry: &crate::pgn_db::CompactPgnRecord,
-    names: &crate::pgn_db::PgnNameTables,
-) -> Option<bool> {
-    match query {
-        SearchQuery::Header(pred) => HeaderMatcher::matches_pgn_entry(pred, entry, names),
-        SearchQuery::And(sub_queries) => {
-            let mut all_true = true;
-            for q in sub_queries {
-                match quick_check_pgn_entry_headers(q, entry, names) {
-                    Some(false) => return Some(false),
-                    Some(true) => {}
-                    None => all_true = false,
-                }
-            }
-            if all_true && !sub_queries.is_empty() {
-                Some(true)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 pub fn matches_single_ply(
     query: &SearchQuery,
     pos: &Chess,

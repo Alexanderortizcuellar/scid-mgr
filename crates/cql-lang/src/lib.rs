@@ -1,4 +1,4 @@
-//! # Chess Query Language & DSL Engine (`scid_mgr::search_language`)
+//! # Chess Query Language & DSL Engine (`cql_lang`)
 //!
 //! A modular, CQL-inspired chess query language engine for pattern matching,
 //! move-sequence paths, board configurations, and metadata filtering.
@@ -12,13 +12,17 @@ pub mod path;
 pub mod pattern;
 pub mod pawn;
 pub mod query;
-pub mod scid_adapter;
 pub mod squares;
 pub mod tactics;
 pub mod transform;
 
 #[cfg(test)]
 pub mod tests;
+
+// Public alias for ergonomic consumption
+pub mod search {
+    pub use crate::*;
+}
 
 // Public re-exports
 pub use annotation::{AnnotationManager, AnnotationPredicate, CommentPredicate, NagPredicate};
@@ -35,6 +39,5 @@ pub use query::{
     PositionPattern, PowerPredicate, SearchQuery, SetPredicate, SquareContent, SquareOrPiece,
     SquareSetExpr, TacticalPredicate,
 };
-pub use scid_adapter::{ScidMatchResult, ScidSearchAdapter};
 pub use tactics::TacticsEvaluator;
 pub use transform::{BoardSymmetry, TransformMatcher};

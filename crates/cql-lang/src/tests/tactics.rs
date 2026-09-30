@@ -40,7 +40,7 @@ fn test_tactical_motifs_and_geometry() {
 
 #[test]
 fn test_mating_themes_catalog_parsing_and_evaluation() {
-    let dsl_content = include_str!("../../../themes/mates.dsl");
+    let dsl_content = include_str!("../../../../themes/mates.dsl");
     let mut parsed_count = 0;
 
     for line in dsl_content.lines() {

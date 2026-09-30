@@ -1,4 +1,3 @@
-pub mod adapters;
 pub mod dsl_and_validation;
 pub mod fixtures;
 pub mod geometry;
