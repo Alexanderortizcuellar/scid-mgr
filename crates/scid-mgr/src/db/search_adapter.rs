@@ -31,8 +31,8 @@ impl ScidDatabaseWrapper {
                     if boost_idx.num_games() == self.entries.len() {
                         let evaluator =
                             crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-                        if let Ok(boost_matches) =
-                            evaluator.search_position_with_options(fen_str, turn_param, max_ply)
+                        if let Ok(boost_matches) = evaluator
+                            .search_position_with_progress(fen_str, turn_param, max_ply, &progress)
                         {
                             let matches: Vec<crate::position_search::PositionMatch> = boost_matches
                                 .into_iter()

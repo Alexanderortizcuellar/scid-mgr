@@ -124,9 +124,28 @@ pub fn handle_search_position(
         if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
             if boost_idx.num_games() == total_games {
                 let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-                if let Ok(boost_matches) =
-                    evaluator.search_position_with_options(fen, turn_param, max_ply)
-                {
+                let boost_matches_res = evaluator.search_position_with_progress(
+                    fen,
+                    turn_param,
+                    max_ply,
+                    |scanned, total, matches_len| {
+                        let event_json = serde_json::json!({
+                            "event": "search_progress",
+                            "data": {
+                                "scanned": scanned,
+                                "total": total,
+                                "matches": matches_len,
+                                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            }
+                        });
+                        if let Ok(line) = serde_json::to_string(&event_json) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", line);
+                            let _ = out.flush();
+                        }
+                    },
+                );
+                if let Ok(boost_matches) = boost_matches_res {
                     let matches: Vec<ScidMatchResult> = boost_matches
                         .into_iter()
                         .map(|bm| ScidMatchResult {

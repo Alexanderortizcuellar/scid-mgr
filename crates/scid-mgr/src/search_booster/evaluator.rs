@@ -157,13 +157,17 @@ impl<'a> BoostSearchEvaluator<'a> {
         Self { index }
     }
 
-    /// Scans games in parallel for board positions reaching a target FEN with optional turn filter
-    pub fn search_position_with_options(
+    /// Scans games in parallel for board positions reaching a target FEN with optional turn filter and progress streaming
+    pub fn search_position_with_progress<F>(
         &self,
         target_fen: &str,
         turn_filter: Option<&str>,
         max_ply: Option<usize>,
-    ) -> Result<Vec<BoostMatch>> {
+        progress: F,
+    ) -> Result<Vec<BoostMatch>>
+    where
+        F: Fn(usize, usize, usize) + Sync,
+    {
         let fen: Fen = target_fen
             .parse()
             .map_err(|e| anyhow::anyhow!("Invalid FEN: {}", e))?;
@@ -188,11 +192,22 @@ impl<'a> BoostSearchEvaluator<'a> {
             None => None,
         };
 
+        let progress_counter = std::sync::atomic::AtomicUsize::new(0);
+        let match_counter = std::sync::atomic::AtomicUsize::new(0);
+        let step = (total_games / 100).clamp(5_000, 50_000);
+
         let matches: Vec<BoostMatch> = (0..total_games)
             .into_par_iter()
             .filter_map(|gid| {
                 let entry = self.index.get_game_entry(gid)?;
                 if entry.is_deleted() {
+                    let done =
+                        progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if done % step == 0 || done == total_games {
+                        let cur_matches =
+                            match_counter.load(std::sync::atomic::Ordering::Relaxed);
+                        progress(done, total_games, cur_matches);
+                    }
                     return None;
                 }
                 let moves = self.index.get_game_moves(gid)?;
@@ -224,18 +239,38 @@ impl<'a> BoostSearchEvaluator<'a> {
                     }
                 }
 
-                if !matching_plies.is_empty() {
+                let done =
+                    progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let res = if !matching_plies.is_empty() {
+                    match_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     Some(BoostMatch {
                         game_id: gid,
                         matching_plies,
                     })
                 } else {
                     None
+                };
+
+                if done % step == 0 || done == total_games {
+                    let cur_matches = match_counter.load(std::sync::atomic::Ordering::Relaxed);
+                    progress(done, total_games, cur_matches);
                 }
+
+                res
             })
             .collect();
 
         Ok(matches)
+    }
+
+    /// Scans games in parallel for board positions reaching a target FEN with optional turn filter
+    pub fn search_position_with_options(
+        &self,
+        target_fen: &str,
+        turn_filter: Option<&str>,
+        max_ply: Option<usize>,
+    ) -> Result<Vec<BoostMatch>> {
+        self.search_position_with_progress(target_fen, turn_filter, max_ply, |_, _, _| {})
     }
 
     /// Scans games in parallel for board positions reaching a target FEN
@@ -244,7 +279,7 @@ impl<'a> BoostSearchEvaluator<'a> {
         target_fen: &str,
         max_ply: Option<usize>,
     ) -> Result<Vec<BoostMatch>> {
-        self.search_position_with_options(target_fen, None, max_ply)
+        self.search_position_with_progress(target_fen, None, max_ply, |_, _, _| {})
     }
 
     /// Finds all distinct next moves (and their frequencies) directly following the target position

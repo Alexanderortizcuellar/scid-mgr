@@ -18,13 +18,14 @@ impl PgnDatabaseWrapper {
         turn_param: Option<&str>,
         mode_param: Option<&str>,
         max_ply: Option<usize>,
-        mut progress: F,
+        progress: F,
     ) -> Result<crate::position_search::PositionSearchResult>
     where
-        F: FnMut(usize, usize, usize),
+        F: FnMut(usize, usize, usize) + Send,
     {
         let start = Instant::now();
         let target_fen = fen_str.trim();
+        let progress_lock = std::sync::Mutex::new(progress);
         let is_exact_or_board = mode_param
             .map(|m| {
                 let m = m.to_lowercase();
@@ -41,9 +42,16 @@ impl PgnDatabaseWrapper {
                     if boost_idx.num_games() == self.entries.len() {
                         let evaluator =
                             crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-                        if let Ok(boost_matches) =
-                            evaluator.search_position_with_options(target_fen, turn_param, max_ply)
-                        {
+                        if let Ok(boost_matches) = evaluator.search_position_with_progress(
+                            target_fen,
+                            turn_param,
+                            max_ply,
+                            |done, total, matches| {
+                                if let Ok(mut p) = progress_lock.lock() {
+                                    p(done, total, matches);
+                                }
+                            },
+                        ) {
                             let matches: Vec<crate::position_search::PositionMatch> = boost_matches
                                 .into_iter()
                                 .map(|bm| crate::position_search::PositionMatch {
@@ -52,7 +60,9 @@ impl PgnDatabaseWrapper {
                                 })
                                 .collect();
                             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                            progress(self.entries.len(), self.entries.len(), matches.len());
+                            if let Ok(mut p) = progress_lock.lock() {
+                                p(self.entries.len(), self.entries.len(), matches.len());
+                            }
                             return Ok(crate::position_search::PositionSearchResult {
                                 target_fen: target_fen.to_string(),
                                 target_hash: 0,
@@ -79,7 +89,9 @@ impl PgnDatabaseWrapper {
                             })
                             .collect();
                         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                        progress(self.entries.len(), self.entries.len(), matches.len());
+                        if let Ok(mut p) = progress_lock.lock() {
+                            p(self.entries.len(), self.entries.len(), matches.len());
+                        }
                         return Ok(crate::position_search::PositionSearchResult {
                             target_fen: target_fen.to_string(),
                             target_hash: zobrist_hash,
@@ -123,7 +135,10 @@ impl PgnDatabaseWrapper {
                 .collect();
 
             matches.extend(chunk_matches);
-            progress(end_idx, total, matches.len());
+
+            if let Ok(mut p) = progress_lock.lock() {
+                p(end_idx, total, matches.len());
+            }
         }
 
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
