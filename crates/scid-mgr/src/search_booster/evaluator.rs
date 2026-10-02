@@ -19,6 +19,8 @@ use super::types::{BoostGameMeta, BoostMove};
 pub struct FastReplayState {
     /// 0 = Empty, 1..6 = White (P, N, B, R, Q, K), 9..14 = Black (P, N, B, R, Q, K)
     pub board: [u8; 64],
+    pub white_pieces: u8,
+    pub black_pieces: u8,
 }
 
 impl Default for FastReplayState {
@@ -53,7 +55,25 @@ impl FastReplayState {
         board[62] = 10; // Ng8
         board[63] = 12; // Rh8
 
-        Self { board }
+        Self {
+            board,
+            white_pieces: 16,
+            black_pieces: 16,
+        }
+    }
+
+    #[inline(always)]
+    pub fn count_pieces(board: &[u8; 64]) -> (u8, u8) {
+        let mut w = 0u8;
+        let mut b = 0u8;
+        for &sq in board.iter() {
+            if sq >= 1 && sq <= 6 {
+                w += 1;
+            } else if sq >= 9 && sq <= 14 {
+                b += 1;
+            }
+        }
+        (w, b)
     }
 
     #[inline(always)]
@@ -65,8 +85,17 @@ impl FastReplayState {
 
         self.board[from] = 0;
 
-        if flags <= 0x1 || flags == 0x4 {
-            // Quiet move, double pawn push, or normal capture
+        if flags <= 0x1 {
+            // Quiet move or double pawn push
+            self.board[to] = piece;
+        } else if flags == 0x4 {
+            // Normal capture
+            let captured = self.board[to];
+            if captured >= 1 && captured <= 6 {
+                self.white_pieces = self.white_pieces.saturating_sub(1);
+            } else if captured >= 9 && captured <= 14 {
+                self.black_pieces = self.black_pieces.saturating_sub(1);
+            }
             self.board[to] = piece;
         } else if flags == 0x2 {
             // King-side Castle (e1->g1 or e8->g8)
@@ -95,15 +124,23 @@ impl FastReplayState {
                 // White captured black pawn on rank 5
                 if to >= 8 {
                     self.board[to - 8] = 0;
+                    self.black_pieces = self.black_pieces.saturating_sub(1);
                 }
             } else {
                 // Black captured white pawn on rank 4
                 if to + 8 < 64 {
                     self.board[to + 8] = 0;
+                    self.white_pieces = self.white_pieces.saturating_sub(1);
                 }
             }
         } else if flags >= 0x8 {
             // Promotion
+            let captured = self.board[to];
+            if captured >= 1 && captured <= 6 {
+                self.white_pieces = self.white_pieces.saturating_sub(1);
+            } else if captured >= 9 && captured <= 14 {
+                self.black_pieces = self.black_pieces.saturating_sub(1);
+            }
             let color_offset = if piece >= 8 { 8 } else { 0 };
             let promo_piece = match flags & 0x3 {
                 0 => 2 + color_offset, // Knight
@@ -176,6 +213,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             .map_err(|e| anyhow::anyhow!("Invalid position: {}", e))?;
 
         let target_board = chess_to_board_array(&target_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
         let total_games = self.index.game_count();
 
         let turn_req: Option<u8> = match turn_filter {
@@ -227,6 +265,9 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                 for (ply_idx, &m) in moves[..limit].iter().enumerate() {
                     replay.apply_move(m);
+                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                        break;
+                    }
                     let ply = ply_idx + 1;
                     if replay.board == target_board {
                         let matches_turn = match turn_req {
@@ -296,6 +337,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             .map_err(|e| anyhow::anyhow!("Invalid position: {}", e))?;
 
         let target_board = chess_to_board_array(&target_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
         let total_games = self.index.game_count();
 
         let move_counts = (0..total_games)
@@ -323,6 +365,9 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                     for (ply_idx, &m) in moves[..limit].iter().enumerate() {
                         replay.apply_move(m);
+                        if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                            break;
+                        }
                         if replay.board == target_board && ply_idx + 1 < moves.len() {
                             *acc.entry(moves[ply_idx + 1].0).or_insert(0) += 1;
                         }
@@ -362,6 +407,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             .map_err(|e| anyhow::anyhow!("Invalid position: {}", e))?;
 
         let target_board = chess_to_board_array(&target_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
         let total_games = self.index.game_count();
 
         let line_counts = (0..total_games)
@@ -391,6 +437,9 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                     for (ply_idx, &m) in moves[..limit].iter().enumerate() {
                         replay.apply_move(m);
+                        if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                            break;
+                        }
                         if replay.board == target_board && ply_idx + 1 < moves.len() {
                             let start = ply_idx + 1;
                             let end = (start + depth).min(moves.len());
@@ -445,6 +494,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             .map_err(|e| anyhow::anyhow!("Invalid chess position from FEN: {}", e))?;
 
         let target_board = chess_to_board_array(&target_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
         let target_hash_val: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
         let target_hash = target_hash_val.0;
 
@@ -502,6 +552,9 @@ impl<'a> BoostSearchEvaluator<'a> {
             } else {
                 for (ply_idx, &m) in moves.iter().enumerate() {
                     replay.apply_move(m);
+                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                        break;
+                    }
                     if replay.board == target_board {
                         hit_ply = Some(ply_idx + 1);
                         break;
@@ -807,6 +860,7 @@ impl<'a> BoostSearchEvaluator<'a> {
     {
         let start_pos = query.validate()?;
         let target_board = chess_to_board_array(&start_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
         let start_fullmove = parse_fen_fullmove(&query.position);
 
         #[derive(Debug, Clone, Default)]
@@ -846,6 +900,9 @@ impl<'a> BoostSearchEvaluator<'a> {
             } else {
                 for (ply_idx, &m) in moves.iter().enumerate() {
                     replay.apply_move(m);
+                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                        break;
+                    }
                     if replay.board == target_board {
                         hit_ply = Some(ply_idx + 1);
                         break;
