@@ -51,6 +51,14 @@ PGN Reconstruction     | Full Binary Decode & PGN Generation        |     329.90
 Overall Benchmark Duration: 18.57 seconds
 ```
 
+### Search Booster (`.boost.idx`) Parallel Scans (10,355,488 Games)
+
+| Target Position | Board Material | Previous Scan Time | Optimized Scan Time (Piece Pruning) | Speedup | Matching Games |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Alapin Sicilian (`2. c3 Nf6`)** | 32 pieces | 1,043.20 ms | **371.01 ms** | **~2.8x faster** | 56,458 |
+| **Najdorf Variation (`6. Be2`)** | 30 pieces | 1,150.40 ms | **478.91 ms** | **~2.4x faster** | 1,111 |
+| **Early Opening (Rare / Miss)** | 32 pieces | 1,040.10 ms | **395.47 ms** | **~2.6x faster** | 0 |
+
 ---
 
 ## 3. Benchmark Results on Lichess Elite PGN (280,246 Games)

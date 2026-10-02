@@ -125,6 +125,10 @@ A zero-copy companion index file built for raw text `.pgn` files to support inst
 | `38` | `result_code` | `u8` | `1`=1-0, `2`=0-1, `3`=1/2-1/2, `0`=* |
 | `39` | `flags` | `u8` | Bit flags (e.g. custom FEN start) |
 
+> [!NOTE]
+> **Namebase Deduplication & Ultra-Large Collections**:
+> The string table maps player, event, and site strings to `u32` IDs. When ingesting raw online exports (such as Lichess monthly dumps where `[Site "https://lichess.org/<game_id>"]` is unique per game), normalizing or stripping unique site IDs prior to indexing prevents allocating tens of millions of unique URL strings in the namebase dictionary.
+
 ---
 
 ## 3. 🎯 Inverted Position Index (`.pos.idx` / `.scidpos5`)

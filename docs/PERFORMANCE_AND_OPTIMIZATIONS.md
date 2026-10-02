@@ -220,4 +220,53 @@ Position Zobrist hash
 
 Correctness is strictly maintained: all candidate-accelerated queries match the full-scan result sets 100%, and unindexed positions gracefully fall back to move-stream parsing.
 
+---
+
+## 10. Monotonic Piece-Count Pruning (Search Booster)
+
+### The Mathematical Invariant
+In standard chess, pieces are captured and never re-enter the board. 
+- **Standard Captures**: Decreases victim's piece count by 1 ($N \to N-1$).
+- **En Passant**: Decreases victim's pawn count by 1 ($N \to N-1$).
+- **Quiet Promotions (e.g. `e8=Q`)**: Replaces 1 pawn with 1 piece of the same color ($N \to N$, net change 0).
+- **Capture Promotions (e.g. `exd8=Q`)**: Removes opponent piece and promotes pawn ($N \to N-1$).
+
+Therefore, for any chess game, total piece count per side is strictly monotonically non-increasing:
+$$\text{WhitePieces}(t) \ge \text{WhitePieces}(t+1) \quad \text{and} \quad \text{BlackPieces}(t) \ge \text{BlackPieces}(t+1)$$
+
+### Early Loop Termination
+When evaluating any target position with $T_{\text{white}}$ and $T_{\text{black}}$ pieces:
+```rust
+replay.apply_move(m);
+if replay.white_pieces < target_w || replay.black_pieces < target_b {
+    break; // Impossible to ever reach target position in any subsequent ply
+}
+```
+
+### Benchmark Impact
+- **LumbrasGigaBase (10.35M games)**: Scans for opening positions (e.g., Alapin Sicilian `2. c3 Nf6`) dropped from **1,043 ms down to 371 ms** (a **~2.8x speedup**), while preserving 100% exact matching accuracy (56,458 matching games).
+
+---
+
+## 11. Ultra-Large PGN Ingestion & Preprocessing Guide (20M+ Games / 40+ GB)
+
+### Architecture & Format Capacity
+The `.pgn.idx` format uses 64-bit offsets and 40-byte compact records:
+- **Max File Size**: Up to 16 Exabytes (`u64` file offset).
+- **Max Game Text Size**: Up to 4 GB (`u32` length).
+- **Index Footprint**: $20{,}000{,}000 \text{ games} \times 40\text{ bytes} = \mathbf{800\text{ MB}}$ memory-mapped array.
+
+### Raw PGN Pitfalls & Best Practices
+
+#### 1. The Unique `[Site ...]` URL Bottleneck
+- **Problem**: Lichess monthly dumps embed a unique game URL in every game, e.g. `[Site "https://lichess.org/abcd1234"]`.
+- **Impact**: In a 20-million-game database, deduplicating the string pool creates **20 million heap-allocated strings** in RAM (~1.5 GB), causing heavy garbage collection and slow startup deserialization in `PgnNameTables`.
+- **Solution / Preprocessing**: Normalize `[Site ...]` to `[Site "lichess.org"]` or strip unique game IDs prior to indexing. This collapses 20,000,000 unique strings down to **1 single string**.
+
+#### 2. Clock & Evaluation Comment Overhead
+- **Problem**: Raw Lichess PGNs contain move comments after every half-move (`[%clk 0:03:00]`, `[%eval 0.12]`).
+- **Impact**: Inflates a 20-million-game PGN from **~12–14 GB up to 44 GB** (>65% of the file is comment text).
+- **Solution / Preprocessing**: Strip `{ [%clk ...] }` and `{ [%eval ...] }` blocks. This shrinks disk I/O and speeds up move scanning and booster building by **3x to 4x**.
+
+
 
