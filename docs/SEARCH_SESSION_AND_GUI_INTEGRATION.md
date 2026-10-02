@@ -22,8 +22,9 @@ Whenever a search is executed—whether through **CQL language queries**, **dire
 │                       scid-mgr Rust Server Engine                      │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │                    Search Execution Engine                       │  │
+│  │   - 16-Bit Search Booster (`.boost.idx` parallel flat-stream)    │  │
 │  │   - CQL / DSL Query Evaluator (Moves, Paths, Motifs, Symmetries) │  │
-│  │   - Inverted Position Index (`.pos.idx` sub-ms candidate lookup) │  │
+│  │   - Inverted Position Index (`.pos.idx` candidate lookup)        │  │
 │  │   - Bitboard Material Analyzer (Piece counts, Bishop colors)     │  │
 │  └──────────────────────────────────┬───────────────────────────────┘  │
 │                                     ▼

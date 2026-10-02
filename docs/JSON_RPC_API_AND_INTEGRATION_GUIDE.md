@@ -77,7 +77,7 @@ The server handles two categories of output lines:
 ### 2.1 Database Lifecycle & Management
 
 #### `open`
-Opens a database on disk (`.si5`, `.si4`, or `.pgn`). Automatically checks companion indexes (`.pos.idx`, `.tree.idx`, `.hot.idx`, `.feat.idx`) and clears prior search session caches.
+Opens a database on disk (`.si5`, `.si4`, or `.pgn`). Automatically checks companion indexes (`.boost.idx`, `.pos.idx`, `.tree.idx`, `.hot.idx`, `.feat.idx`) and clears prior search session caches.
 - **Request**:
   ```json
   {
@@ -94,11 +94,17 @@ Opens a database on disk (`.si5`, `.si4`, or `.pgn`). Automatically checks compa
     "id": 1,
     "status": "ok",
     "data": {
+      "has_booster": true,
+      "booster_index_status": "valid",
+      "booster_index_plies": 420581900,
       "stats": {
         "db_type": "SCID",
         "game_count": 10352410,
         "deleted_count": 0,
         "path": "C:/chess/databases/Mega2026.si5",
+        "has_booster": true,
+        "booster_index_status": "valid",
+        "booster_index_plies": 420581900,
         "pos_index_status": "valid",
         "pos_index_unique_positions": 4120300,
         "tree_index_status": "valid",
@@ -294,11 +300,71 @@ Accelerated Zobrist binary position search (< 0.1 ms when `.pos.idx` is present)
 #### `search_material`
 Hardware bitboard material searches (e.g. piece counts, opposite-colored bishops). Returns a `search_id` for pagination via `query_games`.
 
+#### `build_booster_index` (alias: `build_booster`)
+Builds the 16-bit Search Booster companion index (`.boost.idx`) across all CPU cores.
+- **Request**: `{"id": 30, "command": "build_booster_index", "params": {}}`
+- **Streaming Progress Event**:
+  ```json
+  {
+    "event": "build_booster_progress",
+    "data": {
+      "scanned": 500000,
+      "total": 3500000,
+      "plies": 41200000,
+      "percent": 14.28
+    }
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "id": 30,
+    "status": "ok",
+    "data": {
+      "status": "valid",
+      "path": "C:/chess/databases/Mega2026.boost.idx",
+      "games_indexed": 3500000,
+      "total_plies": 284910200,
+      "elapsed_ms": 1240,
+      "file_size_bytes": 597820464
+    }
+  }
+  ```
+
+#### `check_booster_index`
+Checks if the database has a valid, up-to-date Search Booster companion index.
+- **Request**: `{"id": 31, "command": "check_booster_index", "params": {}}`
+- **Response**:
+  ```json
+  {
+    "id": 31,
+    "status": "ok",
+    "data": {
+      "status": "valid", // "valid" | "outdated" | "missing"
+      "path": "C:/chess/databases/Mega2026.boost.idx",
+      "games_indexed": 3500000,
+      "total_plies": 284910200,
+      "file_size_bytes": 597820464
+    }
+  }
+  ```
+
 #### `continuations` & `build_continuations`
-Explores common multi-move continuation branches using `.hot.idx` DAG graph.
+Explores common multi-move continuation branches using `.boost.idx` or `.hot.idx` DAG graph.
 
 #### `endgames` & `build_endgames`
 47-feature endgame taxonomy analytics using `.feat.idx` companion index.
+
+---
+
+### 2.5 💡 GUI Best Practice: Search Booster Missing/Outdated Alerts
+
+When opening a database:
+1. Check `data.booster_index_status` from the `open` response (or call `check_booster_index`).
+2. If `booster_index_status != "valid"` (i.e. `"missing"` or `"outdated"`):
+   - Display an alert/banner or prompt in the GUI:  
+     *"⚡ High-speed Search Booster index is missing for this database. Build it now for instant opening tree and sub-second position searches?"*
+   - On user confirmation, send `{"command": "build_booster_index"}` and wire the `build_booster_progress` event to a `QProgressBar`.
 
 ---
 
