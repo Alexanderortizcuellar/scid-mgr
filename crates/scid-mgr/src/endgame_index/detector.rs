@@ -1,6 +1,6 @@
 use crate::endgame_index::catalog::{ConditionDef, EndgameCatalog, EndgameFeatureDef, SidePattern};
 use crate::endgame_index::model::GameFeatureRecord;
-use shakmaty::{Board, Chess, Position, Square};
+use shakmaty::{Chess, Position};
 
 pub trait FeatureDetector {
     fn process_position(&mut self, pos: &Chess);
@@ -52,11 +52,112 @@ impl EndgameDetector {
             return 0;
         }
 
+        let first_w_b_sq = board
+            .white()
+            .intersect(board.bishops())
+            .into_iter()
+            .next()
+            .map(|s| s as usize);
+        let first_b_b_sq = board
+            .black()
+            .intersect(board.bishops())
+            .into_iter()
+            .next()
+            .map(|s| s as usize);
+
         let mut mask = 0u64;
 
         for feat in &self.catalog.features {
             if Self::matches_feature(
-                feat, board, w_q, w_r, w_b, w_n, w_p, b_q, b_r, b_b, b_n, b_p,
+                feat,
+                w_q,
+                w_r,
+                w_b,
+                w_n,
+                w_p,
+                b_q,
+                b_r,
+                b_b,
+                b_n,
+                b_p,
+                first_w_b_sq,
+                first_b_b_sq,
+            ) {
+                mask |= 1u64 << feat.bit;
+            }
+        }
+
+        mask
+    }
+
+    /// Sub-nanosecond endgame feature detector evaluating a raw 64-byte scratchpad board
+    #[inline]
+    pub fn evaluate_raw_board(&self, board: &[u8; 64]) -> u64 {
+        let mut w_q = 0u8;
+        let mut w_r = 0u8;
+        let mut w_b = 0u8;
+        let mut w_n = 0u8;
+        let mut w_p = 0u8;
+
+        let mut b_q = 0u8;
+        let mut b_r = 0u8;
+        let mut b_b = 0u8;
+        let mut b_n = 0u8;
+        let mut b_p = 0u8;
+
+        let mut first_w_b_sq = None;
+        let mut first_b_b_sq = None;
+
+        for (sq, &piece) in board.iter().enumerate() {
+            match piece {
+                1 => w_p += 1,
+                2 => w_n += 1,
+                3 => {
+                    w_b += 1;
+                    if first_w_b_sq.is_none() {
+                        first_w_b_sq = Some(sq);
+                    }
+                }
+                4 => w_r += 1,
+                5 => w_q += 1,
+                9 => b_p += 1,
+                10 => b_n += 1,
+                11 => {
+                    b_b += 1;
+                    if first_b_b_sq.is_none() {
+                        first_b_b_sq = Some(sq);
+                    }
+                }
+                12 => b_r += 1,
+                13 => b_q += 1,
+                _ => {}
+            }
+        }
+
+        // Quick bail-out: if total piece count is clearly middlegame (> 4 major/minor pieces per side)
+        let w_minors_majors = w_q + w_r + w_b + w_n;
+        let b_minors_majors = b_q + b_r + b_b + b_n;
+        if w_minors_majors > 4 || b_minors_majors > 4 {
+            return 0;
+        }
+
+        let mut mask = 0u64;
+
+        for feat in &self.catalog.features {
+            if Self::matches_feature(
+                feat,
+                w_q,
+                w_r,
+                w_b,
+                w_n,
+                w_p,
+                b_q,
+                b_r,
+                b_b,
+                b_n,
+                b_p,
+                first_w_b_sq,
+                first_b_b_sq,
             ) {
                 mask |= 1u64 << feat.bit;
             }
@@ -98,7 +199,6 @@ impl EndgameDetector {
     #[inline]
     fn matches_feature(
         feat: &EndgameFeatureDef,
-        board: &Board,
         w_q: u8,
         w_r: u8,
         w_b: u8,
@@ -109,6 +209,8 @@ impl EndgameDetector {
         b_b: u8,
         b_n: u8,
         b_p: u8,
+        first_w_b_sq: Option<usize>,
+        first_b_b_sq: Option<usize>,
     ) -> bool {
         let minors_cond = feat.conditions.iter().find_map(|c| match c {
             ConditionDef::SideBMinorsEqual(k) => Some(*k),
@@ -133,12 +235,24 @@ impl EndgameDetector {
             for cond in &feat.conditions {
                 match cond {
                     ConditionDef::SameColoredBishops => {
-                        if !Self::check_same_colored_bishops(board) {
+                        let is_same = match (first_w_b_sq, first_b_b_sq) {
+                            (Some(w_sq), Some(b_sq)) => {
+                                ((w_sq % 8 + w_sq / 8) % 2) == ((b_sq % 8 + b_sq / 8) % 2)
+                            }
+                            _ => false,
+                        };
+                        if !is_same {
                             return false;
                         }
                     }
                     ConditionDef::OppositeColoredBishops => {
-                        if !Self::check_opposite_colored_bishops(board) {
+                        let is_opp = match (first_w_b_sq, first_b_b_sq) {
+                            (Some(w_sq), Some(b_sq)) => {
+                                ((w_sq % 8 + w_sq / 8) % 2) != ((b_sq % 8 + b_sq / 8) % 2)
+                            }
+                            _ => false,
+                        };
+                        if !is_opp {
                             return false;
                         }
                     }
@@ -157,35 +271,6 @@ impl EndgameDetector {
         }
 
         true
-    }
-
-    #[inline]
-    fn check_same_colored_bishops(board: &Board) -> bool {
-        let mut w_bishops = board.white().intersect(board.bishops()).into_iter();
-        let mut b_bishops = board.black().intersect(board.bishops()).into_iter();
-
-        if let (Some(w_sq), Some(b_sq)) = (w_bishops.next(), b_bishops.next()) {
-            Self::square_is_light(w_sq) == Self::square_is_light(b_sq)
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    fn check_opposite_colored_bishops(board: &Board) -> bool {
-        let mut w_bishops = board.white().intersect(board.bishops()).into_iter();
-        let mut b_bishops = board.black().intersect(board.bishops()).into_iter();
-
-        if let (Some(w_sq), Some(b_sq)) = (w_bishops.next(), b_bishops.next()) {
-            Self::square_is_light(w_sq) != Self::square_is_light(b_sq)
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    fn square_is_light(sq: Square) -> bool {
-        (sq.file() as u8 + sq.rank() as u8) % 2 == 1
     }
 }
 
@@ -316,5 +401,35 @@ mod tests {
             1u64 << 43,
             "Should match END_QUEEN_VS_ROOK_MINOR"
         );
+    }
+
+    #[test]
+    fn test_raw_board_evaluation_equivalence() {
+        let detector = EndgameDetector::new();
+        let test_fens = [
+            "8/8/8/8/4k3/8/4P3/4K3 w - - 0 1",
+            "8/8/8/8/4K3/8/4p3/4k3 b - - 0 1",
+            "8/8/8/4k3/4r3/8/4R3/4K3 w - - 0 1",
+            "8/8/8/4k3/4r3/8/4P3/4K2R w - - 0 1",
+            "8/8/8/4k3/4b3/8/4B3/4K3 w - - 0 1",
+            "8/8/8/4k3/4b3/8/5B2/4K3 w - - 0 1",
+            "8/8/8/4k3/4bn2/8/4R3/4K3 w - - 0 1",
+            "8/8/8/4k3/4rn2/8/4Q3/4K3 w - - 0 1",
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        ];
+
+        for fen in test_fens {
+            let pos = parse_fen(fen);
+            let pos_mask = detector.evaluate_position(&pos);
+
+            let raw_board = crate::search_booster::chess_to_board_array(&pos);
+            let raw_mask = detector.evaluate_raw_board(&raw_board);
+
+            assert_eq!(
+                pos_mask, raw_mask,
+                "Mismatch between evaluate_position and evaluate_raw_board for FEN: {}",
+                fen
+            );
+        }
     }
 }

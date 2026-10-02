@@ -48,18 +48,20 @@ impl BoostIndexBuilder {
         let progress_counter = AtomicUsize::new(0);
 
         // Decode games in parallel across CPU threads into vector of BoostMove
-        let games_moves: Vec<(Vec<BoostMove>, u8)> = offsets
+        let games_moves: Vec<(Vec<BoostMove>, u8, bool)> = offsets
             .par_iter()
             .map(|&(start_pos, end_pos)| {
                 let chunk = &mmap[start_pos..end_pos];
                 let mut moves = Vec::with_capacity(80);
                 let mut result_code = 0u8;
+                let mut is_custom_fen = false;
 
                 let mut reader = BufferedReader::new(chunk);
                 struct PgnMoveCollector<'a> {
                     pos: Chess,
                     moves: &'a mut Vec<BoostMove>,
                     result_code: &'a mut u8,
+                    is_custom_fen: &'a mut bool,
                 }
 
                 impl<'a> Visitor for PgnMoveCollector<'a> {
@@ -79,6 +81,9 @@ impl BoostIndexBuilder {
                             if let Ok(fen) = fen_str.parse::<shakmaty::fen::Fen>() {
                                 if let Ok(pos) = fen.into_position(shakmaty::CastlingMode::Chess960)
                                 {
+                                    if pos != Chess::default() {
+                                        *self.is_custom_fen = true;
+                                    }
                                     self.pos = pos;
                                 }
                             }
@@ -108,6 +113,7 @@ impl BoostIndexBuilder {
                     pos: Chess::default(),
                     moves: &mut moves,
                     result_code: &mut result_code,
+                    is_custom_fen: &mut is_custom_fen,
                 };
                 let _ = reader.read_all(&mut collector);
 
@@ -118,7 +124,7 @@ impl BoostIndexBuilder {
                     }
                 }
 
-                (moves, result_code)
+                (moves, result_code, is_custom_fen)
             })
             .collect();
 
@@ -177,7 +183,7 @@ impl BoostIndexBuilder {
         let progress_counter = AtomicUsize::new(0);
         let game_ids: Vec<usize> = (0..total_games).collect();
 
-        let games_moves: Vec<(Vec<BoostMove>, u8)> = game_ids
+        let games_moves: Vec<(Vec<BoostMove>, u8, bool)> = game_ids
             .par_chunks(2000)
             .flat_map(|chunk| {
                 let mut chunk_res = Vec::with_capacity(chunk.len());
@@ -185,7 +191,7 @@ impl BoostIndexBuilder {
                 for &gid in chunk {
                     let entry = &entries[gid];
                     if entry.deleted {
-                        chunk_res.push((Vec::new(), entry.result));
+                        chunk_res.push((Vec::new(), entry.result, false));
                         let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
                         if let Some(ref cb) = progress_cb {
                             if done.is_multiple_of(10000) || done == total_games {
@@ -198,7 +204,7 @@ impl BoostIndexBuilder {
                     let start = entry.offset as usize;
                     let end = start + entry.length as usize;
                     if end > games_mmap.len() || start >= end {
-                        chunk_res.push((Vec::new(), entry.result));
+                        chunk_res.push((Vec::new(), entry.result, false));
                         continue;
                     }
 
@@ -209,11 +215,12 @@ impl BoostIndexBuilder {
                         match crate::position_search::parse_start_position(blob, &mut cursor) {
                             Some(p) => p,
                             None => {
-                                chunk_res.push((Vec::new(), entry.result));
+                                chunk_res.push((Vec::new(), entry.result, false));
                                 continue;
                             }
                         };
 
+                    let is_custom_fen = pos != Chess::default();
                     let mut slots = crate::position_search::standard_piece_slots();
                     let mut counts = [16usize, 16usize];
                     let mut moves = Vec::with_capacity(80);
@@ -268,7 +275,7 @@ impl BoostIndexBuilder {
                         pos.play_unchecked(&mv);
                     }
 
-                    chunk_res.push((moves, entry.result));
+                    chunk_res.push((moves, entry.result, is_custom_fen));
                     let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
                     if let Some(ref cb) = progress_cb {
                         if done.is_multiple_of(10000) || done == total_games {
@@ -307,7 +314,7 @@ impl BoostIndexBuilder {
         game_count: usize,
         db_mtime_secs: u64,
         db_file_size: u64,
-        games_moves: &[(Vec<BoostMove>, u8)],
+        games_moves: &[(Vec<BoostMove>, u8, bool)],
         start_time: Instant,
     ) -> Result<(u64, u128)> {
         let file =
@@ -332,9 +339,15 @@ impl BoostIndexBuilder {
         let mut current_move_offset = 0u32;
         let mut total_plies = 0u64;
 
-        for (moves, result) in games_moves {
+        for (moves, result, is_custom_fen) in games_moves {
             let ply_count = moves.len() as u16;
-            let entry = BoostGameEntry::new(current_move_offset, ply_count, *result, false);
+            let entry = BoostGameEntry::new(
+                current_move_offset,
+                ply_count,
+                *result,
+                false,
+                *is_custom_fen,
+            );
             writer.write_all(&entry.to_bytes())?;
 
             current_move_offset += ply_count as u32;
@@ -342,7 +355,7 @@ impl BoostIndexBuilder {
         }
 
         // 3. Write Move Payload Buffer
-        for (moves, _) in games_moves {
+        for (moves, _, _) in games_moves {
             for m in moves {
                 writer.write_all(&m.0.to_le_bytes())?;
             }

@@ -328,18 +328,36 @@ pub struct BoostGameEntry {
 
 impl BoostGameEntry {
     #[inline(always)]
-    pub fn new(move_offset: u32, ply_count: u16, result: u8, is_deleted: bool) -> Self {
+    pub fn new(
+        move_offset: u32,
+        ply_count: u16,
+        result: u8,
+        is_deleted: bool,
+        is_custom_fen: bool,
+    ) -> Self {
+        let mut flags = 0u8;
+        if is_deleted {
+            flags |= 1;
+        }
+        if is_custom_fen {
+            flags |= 2;
+        }
         Self {
             move_offset,
             ply_count,
             result,
-            flags: if is_deleted { 1 } else { 0 },
+            flags,
         }
     }
 
     #[inline(always)]
     pub fn is_deleted(&self) -> bool {
         (self.flags & 1) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_custom_fen(&self) -> bool {
+        (self.flags & 2) != 0
     }
 
     #[inline(always)]

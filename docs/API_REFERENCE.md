@@ -85,7 +85,7 @@ Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loade
 - **Returns**: `{ search_id: string, total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
 
 ### `opening_tree` (or `query_tree`)
-Queries the instant Opening Tree / Explorer for any board position (FEN or starting board).
+Queries the instant Opening Tree / Explorer for any board position (FEN or starting board). Supports **single-pass combined computation** of both opening tree candidate moves and multi-ply continuation lines simultaneously.
 - **Params**:
   - `fen`: `string` (optional FEN position; defaults to starting board)
   - `max_sample_games`: `number` (optional, default: `20`; limits sample game IDs returned per move; use `0` for pure stats)
@@ -93,7 +93,12 @@ Queries the instant Opening Tree / Explorer for any board position (FEN or start
   - `use_search_results`: `boolean` (optional; if `true`, calculates stats strictly for the current filtered search results)
   - `game_ids`: `number[]` (optional; calculates stats strictly for an explicit list of game IDs)
   - `filter`: `GameFilter` (optional; dynamically filters games by player, date, ECO, rating, etc. before computing position tree)
-- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo, sample_game_ids }], sample_game_ids }`
+  - `include_continuations`: `boolean` (optional, default: `false`; enables single-pass continuation lines calculation)
+  - `continuation_depth` / `max_depth`: `number` (optional, default: `8`; half-moves lookahead)
+  - `max_lines`: `number` (optional, default: `10`; max variation lines to return)
+  - `min_games`: `number` (optional, default: `1`; frequency cutoff)
+  - `min_percentage`: `number` (optional, default: `0.0`; branch percentage threshold)
+- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo, sample_game_ids }], sample_game_ids, continuations?: [{ moves, formatted, games, percentage, white_wins, draws, black_wins }] }`
 
 ### `pos_index_status`
 Checks the companion `.pos.idx` index status (`valid`, `outdated`, `missing`) and game counts.

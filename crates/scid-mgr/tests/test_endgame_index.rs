@@ -285,3 +285,91 @@ fn test_handle_check_all_four_indexes() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_booster_accelerated_endgame_build_and_equivalence() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("booster_endgames.pgn");
+    let mut file = std::fs::File::create(&pgn_path)?;
+    file.write_all(ENDGAME_PGN.as_bytes())?;
+    file.flush()?;
+
+    let builder = EndgameIndexBuilder::new();
+
+    // 1. Build normal endgame index without booster
+    let no_boost_feat = dir.path().join("no_boost.feat.idx");
+    let (p1, total1, _t1) = builder.build_for_pgn(&pgn_path, Some(no_boost_feat.clone()), None)?;
+    assert_eq!(total1, 3);
+    let mmap1 = MmapFeatureIndex::open(&p1)?;
+
+    // 2. Build booster index for the PGN
+    let (boost_path, boost_games, boost_plies, _tb) =
+        scid_mgr::search_booster::BoostIndexBuilder::build_for_pgn(&pgn_path, None, None)?;
+    assert_eq!(boost_games, 3);
+    assert!(boost_plies > 0);
+    assert!(boost_path.exists());
+
+    // 3. Build endgame index WITH booster (automatically detected)
+    let with_boost_feat = dir.path().join("with_boost.feat.idx");
+    let (p2, total2, _t2) =
+        builder.build_for_pgn(&pgn_path, Some(with_boost_feat.clone()), None)?;
+    assert_eq!(total2, 3);
+    let mmap2 = MmapFeatureIndex::open(&p2)?;
+
+    // 4. Verify exact bit-for-bit equivalence of feature records
+    assert_eq!(mmap1.game_count(), mmap2.game_count());
+    for gid in 0..mmap1.game_count() {
+        let r1 = mmap1.get_record(gid).unwrap();
+        let r2 = mmap2.get_record(gid).unwrap();
+        assert_eq!(
+            r1.endgame_bits, r2.endgame_bits,
+            "Game {} endgame bits mismatch between standard build and booster-accelerated build",
+            gid
+        );
+    }
+
+    // 5. Test with SCID format (.si5)
+    let scid_base = dir.path().join("booster_scid.si5");
+    let mut db = ScidDatabaseWrapper::create(&scid_base, ScidFormat::Si5)?;
+    let g1 = r#"[Event "Endgame Study 1 - Lucena"]
+[Date "2024.01.01"]
+[White "Player A"]
+[Black "Player B"]
+[Result "1-0"]
+[SetUp "1"]
+[FEN "1K1R4/8/k7/8/8/8/8/6r1 w - - 0 1"]
+
+1. Rd6+ Ka5 2. Rd7 1-0"#;
+    let g2 = r#"[Event "Endgame Study 2 - Opposite Bishops"]
+[Date "2024.01.02"]
+[White "Player C"]
+[Black "Player D"]
+[Result "1/2-1/2"]
+[SetUp "1"]
+[FEN "8/8/8/4k3/4b3/8/5B2/4K3 w - - 0 1"]
+
+1. Bg3+ Kd4 2. Bf2+ Kd5 1/2-1/2"#;
+    db.add_game(g1)?;
+    db.add_game(g2)?;
+    db.save()?;
+
+    // Build SCID booster
+    let (scid_boost_path, _, _, _) =
+        scid_mgr::search_booster::BoostIndexBuilder::build_for_scid(&db, None, None)?;
+    assert!(scid_boost_path.exists());
+
+    // Build SCID feat index with booster fast-path
+    let scid_feat_path = dir.path().join("booster_scid.feat.idx");
+    let (scid_feat, total_scid, _) =
+        builder.build_for_scid(&db, Some(scid_feat_path.clone()), None)?;
+    assert_eq!(total_scid, 2);
+    let scid_mmap = MmapFeatureIndex::open(&scid_feat)?;
+    assert_eq!(scid_mmap.game_count(), 2);
+
+    let catalog = EndgameCatalog::default_catalog();
+    let q_rep = EndgameQueryEngine::query_feature(&scid_mmap, &catalog, "END_BISHOP_OCB", 5)?;
+    assert_eq!(q_rep.matching_games_count, 1);
+    assert_eq!(q_rep.sample_game_ids, vec![1]);
+
+    Ok(())
+}
