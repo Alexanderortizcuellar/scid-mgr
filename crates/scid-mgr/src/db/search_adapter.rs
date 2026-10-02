@@ -15,14 +15,14 @@ impl ScidDatabaseWrapper {
         F: Fn(usize, usize, usize) + Sync,
     {
         let start_time = std::time::Instant::now();
-        let is_exact_mode = mode_param
+        let is_exact_or_board = mode_param
             .map(|m| {
                 let m = m.to_lowercase();
-                m == "exact" || m == "auto" || m.is_empty()
+                m == "exact" || m == "auto" || m.is_empty() || m == "board_only"
             })
             .unwrap_or(true);
 
-        if is_exact_mode && turn_param.is_none() {
+        if is_exact_or_board {
             // ⚡ 1. Try ultra-fast Search Booster (.boost.idx)
             let booster_path =
                 crate::search_booster::resolve_companion_booster_path(&self.index_path);
@@ -31,7 +31,9 @@ impl ScidDatabaseWrapper {
                     if boost_idx.num_games() == self.entries.len() {
                         let evaluator =
                             crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-                        if let Ok(boost_matches) = evaluator.search_position(fen_str, max_ply) {
+                        if let Ok(boost_matches) =
+                            evaluator.search_position_with_options(fen_str, turn_param, max_ply)
+                        {
                             let matches: Vec<crate::position_search::PositionMatch> = boost_matches
                                 .into_iter()
                                 .map(|bm| crate::position_search::PositionMatch {

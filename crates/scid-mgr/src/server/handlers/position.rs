@@ -124,7 +124,9 @@ pub fn handle_search_position(
         if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
             if boost_idx.num_games() == total_games {
                 let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-                if let Ok(boost_matches) = evaluator.search_position(fen, max_ply) {
+                if let Ok(boost_matches) =
+                    evaluator.search_position_with_options(fen, turn_param, max_ply)
+                {
                     let matches: Vec<ScidMatchResult> = boost_matches
                         .into_iter()
                         .map(|bm| ScidMatchResult {

@@ -157,10 +157,11 @@ impl<'a> BoostSearchEvaluator<'a> {
         Self { index }
     }
 
-    /// Scans games in parallel for board positions reaching a target FEN
-    pub fn search_position(
+    /// Scans games in parallel for board positions reaching a target FEN with optional turn filter
+    pub fn search_position_with_options(
         &self,
         target_fen: &str,
+        turn_filter: Option<&str>,
         max_ply: Option<usize>,
     ) -> Result<Vec<BoostMatch>> {
         let fen: Fen = target_fen
@@ -172,6 +173,20 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let target_board = chess_to_board_array(&target_pos);
         let total_games = self.index.game_count();
+
+        let turn_req: Option<u8> = match turn_filter {
+            Some(t) => {
+                let t_low = t.trim().to_lowercase();
+                if t_low == "w" || t_low == "white" {
+                    Some(0)
+                } else if t_low == "b" || t_low == "black" {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
 
         let matches: Vec<BoostMatch> = (0..total_games)
             .into_par_iter()
@@ -190,13 +205,22 @@ impl<'a> BoostSearchEvaluator<'a> {
                 let mut matching_plies = Vec::new();
 
                 if replay.board == target_board {
-                    matching_plies.push(0);
+                    if turn_req.is_none() || turn_req == Some(0) {
+                        matching_plies.push(0);
+                    }
                 }
 
                 for (ply_idx, &m) in moves[..limit].iter().enumerate() {
                     replay.apply_move(m);
+                    let ply = ply_idx + 1;
                     if replay.board == target_board {
-                        matching_plies.push(ply_idx + 1);
+                        let matches_turn = match turn_req {
+                            Some(rem) => (ply % 2) as u8 == rem,
+                            None => true,
+                        };
+                        if matches_turn {
+                            matching_plies.push(ply);
+                        }
                     }
                 }
 
@@ -212,6 +236,15 @@ impl<'a> BoostSearchEvaluator<'a> {
             .collect();
 
         Ok(matches)
+    }
+
+    /// Scans games in parallel for board positions reaching a target FEN
+    pub fn search_position(
+        &self,
+        target_fen: &str,
+        max_ply: Option<usize>,
+    ) -> Result<Vec<BoostMatch>> {
+        self.search_position_with_options(target_fen, None, max_ply)
     }
 
     /// Finds all distinct next moves (and their frequencies) directly following the target position
