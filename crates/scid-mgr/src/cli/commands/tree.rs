@@ -113,7 +113,13 @@ pub fn handle_tree(
                         })
                     };
                     tree_report = evaluator
-                        .calculate_opening_tree(fen_str, None, max_sample_ids, Some(meta_lookup))
+                        .calculate_opening_tree(
+                            fen_str,
+                            None,
+                            max_sample_ids,
+                            Some(meta_lookup),
+                            None,
+                        )
                         .ok()
                         .flatten();
                 }
@@ -135,7 +141,7 @@ pub fn handle_tree(
                     })
                 };
                 tree_report = evaluator
-                    .calculate_opening_tree(fen_str, None, max_sample_ids, Some(meta_lookup))
+                    .calculate_opening_tree(fen_str, None, max_sample_ids, Some(meta_lookup), None)
                     .ok()
                     .flatten();
             }

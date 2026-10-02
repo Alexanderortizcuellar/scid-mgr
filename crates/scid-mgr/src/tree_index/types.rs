@@ -333,4 +333,6 @@ pub struct OpeningTreeReport {
     pub sample_game_ids: Vec<u32>,
     #[serde(default)]
     pub sample_games: Vec<crate::db::GameSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuations: Option<Vec<crate::continuation_index::ContinuationLine>>,
 }

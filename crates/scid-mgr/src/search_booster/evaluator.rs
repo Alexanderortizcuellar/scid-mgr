@@ -351,12 +351,14 @@ impl<'a> BoostSearchEvaluator<'a> {
     }
 
     /// Calculates a complete, dynamic opening tree report from the booster stream with rich W/D/L stats, ELO averages, and sample games
+    /// Optionally calculates multi-ply continuation lines simultaneously in the exact same single parallel pass.
     pub fn calculate_opening_tree<F>(
         &self,
         target_fen: &str,
         target_game_ids: Option<&[usize]>,
         max_sample_ids: Option<usize>,
         meta_lookup: Option<F>,
+        continuation_config: Option<&ContinuationQuery>,
     ) -> Result<Option<OpeningTreeReport>>
     where
         F: Fn(usize) -> Option<BoostGameMeta> + Sync + Send,
@@ -394,6 +396,14 @@ impl<'a> BoostSearchEvaluator<'a> {
         }
 
         #[derive(Debug, Clone, Default)]
+        struct PathStats {
+            games: u64,
+            white_wins: u64,
+            draws: u64,
+            black_wins: u64,
+        }
+
+        #[derive(Debug, Clone, Default)]
         struct TreeAcc {
             total_games: u32,
             white_wins: u32,
@@ -401,6 +411,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             black_wins: u32,
             moves: HashMap<u16, MoveStatsAcc>,
             sample_game_ids: Vec<u32>,
+            paths: HashMap<Vec<u16>, PathStats>,
         }
 
         let total_games_in_index = self.index.game_count();
@@ -468,6 +479,16 @@ impl<'a> BoostSearchEvaluator<'a> {
                     if m_acc.sample_game_ids.len() < sample_cap {
                         m_acc.sample_game_ids.push(gid as u32);
                     }
+
+                    if let Some(cq) = continuation_config {
+                        let end = (ply + cq.max_depth).min(moves.len());
+                        let path: Vec<u16> = moves[ply..end].iter().map(|m| m.0).collect();
+                        let st = acc.paths.entry(path).or_default();
+                        st.games += 1;
+                        st.white_wins += w_win as u64;
+                        st.draws += draw as u64;
+                        st.black_wins += b_win as u64;
+                    }
                 }
             }
         };
@@ -517,6 +538,13 @@ impl<'a> BoostSearchEvaluator<'a> {
                             }
                         }
                     }
+                    for (k, v) in b.paths {
+                        let st = a.paths.entry(k).or_default();
+                        st.games += v.games;
+                        st.white_wins += v.white_wins;
+                        st.draws += v.draws;
+                        st.black_wins += v.black_wins;
+                    }
                     a
                 })
         } else {
@@ -562,6 +590,13 @@ impl<'a> BoostSearchEvaluator<'a> {
                                 ma.sample_game_ids.push(id);
                             }
                         }
+                    }
+                    for (k, v) in b.paths {
+                        let st = a.paths.entry(k).or_default();
+                        st.games += v.games;
+                        st.white_wins += v.white_wins;
+                        st.draws += v.draws;
+                        st.black_wins += v.black_wins;
                     }
                     a
                 })
@@ -619,6 +654,62 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         move_views.sort_by_key(|m| std::cmp::Reverse(m.total_games));
 
+        let continuations_res = if let Some(cq) = continuation_config {
+            if merged_acc.total_games > 0 {
+                let start_fullmove = parse_fen_fullmove(fen_to_parse);
+                let mut lines = Vec::new();
+                for (path, stats) in merged_acc.paths {
+                    let percentage = (stats.games as f64 / merged_acc.total_games as f64) * 100.0;
+                    if stats.games >= cq.min_games && percentage >= cq.min_percentage {
+                        let mut sim_pos = target_pos.clone();
+                        let mut san_moves = Vec::with_capacity(path.len());
+
+                        for pm in path {
+                            let bm = BoostMove(pm);
+                            if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
+                                let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
+                                    &mut sim_pos,
+                                    &m,
+                                );
+                                san_moves.push(san_plus.to_string());
+                            } else {
+                                san_moves.push(bm.to_uci_string());
+                            }
+                        }
+
+                        let formatted =
+                            format_continuation_moves(&target_pos, start_fullmove, &san_moves);
+                        lines.push(ContinuationLine {
+                            moves: san_moves,
+                            formatted,
+                            games: stats.games,
+                            percentage,
+                            white_wins: stats.white_wins,
+                            draws: stats.draws,
+                            black_wins: stats.black_wins,
+                        });
+                    }
+                }
+
+                lines.sort_by(|a, b| {
+                    b.games
+                        .cmp(&a.games)
+                        .then_with(|| b.moves.len().cmp(&a.moves.len()))
+                        .then_with(|| a.moves.cmp(&b.moves))
+                });
+
+                if lines.len() > cq.max_lines {
+                    lines.truncate(cq.max_lines);
+                }
+
+                Some(lines)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Ok(Some(OpeningTreeReport {
             fen: fen_to_parse.to_string(),
             zobrist_hash: target_hash,
@@ -632,6 +723,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             moves: move_views,
             sample_game_ids: merged_acc.sample_game_ids,
             sample_games: Vec::new(),
+            continuations: continuations_res,
         }))
     }
 

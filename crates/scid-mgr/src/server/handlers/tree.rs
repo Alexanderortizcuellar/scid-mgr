@@ -38,6 +38,12 @@ pub fn handle_opening_tree(
         .params
         .get("include_all_game_ids")
         .or_else(|| req.params.get("all_game_ids"))
+        .or_else(|| {
+            req.params.get("params").and_then(|p| {
+                p.get("include_all_game_ids")
+                    .or_else(|| p.get("all_game_ids"))
+            })
+        })
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
@@ -48,9 +54,88 @@ pub fn handle_opening_tree(
             .get("max_sample_games")
             .or_else(|| req.params.get("max_samples"))
             .or_else(|| req.params.get("sample_games"))
+            .or_else(|| {
+                req.params.get("params").and_then(|p| {
+                    p.get("max_sample_games")
+                        .or_else(|| p.get("max_samples"))
+                        .or_else(|| p.get("sample_games"))
+                })
+            })
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .or(Some(20))
+    };
+
+    let include_continuations = req
+        .params
+        .get("include_continuations")
+        .or_else(|| {
+            req.params
+                .get("params")
+                .and_then(|p| p.get("include_continuations"))
+        })
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let continuation_depth_opt = req
+        .params
+        .get("continuation_depth")
+        .or_else(|| req.params.get("depth"))
+        .or_else(|| req.params.get("max_depth"))
+        .or_else(|| {
+            req.params.get("params").and_then(|p| {
+                p.get("continuation_depth")
+                    .or_else(|| p.get("depth"))
+                    .or_else(|| p.get("max_depth"))
+            })
+        })
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    let max_lines = req
+        .params
+        .get("max_lines")
+        .or_else(|| req.params.get("lines"))
+        .or_else(|| {
+            req.params
+                .get("params")
+                .and_then(|p| p.get("max_lines").or_else(|| p.get("lines")))
+        })
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(10);
+
+    let min_games = req
+        .params
+        .get("min_games")
+        .or_else(|| req.params.get("params").and_then(|p| p.get("min_games")))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1);
+
+    let min_percentage = req
+        .params
+        .get("min_percentage")
+        .or_else(|| req.params.get("percentage"))
+        .or_else(|| {
+            req.params
+                .get("params")
+                .and_then(|p| p.get("min_percentage").or_else(|| p.get("percentage")))
+        })
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let continuation_config = if include_continuations || continuation_depth_opt.is_some() {
+        Some(crate::continuation_index::ContinuationQuery {
+            position: fen.to_string(),
+            max_depth: continuation_depth_opt.unwrap_or(8),
+            max_lines,
+            min_games,
+            min_percentage,
+            hot_idx: None,
+            pos_idx: None,
+        })
+    } else {
+        None
     };
 
     let db = match current_db {
@@ -126,6 +211,7 @@ pub fn handle_opening_tree(
                             target_game_ids.as_deref(),
                             max_sample_ids,
                             Some(meta_lookup),
+                            continuation_config.as_ref(),
                         )
                         .ok()
                         .flatten();
@@ -159,6 +245,7 @@ pub fn handle_opening_tree(
                             target_game_ids.as_deref(),
                             max_sample_ids,
                             Some(meta_lookup),
+                            continuation_config.as_ref(),
                         )
                         .ok()
                         .flatten();

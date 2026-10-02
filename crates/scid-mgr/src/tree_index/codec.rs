@@ -155,6 +155,7 @@ pub fn generate_tree_report(
         moves: move_views,
         sample_game_ids: Vec::new(),
         sample_games: Vec::new(),
+        continuations: None,
     }
 }
 

@@ -286,13 +286,20 @@ Fetches complete standard PGN text for a single game ID.
 ### 2.4 Instant Positional & Graph Engines
 
 #### `opening_tree` (alias: `query_tree`)
-Sub-millisecond opening explorer for any position (starting board or arbitrary FEN).
-- **Params**:
+Sub-millisecond opening explorer for any position (starting board or arbitrary FEN). Supports **single-pass combined computation** of both 1-ply tree moves and multi-ply continuation lines simultaneously.
+- **Tree Params**:
   - `fen`: `string` (optional; defaults to starting board)
   - `max_sample_games`: `number` (default: 20; sample game IDs per move)
   - `include_all_game_ids`: `boolean` (optional, default `false`)
   - `use_search_results`: `boolean` (optional; limits tree stats strictly to current active search results)
-  - `filter`: `GameFilter` (optional inline filter)
+  - `filter`: `GameFilter` (optional inline metadata filter)
+- **Combined Continuation Params** (optional):
+  - `include_continuations`: `boolean` (default: `false`; enables single-pass continuation lines calculation)
+  - `continuation_depth` / `max_depth`: `number` (default: `8`; half-moves lookahead)
+  - `max_lines`: `number` (default: `10`; max variation lines to return)
+  - `min_games`: `number` (default: `1`; frequency cutoff)
+  - `min_percentage`: `number` (default: `0.0`; branch percentage threshold)
+- **Response**: Returns standard tree stats (`moves`, `white_wins`, `avg_white_elo`, etc.) and when requested, `continuations: [ { "formatted": "1... e5 2. Nf3 Nc6", "games": 18200, ... } ]`.
 
 #### `search_position`
 Accelerated Zobrist binary position search (< 0.1 ms when `.pos.idx` is present). Returns a `search_id` for pagination via `query_games`.

@@ -382,15 +382,16 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
         }
     };
 
-    // 1. Opening Tree for starting position
+    // 1. Opening Tree for starting position (without continuations)
     let tree_rep = evaluator
-        .calculate_opening_tree("", None, Some(10), Some(meta_lookup))?
+        .calculate_opening_tree("", None, Some(10), Some(meta_lookup), None)?
         .expect("Tree report should exist for start position");
 
     assert_eq!(tree_rep.total_games, 4);
     assert_eq!(tree_rep.white_wins, 2);
     assert_eq!(tree_rep.draws, 1);
     assert_eq!(tree_rep.moves.len(), 1); // Only 1. e4 was played in all 4 games
+    assert!(tree_rep.continuations.is_none());
 
     let e4_move = &tree_rep.moves[0];
     assert_eq!(e4_move.san, "e4");
@@ -404,10 +405,26 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     assert_eq!(e4_move.avg_white_elo, Some(2533)); // (2600 + 2700 + 2300) / 3 = 2533
     assert_eq!(e4_move.last_played, Some("2026".to_string()));
 
-    // 2. Opening Tree after 1. e4
+    // 2. Opening Tree after 1. e4 with single-pass continuations
     let after_e4_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+    let cont_q = scid_mgr::continuation_index::ContinuationQuery {
+        position: after_e4_fen.to_string(),
+        max_depth: 4,
+        max_lines: 5,
+        min_games: 1,
+        min_percentage: 0.0,
+        hot_idx: None,
+        pos_idx: None,
+    };
+
     let e4_tree = evaluator
-        .calculate_opening_tree(after_e4_fen, None, Some(10), Some(meta_lookup))?
+        .calculate_opening_tree(
+            after_e4_fen,
+            None,
+            Some(10),
+            Some(meta_lookup),
+            Some(&cont_q),
+        )?
         .expect("Tree report should exist after 1. e4");
 
     assert_eq!(e4_tree.total_games, 4);
@@ -416,6 +433,9 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     assert_eq!(e4_tree.moves[0].total_games, 2);
     assert_eq!(e4_tree.moves[0].white_wins, 2);
     assert_eq!(e4_tree.moves[0].white_pct, 100.0);
+    assert!(e4_tree.continuations.is_some());
+    let cont_lines = e4_tree.continuations.as_ref().unwrap();
+    assert!(!cont_lines.is_empty());
 
     // 3. Dynamic Continuation Queries
     let query = scid_mgr::continuation_index::ContinuationQuery {
