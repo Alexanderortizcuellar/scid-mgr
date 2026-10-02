@@ -33,6 +33,37 @@ impl PgnDatabaseWrapper {
             .unwrap_or(true);
 
         if is_exact_mode && turn_param.is_none() {
+            // ⚡ 1. Try ultra-fast Search Booster (.boost.idx)
+            let booster_path =
+                crate::search_booster::resolve_companion_booster_path(&self.pgn_path);
+            if booster_path.exists() {
+                if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                    if boost_idx.num_games() == self.entries.len() {
+                        let evaluator =
+                            crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+                        if let Ok(boost_matches) = evaluator.search_position(target_fen, max_ply) {
+                            let matches: Vec<crate::position_search::PositionMatch> = boost_matches
+                                .into_iter()
+                                .map(|bm| crate::position_search::PositionMatch {
+                                    game_id: bm.game_id,
+                                    ply: bm.matching_plies.first().copied().unwrap_or(0),
+                                })
+                                .collect();
+                            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            progress(self.entries.len(), self.entries.len(), matches.len());
+                            return Ok(crate::position_search::PositionSearchResult {
+                                target_fen: target_fen.to_string(),
+                                target_hash: 0,
+                                matches,
+                                total_games_searched: self.entries.len(),
+                                elapsed_ms,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // ⚡ 2. Try sub-millisecond candidate lookup from PositionIndex (.pos.idx)
             if let Some((_pos, zobrist_hash)) =
                 crate::position_index::parse_target_position(target_fen)
             {
