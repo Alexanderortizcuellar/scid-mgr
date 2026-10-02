@@ -14,6 +14,56 @@ use crate::tree_index::{OpeningTreeMoveView, OpeningTreeReport};
 use super::codec::MmapBoostIndex;
 use super::types::{BoostGameMeta, BoostMove};
 
+pub const MAX_INLINE_PATH_PLIES: usize = 32;
+
+/// Fixed stack-allocated buffer for move sequences (zero heap allocations)
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InlinePath {
+    pub len: u8,
+    pub moves: [u16; MAX_INLINE_PATH_PLIES],
+}
+
+impl InlinePath {
+    #[inline(always)]
+    pub fn from_slice(slice: &[BoostMove]) -> Self {
+        let len = slice.len().min(MAX_INLINE_PATH_PLIES);
+        let mut moves = [0u16; MAX_INLINE_PATH_PLIES];
+        for (i, m) in slice[..len].iter().enumerate() {
+            moves[i] = m.0;
+        }
+        Self {
+            len: len as u8,
+            moves,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[u16] {
+        &self.moves[..self.len as usize]
+    }
+
+    #[inline(always)]
+    pub fn to_boost_moves(&self) -> Vec<BoostMove> {
+        self.as_slice().iter().map(|&m| BoostMove(m)).collect()
+    }
+}
+
+impl PartialEq for InlinePath {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for InlinePath {}
+
+impl std::hash::Hash for InlinePath {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
+}
+
 /// Lightweight 64-byte scratchpad board for sub-nanosecond move application
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FastReplayState {
@@ -413,7 +463,7 @@ impl<'a> BoostSearchEvaluator<'a> {
         let line_counts = (0..total_games)
             .into_par_iter()
             .fold(
-                std::collections::HashMap::<Vec<u16>, u32>::new,
+                std::collections::HashMap::<InlinePath, u32>::new,
                 |mut acc, gid| {
                     let _entry = match self.index.get_game_entry(gid) {
                         Some(e) if !e.is_deleted() => e,
@@ -431,8 +481,8 @@ impl<'a> BoostSearchEvaluator<'a> {
                     let mut replay = FastReplayState::new();
                     if replay.board == target_board && !moves.is_empty() {
                         let end = depth.min(moves.len());
-                        let seq: Vec<u16> = moves[0..end].iter().map(|m| m.0).collect();
-                        *acc.entry(seq).or_insert(0) += 1;
+                        let path = InlinePath::from_slice(&moves[0..end]);
+                        *acc.entry(path).or_insert(0) += 1;
                     }
 
                     for (ply_idx, &m) in moves[..limit].iter().enumerate() {
@@ -443,8 +493,8 @@ impl<'a> BoostSearchEvaluator<'a> {
                         if replay.board == target_board && ply_idx + 1 < moves.len() {
                             let start = ply_idx + 1;
                             let end = (start + depth).min(moves.len());
-                            let seq: Vec<u16> = moves[start..end].iter().map(|m| m.0).collect();
-                            *acc.entry(seq).or_insert(0) += 1;
+                            let path = InlinePath::from_slice(&moves[start..end]);
+                            *acc.entry(path).or_insert(0) += 1;
                         }
                     }
 
@@ -460,7 +510,7 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let mut sorted: Vec<(Vec<BoostMove>, u32)> = line_counts
             .into_iter()
-            .map(|(seq, count)| (seq.into_iter().map(BoostMove).collect(), count))
+            .map(|(path, count)| (path.to_boost_moves(), count))
             .collect();
         sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
 
@@ -529,7 +579,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             black_wins: u32,
             moves: HashMap<u16, MoveStatsAcc>,
             sample_game_ids: Vec<u32>,
-            paths: HashMap<Vec<u16>, PathStats>,
+            paths: HashMap<InlinePath, PathStats>,
         }
 
         let total_games_in_index = self.index.game_count();
@@ -603,7 +653,7 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                     if let Some(cq) = continuation_config {
                         let end = (ply + cq.max_depth).min(moves.len());
-                        let path: Vec<u16> = moves[ply..end].iter().map(|m| m.0).collect();
+                        let path = InlinePath::from_slice(&moves[ply..end]);
                         let st = acc.paths.entry(path).or_default();
                         st.games += 1;
                         st.white_wins += w_win as u64;
@@ -783,9 +833,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                     let percentage = (stats.games as f64 / merged_acc.total_games as f64) * 100.0;
                     if stats.games >= cq.min_games && percentage >= cq.min_percentage {
                         let mut sim_pos = target_pos.clone();
-                        let mut san_moves = Vec::with_capacity(path.len());
+                        let mut san_moves = Vec::with_capacity(path.len as usize);
 
-                        for pm in path {
+                        for &pm in path.as_slice() {
                             let bm = BoostMove(pm);
                             if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
                                 let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
@@ -875,7 +925,7 @@ impl<'a> BoostSearchEvaluator<'a> {
         struct ContAcc {
             total_processed: u64,
             games_reaching: u64,
-            paths: HashMap<Vec<u16>, PathStats>,
+            paths: HashMap<InlinePath, PathStats>,
         }
 
         let total_games_in_index = self.index.game_count();
@@ -925,7 +975,7 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                 if ply < moves.len() {
                     let end = (ply + max_depth).min(moves.len());
-                    let path: Vec<u16> = moves[ply..end].iter().map(|m| m.0).collect();
+                    let path = InlinePath::from_slice(&moves[ply..end]);
                     let st = acc.paths.entry(path).or_default();
                     st.games += 1;
                     st.white_wins += w_win;
@@ -982,9 +1032,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                 let percentage = (stats.games as f64 / merged_acc.games_reaching as f64) * 100.0;
                 if stats.games >= query.min_games && percentage >= query.min_percentage {
                     let mut sim_pos = start_pos.clone();
-                    let mut san_moves = Vec::with_capacity(path.len());
+                    let mut san_moves = Vec::with_capacity(path.len as usize);
 
-                    for pm in path {
+                    for &pm in path.as_slice() {
                         let bm = BoostMove(pm);
                         if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
                             let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
