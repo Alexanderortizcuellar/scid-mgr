@@ -1,10 +1,12 @@
 pub mod builder;
 pub mod codec;
+pub mod cql_adapter;
 pub mod evaluator;
 pub mod types;
 
 pub use builder::{BoostIndexBuilder, BoosterProgressCallback};
 pub use codec::{resolve_companion_booster_path, MmapBoostIndex};
+pub use cql_adapter::BoosterLanguageSearchAdapter;
 pub use evaluator::{
     chess_to_board_array, BoostMatch, BoostSearchEvaluator, FastReplayState, PackedPath256,
 };

@@ -162,6 +162,13 @@ class BackendClient(QObject):
         self.write_queue.put(msg)
         return req_id
 
+    def cancel_task(self, callback: Optional[Any] = None) -> int:
+        """
+        Sends non-blocking cancellation command ('cancel') to immediately abort
+        any running search, dynamic tree scan, or index building job on the backend.
+        """
+        return self.send_request("cancel", callback=callback)
+
     def stop(self):
         if not self.is_running():
             return

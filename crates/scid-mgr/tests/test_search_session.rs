@@ -13,6 +13,7 @@ fn test_search_session_scid_and_pgn_pagination() {
         .build()
         .unwrap();
     let mut session_mgr = SearchSessionManager::new();
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // 1. SCID Database Search Session Test
     let scid_path = Path::new("tests/fixtures/sample.si5");
@@ -29,7 +30,13 @@ fn test_search_session_scid_and_pgn_pagination() {
             }),
         };
 
-        let resp1 = handle_cql_search(&search_req, &db_backend, &mut session_mgr, &thread_pool);
+        let resp1 = handle_cql_search(
+            &search_req,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+            &cancel_flag,
+        );
         assert_eq!(resp1.status, "ok");
         let data1 = resp1.data.unwrap();
         let search_id = data1["search_id"].as_str().unwrap().to_string();
@@ -38,7 +45,13 @@ fn test_search_session_scid_and_pgn_pagination() {
         assert!(matched_count > 0);
 
         // B. Reusing identical search returns cached search_id
-        let resp2 = handle_cql_search(&search_req, &db_backend, &mut session_mgr, &thread_pool);
+        let resp2 = handle_cql_search(
+            &search_req,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+            &cancel_flag,
+        );
         assert_eq!(resp2.status, "ok");
         let data2 = resp2.data.unwrap();
         assert_eq!(data2["search_id"].as_str().unwrap(), search_id);
@@ -245,7 +258,13 @@ fn test_search_session_scid_and_pgn_pagination() {
                 "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
             }),
         };
-        let unified_resp = handle_search(&unified_req, &db_backend, &mut session_mgr, &thread_pool);
+        let unified_resp = handle_search(
+            &unified_req,
+            &db_backend,
+            &mut session_mgr,
+            &thread_pool,
+            &cancel_flag,
+        );
         assert_eq!(unified_resp.status, "ok");
         let unified_data = unified_resp.data.unwrap();
         assert!(unified_data.get("search_id").is_some());
@@ -282,6 +301,7 @@ fn test_search_session_scid_and_pgn_pagination() {
             &db_backend,
             &mut session_mgr,
             &thread_pool,
+            &cancel_flag,
         );
         assert_eq!(unified_cql_resp.status, "ok");
         let unified_cql_data = unified_cql_resp.data.unwrap();
@@ -302,8 +322,13 @@ fn test_search_session_scid_and_pgn_pagination() {
             }),
         };
 
-        let pgn_resp1 =
-            handle_cql_search(&search_req, &pgn_backend, &mut session_mgr, &thread_pool);
+        let pgn_resp1 = handle_cql_search(
+            &search_req,
+            &pgn_backend,
+            &mut session_mgr,
+            &thread_pool,
+            &cancel_flag,
+        );
         assert_eq!(pgn_resp1.status, "ok");
         let pgn_data1 = pgn_resp1.data.unwrap();
         let pgn_search_id = pgn_data1["search_id"].as_str().unwrap().to_string();

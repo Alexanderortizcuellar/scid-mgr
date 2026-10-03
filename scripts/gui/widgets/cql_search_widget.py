@@ -306,6 +306,15 @@ class CqlSearchWidget(QWidget):
         self.btn_search.clicked.connect(self.execute_search)
         run_bar.addWidget(self.btn_search)
 
+        self.btn_cancel_search = QPushButton("⛔ Stop")
+        self.btn_cancel_search.setStyleSheet(
+            "font-weight: bold; background-color: #d32f2f; color: white; padding: 6px 14px; border-radius: 4px;"
+        )
+        self.btn_cancel_search.setVisible(False)
+        self.btn_cancel_search.setToolTip("Immediately stop running search")
+        self.btn_cancel_search.clicked.connect(self.cancel_search)
+        run_bar.addWidget(self.btn_cancel_search)
+
         top_layout.addLayout(run_bar)
         main_layout.addWidget(top_box)
 
@@ -628,6 +637,15 @@ class CqlSearchWidget(QWidget):
 
         self.client.send_request("validate_dsl", {"query": query}, on_valid_resp)
 
+    def cancel_search(self):
+        if self.client and self.client.is_running():
+            self.lbl_results_header.setText("Aborting search...")
+            self.client.cancel_task()
+        self.btn_search.setEnabled(True)
+        self.btn_search.setText("▶ Run Search")
+        self.btn_cancel_search.setVisible(False)
+        self.progress_bar.setVisible(False)
+
     def execute_search(self):
         query = self.txt_query.toPlainText().strip()
         if not query:
@@ -652,6 +670,7 @@ class CqlSearchWidget(QWidget):
 
         self.btn_search.setEnabled(False)
         self.btn_search.setText("Searching...")
+        self.btn_cancel_search.setVisible(True)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.lbl_results_header.setText("🔍 Initializing search scanner...")
@@ -659,8 +678,13 @@ class CqlSearchWidget(QWidget):
         def on_search_done(resp: dict):
             self.btn_search.setEnabled(True)
             self.btn_search.setText("▶ Run Search")
+            self.btn_cancel_search.setVisible(False)
             self.progress_bar.setValue(100)
             self.progress_bar.setVisible(False)
+
+            if resp.get("status") == "canceled":
+                self.lbl_results_header.setText("⏹ Search canceled by user.")
+                return
 
             if resp.get("status") != "ok":
                 err = resp.get("error", "Search failed")

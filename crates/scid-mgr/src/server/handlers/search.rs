@@ -74,6 +74,7 @@ pub fn handle_search(
     current_db: &Option<DatabaseBackend>,
     session_mgr: &mut SearchSessionManager,
     thread_pool: &rayon::ThreadPool,
+    cancel_token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ResponseMessage {
     let id = req.id;
     let query_param = req
@@ -120,7 +121,7 @@ pub fn handle_search(
     // If only a raw CQL query string was provided without other filter fields, route to pure CQL search
     if let (Some(q_val), false) = (query_param, has_structured_fields) {
         if q_val.is_string() {
-            return handle_cql_search(req, current_db, session_mgr, thread_pool);
+            return handle_cql_search(req, current_db, session_mgr, thread_pool, cancel_token);
         }
     }
 
@@ -210,6 +211,15 @@ pub fn handle_search(
         }
     });
 
+    if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+        return ResponseMessage {
+            id,
+            status: "canceled".to_string(),
+            data: None,
+            error: Some("Operation canceled by client".to_string()),
+        };
+    }
+
     let duration_ms = start_time.elapsed().as_millis() as u64;
     let matched_count = match_results.len();
     let search_id =
@@ -234,6 +244,7 @@ pub fn handle_cql_search(
     current_db: &Option<DatabaseBackend>,
     session_mgr: &mut SearchSessionManager,
     thread_pool: &rayon::ThreadPool,
+    cancel_token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ResponseMessage {
     let id = req.id;
     let query_str = match req
@@ -332,6 +343,15 @@ pub fn handle_cql_search(
                     })
                 });
 
+                if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+                    return ResponseMessage {
+                        id,
+                        status: "canceled".to_string(),
+                        data: None,
+                        error: Some("Operation canceled by client".to_string()),
+                    };
+                }
+
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
                 let search_id = session_mgr.create_session(
@@ -420,6 +440,15 @@ pub fn handle_cql_search(
                     })
                 });
 
+                if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+                    return ResponseMessage {
+                        id,
+                        status: "canceled".to_string(),
+                        data: None,
+                        error: Some("Operation canceled by client".to_string()),
+                    };
+                }
+
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
                 let search_id = session_mgr.create_session(
@@ -484,6 +513,15 @@ pub fn handle_cql_search(
                         }
                     })
                 });
+
+                if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+                    return ResponseMessage {
+                        id,
+                        status: "canceled".to_string(),
+                        data: None,
+                        error: Some("Operation canceled by client".to_string()),
+                    };
+                }
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();

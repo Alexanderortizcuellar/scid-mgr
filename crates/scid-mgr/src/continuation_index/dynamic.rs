@@ -26,6 +26,25 @@ pub fn calculate_continuations_for_scid<P: AsRef<Path>>(
     query: &ContinuationQuery,
     candidate_game_ids: Option<&[usize]>,
 ) -> Option<ContinuationResult> {
+    calculate_continuations_for_scid_with_progress(
+        entries,
+        games_path,
+        query,
+        candidate_game_ids,
+        |_, _| {},
+    )
+}
+
+pub fn calculate_continuations_for_scid_with_progress<
+    P: AsRef<Path>,
+    F: Fn(usize, usize) + Sync,
+>(
+    entries: &[chess_scid_rw::entry::IndexEntry],
+    games_path: P,
+    query: &ContinuationQuery,
+    candidate_game_ids: Option<&[usize]>,
+    progress: F,
+) -> Option<ContinuationResult> {
     let target_pos = query.validate().ok()?;
     let target_hash_val: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
     let target_hash = target_hash_val.0;
@@ -135,9 +154,21 @@ pub fn calculate_continuations_for_scid<P: AsRef<Path>>(
         }
     };
 
+    let total = candidate_game_ids
+        .map(|ids| ids.len())
+        .unwrap_or(entries.len());
+    let scanned = std::sync::atomic::AtomicUsize::new(0);
+
     let (games_reaching, continuation_map) = if let Some(cand) = candidate_game_ids {
         cand.par_iter()
-            .filter_map(|&gid| process_game(gid))
+            .filter_map(|&gid| {
+                let res = process_game(gid);
+                let s = scanned.fetch_add(1, Ordering::Relaxed) + 1;
+                if s % 5000 == 0 || s >= total {
+                    progress(s.min(total), total);
+                }
+                res
+            })
             .fold(
                 || (0u64, HashMap::<Vec<PackedMove>, PathStats>::new()),
                 |(mut reached, mut map), (hit, path_opt, w, d, b)| {
@@ -173,7 +204,14 @@ pub fn calculate_continuations_for_scid<P: AsRef<Path>>(
     } else {
         (0..entries.len())
             .into_par_iter()
-            .filter_map(process_game)
+            .filter_map(|gid| {
+                let res = process_game(gid);
+                let s = scanned.fetch_add(1, Ordering::Relaxed) + 1;
+                if s % 5000 == 0 || s >= total {
+                    progress(s.min(total), total);
+                }
+                res
+            })
             .fold(
                 || (0u64, HashMap::<Vec<PackedMove>, PathStats>::new()),
                 |(mut reached, mut map), (hit, path_opt, w, d, b)| {
@@ -208,6 +246,8 @@ pub fn calculate_continuations_for_scid<P: AsRef<Path>>(
             )
     };
 
+    progress(total, total);
+
     let total_games = entries.iter().filter(|e| !e.deleted).count() as u64;
     Some(build_final_result(
         query,
@@ -222,6 +262,15 @@ pub fn calculate_continuations_for_pgn<P: AsRef<Path>>(
     pgn_path: P,
     query: &ContinuationQuery,
     candidate_game_ids: Option<&[usize]>,
+) -> Option<ContinuationResult> {
+    calculate_continuations_for_pgn_with_progress(pgn_path, query, candidate_game_ids, |_, _| {})
+}
+
+pub fn calculate_continuations_for_pgn_with_progress<P: AsRef<Path>, F: Fn(usize, usize) + Sync>(
+    pgn_path: P,
+    query: &ContinuationQuery,
+    candidate_game_ids: Option<&[usize]>,
+    progress: F,
 ) -> Option<ContinuationResult> {
     let target_pos = query.validate().ok()?;
     let target_hash_val: Zobrist64 = target_pos.zobrist_hash(EnPassantMode::Legal);
@@ -399,6 +448,7 @@ pub fn calculate_continuations_for_pgn<P: AsRef<Path>>(
         );
 
     let total_games = global_game_idx.load(std::sync::atomic::Ordering::Relaxed) as u64;
+    progress(total_games as usize, total_games as usize);
     Some(build_final_result(
         query,
         &target_pos,

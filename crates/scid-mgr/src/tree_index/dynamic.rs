@@ -12,20 +12,37 @@ use super::types::{OpeningTreeReport, PackedMove, TreePositionNode};
 // Dynamic On-the-Fly Tree Calculations
 // ---------------------------------------------------------------------------
 
-/// On-the-fly dynamic calculation of opening tree statistics for SCID databases
 pub fn calculate_tree_for_scid<P: AsRef<Path>>(
     entries: &[chess_scid_rw::entry::IndexEntry],
     games_path: P,
     fen_str: &str,
     target_game_ids: Option<&[usize]>,
+    max_depth: Option<usize>,
+) -> Option<OpeningTreeReport> {
+    calculate_tree_for_scid_with_progress(
+        entries,
+        games_path,
+        fen_str,
+        target_game_ids,
+        max_depth,
+        |_, _| {},
+    )
+}
+
+/// On-the-fly dynamic calculation of opening tree statistics for SCID databases with progress streaming
+pub fn calculate_tree_for_scid_with_progress<P: AsRef<Path>, F: Fn(usize, usize) + Sync>(
+    entries: &[chess_scid_rw::entry::IndexEntry],
+    games_path: P,
+    fen_str: &str,
+    target_game_ids: Option<&[usize]>,
     _max_depth: Option<usize>,
+    progress: F,
 ) -> Option<OpeningTreeReport> {
     let (target_pos, target_hash) = parse_target_position(fen_str)?;
     let file = File::open(games_path.as_ref()).ok()?;
     let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
 
     let max_ply = 50;
-    let mut node = TreePositionNode::new(target_hash);
 
     let process_game = |game_id: usize, node: &mut TreePositionNode| {
         if game_id >= entries.len() {
@@ -125,26 +142,103 @@ pub fn calculate_tree_for_scid<P: AsRef<Path>>(
         }
     };
 
-    if let Some(ids) = target_game_ids {
-        for &gid in ids {
-            process_game(gid, &mut node);
+    let total = target_game_ids
+        .map(|ids| ids.len())
+        .unwrap_or(entries.len());
+    let scanned = std::sync::atomic::AtomicUsize::new(0);
+
+    let node = if let Some(ids) = target_game_ids {
+        if ids.len() > 500 {
+            ids.par_chunks(250)
+                .map(|chunk| {
+                    let mut local_node = TreePositionNode::new(target_hash);
+                    for &gid in chunk {
+                        process_game(gid, &mut local_node);
+                    }
+                    let s = scanned.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed)
+                        + chunk.len();
+                    if s % 5000 < chunk.len() || s >= total {
+                        progress(s.min(total), total);
+                    }
+                    local_node
+                })
+                .reduce(
+                    || TreePositionNode::new(target_hash),
+                    |mut acc, n| {
+                        acc.merge(n);
+                        acc
+                    },
+                )
+        } else {
+            let mut local_node = TreePositionNode::new(target_hash);
+            for &gid in ids {
+                process_game(gid, &mut local_node);
+            }
+            progress(total, total);
+            local_node
         }
     } else {
-        for gid in 0..entries.len() {
-            process_game(gid, &mut node);
+        if total > 500 {
+            (0..total)
+                .into_par_iter()
+                .chunks(250)
+                .map(|chunk| {
+                    let mut local_node = TreePositionNode::new(target_hash);
+                    for gid in &chunk {
+                        process_game(*gid, &mut local_node);
+                    }
+                    let s = scanned.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed)
+                        + chunk.len();
+                    if s % 5000 < chunk.len() || s >= total {
+                        progress(s.min(total), total);
+                    }
+                    local_node
+                })
+                .reduce(
+                    || TreePositionNode::new(target_hash),
+                    |mut acc, n| {
+                        acc.merge(n);
+                        acc
+                    },
+                )
+        } else {
+            let mut local_node = TreePositionNode::new(target_hash);
+            for gid in 0..total {
+                process_game(gid, &mut local_node);
+            }
+            progress(total, total);
+            local_node
         }
-    }
+    };
 
     Some(generate_tree_report(&node, &target_pos, target_hash))
 }
 
-/// On-the-fly dynamic calculation of opening tree statistics for PGN databases
 pub fn calculate_tree_for_pgn(
     entries: &[crate::pgn_db::PgnIndexEntry],
     mmap: &memmap2::Mmap,
     fen_str: &str,
     target_game_ids: Option<&[usize]>,
+    max_depth: Option<usize>,
+) -> Option<OpeningTreeReport> {
+    calculate_tree_for_pgn_with_progress(
+        entries,
+        mmap,
+        fen_str,
+        target_game_ids,
+        max_depth,
+        |_, _| {},
+    )
+}
+
+/// On-the-fly dynamic calculation of opening tree statistics for PGN databases with progress streaming
+pub fn calculate_tree_for_pgn_with_progress<F: Fn(usize, usize) + Sync>(
+    entries: &[crate::pgn_db::PgnIndexEntry],
+    mmap: &memmap2::Mmap,
+    fen_str: &str,
+    target_game_ids: Option<&[usize]>,
     _max_depth: Option<usize>,
+    progress: F,
 ) -> Option<OpeningTreeReport> {
     let (target_pos, target_hash) = parse_target_position(fen_str)?;
     let max_ply = 50;
@@ -184,6 +278,11 @@ pub fn calculate_tree_for_pgn(
         let _ = reader.read_game(&mut visitor);
     };
 
+    let total = target_game_ids
+        .map(|ids| ids.len())
+        .unwrap_or(entries.len());
+    let scanned = std::sync::atomic::AtomicUsize::new(0);
+
     let node = if let Some(ids) = target_game_ids {
         if ids.len() > 500 {
             ids.par_chunks(250)
@@ -191,6 +290,11 @@ pub fn calculate_tree_for_pgn(
                     let mut local_node = TreePositionNode::new(target_hash);
                     for &gid in chunk {
                         process_single_game(gid, &mut local_node);
+                    }
+                    let s = scanned.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed)
+                        + chunk.len();
+                    if s % 5000 < chunk.len() || s >= total {
+                        progress(s.min(total), total);
                     }
                     local_node
                 })
@@ -206,10 +310,10 @@ pub fn calculate_tree_for_pgn(
             for &gid in ids {
                 process_single_game(gid, &mut local_node);
             }
+            progress(total, total);
             local_node
         }
     } else {
-        let total = entries.len();
         if total > 500 {
             (0..total)
                 .into_par_iter()
@@ -218,6 +322,10 @@ pub fn calculate_tree_for_pgn(
                     let mut local_node = TreePositionNode::new(target_hash);
                     for gid in chunk {
                         process_single_game(gid, &mut local_node);
+                    }
+                    let s = scanned.fetch_add(250, std::sync::atomic::Ordering::Relaxed) + 250;
+                    if s % 5000 < 250 || s >= total {
+                        progress(s.min(total), total);
                     }
                     local_node
                 })
@@ -233,6 +341,7 @@ pub fn calculate_tree_for_pgn(
             for gid in 0..total {
                 process_single_game(gid, &mut local_node);
             }
+            progress(total, total);
             local_node
         }
     };

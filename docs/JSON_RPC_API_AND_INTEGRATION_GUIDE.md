@@ -56,19 +56,66 @@ The server handles two categories of output lines:
      "error": "Error description message"
    }
    ```
-
-2. **Asynchronous Streaming Events** (unsolicited notifications without `id`):
+   Or when a running operation is canceled via `cancel`:
    ```json
    {
-     "event": "search_progress",
-     "data": {
-       "scanned": 125000,
-       "total": 500000,
-       "matches": 342,
-       "percent": 25.0
-     }
+     "id": 1,
+     "status": "canceled",
+     "data": null,
+     "error": "Operation canceled by client"
    }
    ```
+
+2. **Asynchronous Streaming Events** (unsolicited notifications without `id`):
+   Emitted periodically during long-running tasks to drive progress bars and UI indicators.
+
+   - **`search_progress`** (Multi-threaded CQL / header / material search):
+     ```json
+     {
+       "event": "search_progress",
+       "data": {
+         "scanned": 125000,
+         "total": 500000,
+         "matches": 342,
+         "percent": 25.0
+       }
+     }
+     ```
+   - **`opening_tree_progress`** (Dynamic tree calculations over large databases):
+     ```json
+     {
+       "event": "opening_tree_progress",
+       "data": {
+         "scanned": 50000,
+         "total": 500000,
+         "percent": 10.0
+       }
+     }
+     ```
+   - **`continuations_progress`** (Dynamic multi-ply continuation line calculation):
+     ```json
+     {
+       "event": "continuations_progress",
+       "data": {
+         "scanned": 50000,
+         "total": 500000,
+         "percent": 10.0
+       }
+     }
+     ```
+   - **`build_booster_progress`** (Building the `.boost.idx` companion index):
+     ```json
+     {
+       "event": "build_booster_progress",
+       "data": {
+         "scanned": 500000,
+         "total": 3500000,
+         "plies": 41200000,
+         "percent": 14.28
+       }
+     }
+     ```
+   - **`import_progress`** / **`export_progress`** (PGN batch ingestion and extraction).
 
 ---
 
@@ -137,8 +184,38 @@ Sorts all games in a source PGN file according to specified criteria and writes 
 #### `import_pgn` / `export_pgn`
 Imports or exports games with streaming progress notifications (`import_progress` / `export_progress`).
 
-#### `add_game` / `update_game` / `delete_game` / `undelete_game` / `compact`
-Direct database record mutations and dead-space garbage collection.
+#### `cancel` (aliases: `stop`, `abort`)
+Cancels any currently running long task (such as a multi-threaded CQL/header search, dynamic opening tree scan, dynamic continuations search, or companion index builder).
+- **Non-blocking Execution**: The server reads `stdin` continuously on a dedicated asynchronous reader thread. Even while worker threads are executing heavy queries across 10M+ games, sending `{"command": "cancel"}` is processed immediately (< 1 ms).
+- **Request**:
+  ```json
+  {
+    "id": 99,
+    "command": "cancel",
+    "params": {}
+  }
+  ```
+- **Immediate Cancellation Acknowledgment**:
+  ```json
+  {
+    "id": 99,
+    "status": "ok",
+    "data": {
+      "canceled": true,
+      "active_task": true
+    },
+    "error": null
+  }
+  ```
+- **Active Task Result**: The task being aborted immediately stops scanning and returns a canceled response:
+  ```json
+  {
+    "id": 10,
+    "status": "canceled",
+    "data": null,
+    "error": "Operation canceled by client"
+  }
+  ```
 
 ---
 
@@ -215,6 +292,19 @@ Direct CQL query parsing and execution. Returns syntax errors with line, column,
     }
   }
   ```
+
+#### ⚡ Search Booster Auto-Acceleration & Transparent Fallback
+Both `search` and `search_cql` automatically take advantage of the companion `.boost.idx` Search Booster file whenever it is available:
+- **Instant Acceleration (10x–50x speedup)**: The engine evaluates queries directly over the contiguous 16-bit move stream without unpacking SCID binary game blobs or parsing PGN move text.
+- **Supported Capabilities**:
+  - Full board position searches (FEN, piece placements)
+  - Material filters (piece count ranges, piece differences, bishop color pairing)
+  - Square sets, ray attacks, and pawn structures
+  - Tactical motifs and piece mobility
+  - Board transformations (`shift`, `mirror`, `flip`)
+  - Move filters (`move from ... to ...`)
+- **Transparent Fallback**:
+  If the booster index is missing, or if a game starts from a custom FEN setup (non-standard startpos), or if the query requires multi-ply timeline sequence evaluation (`SearchQuery::Path` / `CqlPath` / `CqlLine`), the search adapter automatically falls back to full move decoding per game. No user action or parameter flag is required.
 
 #### `validate_dsl`
 Performs query parsing and static analysis without executing the search.
@@ -300,6 +390,18 @@ Sub-millisecond opening explorer for any position (starting board or arbitrary F
   - `min_games`: `number` (default: `1`; frequency cutoff)
   - `min_percentage`: `number` (default: `0.0`; branch percentage threshold)
 - **Response**: Returns standard tree stats (`moves`, `white_wins`, `avg_white_elo`, etc.) and when requested, `continuations: [ { "formatted": "1... e5 2. Nf3 Nc6", "games": 18200, ... } ]`.
+- **Streaming Progress Event**: When performing dynamic tree scans over large databases without pre-aggregated index, emits:
+  ```json
+  {
+    "event": "opening_tree_progress",
+    "data": {
+      "scanned": 250000,
+      "total": 1000000,
+      "percent": 25.0
+    }
+  }
+  ```
+- **Cancellation**: Can be canceled mid-execution via `{"command": "cancel"}`.
 
 #### `search_position`
 Accelerated Zobrist binary position search (< 0.1 ms when `.pos.idx` is present). Returns a `search_id` for pagination via `query_games`.
@@ -308,7 +410,7 @@ Accelerated Zobrist binary position search (< 0.1 ms when `.pos.idx` is present)
 Hardware bitboard material searches (e.g. piece counts, opposite-colored bishops). Returns a `search_id` for pagination via `query_games`.
 
 #### `build_booster_index` (alias: `build_booster`)
-Builds the 16-bit Search Booster companion index (`.boost.idx`) across all CPU cores.
+Builds the 16-bit Search Booster companion index (`.boost.idx`) across all CPU cores. Emits `build_booster_progress` streaming events and can be canceled at any time via `{"command": "cancel"}`.
 - **Request**: `{"id": 30, "command": "build_booster_index", "params": {}}`
 - **Streaming Progress Event**:
   ```json
@@ -357,10 +459,59 @@ Checks if the database has a valid, up-to-date Search Booster companion index.
   ```
 
 #### `continuations` & `build_continuations`
-Explores common multi-move continuation branches using `.boost.idx` or `.hot.idx` DAG graph.
+Explores common multi-move continuation branches using `.boost.idx` or `.hot.idx` DAG graph. Emits `continuations_progress` events during dynamic scanning and supports instant cancellation via `{"command": "cancel"}`.
+- **Params**:
+  - `fen`: `string` (optional FEN position; defaults to starting board)
+  - `max_depth`: `number` (default: `8`; half-moves lookahead)
+  - `max_lines`: `number` (default: `10`; max variation lines to return)
+  - `min_games`: `number` (default: `1`; frequency cutoff)
+  - `min_percentage`: `number` (default: `0.0`; branch percentage threshold)
+  - `use_search_results`: `boolean` (optional; if `true`, calculates continuation lines strictly for the active search session / filtered subset)
+  - `game_ids`: `number[]` (optional; calculates continuation lines strictly for an explicit array of game IDs)
+  - `filter`: `GameFilter` (optional inline metadata filter)
+  - `include_tree`: `boolean` (optional, default: `false`)
+- **Filtered Evaluation Routing**:
+  When `use_search_results: true`, `filter`, or `game_ids` are supplied, the static global graph (`.hot.idx`) is automatically bypassed, and candidate game IDs are evaluated dynamically via the Search Booster (`.boost.idx`) in parallel.
+- **Streaming Progress Event**:
+  ```json
+  {
+    "event": "continuations_progress",
+    "data": {
+      "scanned": 250000,
+      "total": 1000000,
+      "percent": 25.0
+    }
+  }
+  ```
 
 #### `endgames` & `build_endgames`
 47-feature endgame taxonomy analytics using `.feat.idx` companion index.
+
+---
+
+### 2.5 Filtered Opening Explorer & Player Repertoires (`use_search_results`)
+
+You can generate **filtered opening explorer statistics** (e.g. White repertoire for Magnus Carlsen, games > 2600 Elo, or specific tournament games) by linking search queries to the opening tree or continuations engine:
+
+1. **Step 1 — Execute a Filter / Search**:
+   Run any search query (e.g., `search_header` with `{"white": "Carlsen, M"}` or `search_cql`). The server returns a `search_id` and caches the matching game IDs.
+2. **Step 2 — Request Tree / Continuations with `use_search_results: true`**:
+   ```json
+   {
+     "id": 40,
+     "command": "opening_tree",
+     "params": {
+       "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+       "use_search_results": true,
+       "include_continuations": true
+     }
+   }
+   ```
+3. **Execution Mechanism**:
+   - **Automatic Bypass**: The engine automatically detects the active filter and bypasses the static `.hot.idx` precalculated global database totals.
+   - **Search Booster Dynamic Evaluation**: The engine feeds the filtered list of `game_ids` directly into the Search Booster (`.boost.idx`).
+   - **Parallel Calculation**: The booster evaluates only those candidate games across all CPU cores in parallel, returning exact move distributions, win/draw/loss counts, and continuation lines for the filtered player or query subset.
+   - **File Fallback**: If no booster file is present, it scans the filtered games directly from the database file.
 
 ---
 
@@ -496,6 +647,10 @@ class ScidRpcClient(QObject):
             "sort_asc": sort_asc
         })
 
+    def cancel_current_task(self) -> int:
+        """Immediately aborts any running search, tree scan, or index build."""
+        return self.send_command("cancel")
+
     def close(self):
         try:
             self.process.terminate()
@@ -509,13 +664,17 @@ class ScidRpcClient(QObject):
 
 | Command Aliases | Handler Function | Primary Use Case |
 | :--- | :--- | :--- |
+| `cancel`, `stop`, `abort` | Internal Reader Flag | Instantly cancels running search, dynamic tree calculation, or index build |
 | `search`, `search_games`, `filter_search` | `handle_search` | Unified search (structured JSON filter or raw CQL string) |
-| `search_cql`, `cql_search`, `search_query`, `query_search`, `dsl_search` | `handle_cql_search` | Pure CQL script / DSL execution |
+| `search_cql`, `cql_search`, `search_query`, `query_search`, `dsl_search` | `handle_cql_search` | Pure CQL script / DSL execution with auto-booster acceleration |
 | `query_games`, `get_games` | `handle_query_games` | Paginated slicing and sorting of database or `search_id` results |
 | `search_position` | `handle_search_position` | Instant Zobrist binary position search |
 | `search_material` | `handle_search_material` | Bitboard material and bishop color search |
-| `opening_tree`, `query_tree` | `handle_opening_tree` | Dynamic opening tree explorer |
-| `continuations` | `handle_continuations` | Common continuations DAG explorer |
-| `endgames` | `handle_endgames` | 47-feature endgame distribution & feature matching |
+| `opening_tree`, `query_tree` | `handle_opening_tree` | Dynamic opening tree explorer (with `opening_tree_progress`) |
+| `continuations` | `handle_continuations` | Common continuations DAG explorer (with `continuations_progress`) |
+| `build_booster_index`, `build_booster` | `handle_build_booster` | Multi-threaded 16-bit Search Booster index generation |
+| `check_booster_index`, `booster_status` | `handle_check_booster` | Verifies existence and validity of companion `.boost.idx` |
+| `endgames`, `build_endgames` | `handle_endgames` / `handle_build_endgames` | 47-feature endgame distribution & feature matching |
 | `validate_dsl` | `handle_validate_dsl` | Query syntax validation and AST checking |
 | `explain_dsl` | `handle_explain_dsl` | Query structure and symmetry explanation |
+

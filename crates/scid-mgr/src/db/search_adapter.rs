@@ -144,13 +144,7 @@ impl ScidDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
-        crate::search::scid_adapter::ScidSearchAdapter::search_parallel_with_progress(
-            query,
-            self.entries(),
-            self.names(),
-            |entry| self.get_blob(entry).ok(),
-            progress,
-        )
+        self.search_query_range_with_progress(query, 0, self.entries.len(), progress)
     }
 
     pub(crate) fn search_query_progress_helper<F>(
@@ -161,13 +155,9 @@ impl ScidDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
-        crate::search::scid_adapter::ScidSearchAdapter::search_parallel_with_progress(
-            query,
-            self.entries(),
-            self.names(),
-            |entry| self.get_blob(entry).ok(),
-            progress,
-        )
+        self.search_query_range_with_progress(query, 0, self.entries.len(), |s, t, m| {
+            progress(s, t, m)
+        })
     }
 
     /// Execute a unified SearchQuery across the database in parallel
@@ -189,6 +179,27 @@ impl ScidDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
+        let db_path = &self.index_path;
+        if crate::search_booster::BoosterLanguageSearchAdapter::can_booster_evaluate(query) {
+            let (status, _) =
+                crate::search_booster::MmapBoostIndex::check_status(db_path, self.entries.len());
+            if status == crate::position_index::IndexStatus::Valid {
+                let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+                if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                    return crate::search_booster::BoosterLanguageSearchAdapter::search_scid_with_booster(
+                        query,
+                        &boost_idx,
+                        self.entries(),
+                        self.names(),
+                        start_game,
+                        end_game,
+                        |entry| self.get_blob(entry).ok(),
+                        progress,
+                    );
+                }
+            }
+        }
+
         crate::search::scid_adapter::ScidSearchAdapter::search_parallel_range_with_progress(
             query,
             self.entries(),

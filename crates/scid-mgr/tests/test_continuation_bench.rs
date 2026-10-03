@@ -111,7 +111,10 @@ fn test_benchmark_continuation_scaling() -> Result<()> {
         assert!(res.is_some());
     }
     let elapsed_tree = t_start.elapsed() / iterations as u32;
-    println!("Avg Opening Tree + Cont (Move 0, 50k games): {:?}", elapsed_tree);
+    println!(
+        "Avg Opening Tree + Cont (Move 0, 50k games): {:?}",
+        elapsed_tree
+    );
 
     Ok(())
 }

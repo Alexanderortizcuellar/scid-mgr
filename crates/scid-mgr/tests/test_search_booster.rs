@@ -545,11 +545,13 @@ fn test_server_booster_json_rpc() -> Result<()> {
             "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
         }),
     };
+    let cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let tree_resp = scid_mgr::server::handlers::tree::handle_opening_tree(
         &tree_req,
         &current_db,
         &mut current_pos_index,
         &mut current_tree_index,
+        &cancel_token,
     );
     assert_eq!(tree_resp.status, "ok");
     let tree_data = tree_resp.data.unwrap();
@@ -569,6 +571,7 @@ fn test_server_booster_json_rpc() -> Result<()> {
         &cont_req,
         &current_db,
         &mut current_pos_index,
+        &cancel_token,
     );
     assert_eq!(cont_resp.status, "ok");
     let cont_data = cont_resp.data.unwrap();
@@ -693,4 +696,91 @@ fn test_packed_path_256_encoding_equality_and_hashing() {
     assert_eq!(packed_16.to_boost_moves(), sixteen_moves);
 }
 
+#[test]
+fn test_booster_language_search_adapter_capability_checks() {
+    use cql_lang::parser::QueryParser;
+    use scid_mgr::search_booster::BoosterLanguageSearchAdapter;
 
+    // Supported queries
+    let q_pos = QueryParser::parse_str("piece wp on e4 and piece bp on e5").unwrap();
+    assert!(BoosterLanguageSearchAdapter::can_booster_evaluate(&q_pos));
+
+    let q_mat = QueryParser::parse_str("white_queens == 1 and opposite_bishops").unwrap();
+    assert!(BoosterLanguageSearchAdapter::can_booster_evaluate(&q_mat));
+
+    let q_sym = QueryParser::parse_str("flip_vertical piece wp on e4").unwrap();
+    assert!(BoosterLanguageSearchAdapter::can_booster_evaluate(&q_sym));
+
+    let q_ply = QueryParser::parse_str("ply 1..20 and turn white").unwrap();
+    assert!(BoosterLanguageSearchAdapter::can_booster_evaluate(&q_ply));
+
+    let q_header = QueryParser::parse_str(r#"white "Morphy" and result "1-0""#).unwrap();
+    assert!(BoosterLanguageSearchAdapter::can_booster_evaluate(
+        &q_header
+    ));
+
+    // Unsupported queries requiring fallback
+    let q_comment = QueryParser::parse_str(r#"comment "blunder""#).unwrap();
+    assert!(!BoosterLanguageSearchAdapter::can_booster_evaluate(
+        &q_comment
+    ));
+
+    let q_what_if = QueryParser::parse_str("what_if [pass] { check }").unwrap();
+    assert!(!BoosterLanguageSearchAdapter::can_booster_evaluate(
+        &q_what_if
+    ));
+
+    let q_mate = QueryParser::parse_str("checkmate").unwrap();
+    assert!(!BoosterLanguageSearchAdapter::can_booster_evaluate(&q_mate));
+}
+
+#[test]
+fn test_booster_language_search_adapter_eval_game() -> Result<()> {
+    use cql_lang::parser::QueryParser;
+    use scid_mgr::search_booster::BoosterLanguageSearchAdapter;
+
+    let dir = tempdir()?;
+    let pgn_file = dir.path().join("test.pgn");
+    std::fs::write(&pgn_file, TEST_PGN)?;
+
+    let (boost_path, game_count, _plies, _time) =
+        BoostIndexBuilder::build_for_pgn(&pgn_file, None, None)?;
+    assert_eq!(game_count, 4);
+
+    let boost_idx = MmapBoostIndex::open(&boost_path)?;
+
+    // 1. Search starting position (should match all games at ply 0)
+    let q1 = QueryParser::parse_str("ply == 0").unwrap();
+    for gid in 0..4 {
+        let moves = boost_idx.get_game_moves(gid).unwrap();
+        let entry = boost_idx.get_game_entry(gid).unwrap();
+        let res =
+            BoosterLanguageSearchAdapter::evaluate_booster_game(&q1, moves, entry.result, None);
+        assert!(res.is_match);
+        assert_eq!(res.matching_plies, vec![0]);
+    }
+
+    // 2. Search for 1. e4 e5 (should match Anderssen and Morphy games)
+    let q_e4_e5 = QueryParser::parse_str("piece wp on e4 and piece bp on e5").unwrap();
+    let moves_g1 = boost_idx.get_game_moves(0).unwrap();
+    let entry_g1 = boost_idx.get_game_entry(0).unwrap();
+    let res_g1 = BoosterLanguageSearchAdapter::evaluate_booster_game(
+        &q_e4_e5,
+        moves_g1,
+        entry_g1.result,
+        None,
+    );
+    assert!(res_g1.is_match);
+
+    // 3. Search for material predicate (queen sacrifice: white queen == 0)
+    let q_no_wq = QueryParser::parse_str("white_queens == 0").unwrap();
+    let res_sac = BoosterLanguageSearchAdapter::evaluate_booster_game(
+        &q_no_wq,
+        moves_g1,
+        entry_g1.result,
+        None,
+    );
+    assert!(res_sac.is_match);
+
+    Ok(())
+}

@@ -46,6 +46,8 @@ class ContinuationsWidget(QWidget):
         self.selected_line_moves = []
 
         self.init_ui()
+        if hasattr(self.client, "event_received"):
+            self.client.event_received.connect(self.on_backend_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -91,9 +93,17 @@ class ContinuationsWidget(QWidget):
         self.btn_analyze.clicked.connect(self.refresh_current_position)
         tb_layout.addWidget(self.btn_analyze)
 
-        self.btn_build_hot = QPushButton("⚡ Build .hot.idx")
+        self.btn_cancel_cont = QPushButton("⛔ Stop")
+        self.btn_cancel_cont.setStyleSheet(
+            "font-weight: bold; background-color: #d32f2f; color: white; padding: 4px 10px;"
+        )
+        self.btn_cancel_cont.setVisible(False)
+        self.btn_cancel_cont.clicked.connect(self.cancel_continuations_scan)
+        tb_layout.addWidget(self.btn_cancel_cont)
+
+        self.btn_build_hot = QPushButton("⚡ Build Indexes")
         self.btn_build_hot.setStyleSheet("padding: 4px 8px; font-size: 11px;")
-        self.btn_build_hot.setToolTip("Open index builder to generate precomputed .hot.idx graph")
+        self.btn_build_hot.setToolTip("Open index builder to generate precomputed .boost.idx or .hot.idx")
         self.btn_build_hot.clicked.connect(self.main_window.prompt_build_pos_index)
         tb_layout.addWidget(self.btn_build_hot)
 
@@ -359,9 +369,25 @@ class ContinuationsWidget(QWidget):
 
         self.lbl_mode_badge.setText("⏳ Analyzing...")
         self.lbl_mode_badge.setStyleSheet("color: #1565c0; font-weight: bold; font-size: 11px;")
+        self.btn_cancel_cont.setVisible(True)
         self.client.send_request("continuations", params)
 
+    def on_backend_event(self, event: str, data: dict):
+        if event == "continuations_progress":
+            scanned = data.get("scanned", 0)
+            total = data.get("total", 0)
+            pct = data.get("percent", 0.0)
+            self.lbl_mode_badge.setText(f"📈 Scanning: {scanned:,} / {total:,} ({pct:.1f}%)")
+            self.btn_cancel_cont.setVisible(True)
+
+    def cancel_continuations_scan(self):
+        if self.client and self.client.is_running():
+            self.lbl_mode_badge.setText("Aborting scan...")
+            self.client.cancel_task()
+        self.btn_cancel_cont.setVisible(False)
+
     def on_continuations_report(self, data: dict):
+        self.btn_cancel_cont.setVisible(False)
         self.current_report = data
         total_db_games = data.get("total_games_processed", 0)
         reaching_games = data.get("games_reaching_position", 0)

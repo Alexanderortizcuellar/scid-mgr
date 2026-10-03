@@ -43,6 +43,12 @@ The `scid-mgr` server communicates over standard input and standard output (`std
 
 ## 2. Server Commands
 
+### `cancel` (or `stop`, `abort`)
+Non-blocking command that immediately aborts any active background or worker task (multi-threaded searches, dynamic opening tree scans, continuations computations, or index builds).
+- **Request**: `{"id": 99, "command": "cancel", "params": {}}`
+- **Returns**: `{ canceled: true, active_task: boolean }`
+- **Task Cancellation**: The aborted operation immediately halts and outputs `{"id": task_id, "status": "canceled", "error": "Operation canceled by client"}`.
+
 ### `open`
 Opens a database on disk (`.si5`, `.si4`, or `.pgn`).
 - **Params**:
@@ -126,13 +132,16 @@ Searches by bitboard piece count and opposite/same-colored bishops across the da
 - **Returns**: `{ search_id: string, total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
 
 ### `continuations`
-Calculates top multi-move continuation lines from any position using `.hot.idx` binary graph or dynamic candidate-accelerated search.
+Calculates top multi-move continuation lines from any position using `.hot.idx` binary graph or dynamic candidate-accelerated search. When filters or search results are applied (`use_search_results: true`, `filter`, or `game_ids`), static `.hot.idx` is automatically bypassed and candidate game IDs are evaluated dynamically via `.boost.idx` across CPU cores.
 - **Params**:
   - `fen`: `string` (optional FEN position; defaults to starting board)
   - `max_depth`: `number` (optional maximum plies, default: `8`)
   - `max_lines`: `number` (optional maximum branches, default: `10`)
   - `min_games`: `number` (optional minimum game occurrences, default: `1`)
   - `min_percentage`: `number` (optional minimum share %, default: `0.0`)
+  - `use_search_results`: `boolean` (optional; if `true`, calculates stats strictly for the active search session / filtered subset)
+  - `game_ids`: `number[]` (optional; calculates stats strictly for an explicit array of game IDs)
+  - `filter`: `GameFilter` (optional inline metadata filter)
   - `include_tree`: `boolean` (optional, default: `false`)
 - **Returns**: `{ fen, total_games_processed, games_reaching_position, lines: [{ moves, formatted, games, percentage, white_wins, draws, black_wins }] }`
 
@@ -209,7 +218,7 @@ Sorts all games in a source PGN file according to specified criteria and writes 
 Mutation commands for editing games, marking deletions, reclaiming dead space, and writing companion files.
 
 ### `search` (or `search_games`, `filter_search`)
-Unified search endpoint. Accepts structured multi-criteria JSON filters (`white`, `black`, `player`, `eco`, `date`, `result`, `event`, `site`, `fen`, `material`, `cql`) or raw CQL queries. Executes multi-core filtering across the database and caches matching game IDs and `matching_plies` in a `search_id` session for pagination via `query_games`. Emits streaming `search_progress` events.
+Unified search endpoint. Accepts structured multi-criteria JSON filters (`white`, `black`, `player`, `eco`, `date`, `result`, `event`, `site`, `fen`, `material`, `cql`) or raw CQL queries. Automatically uses the 16-bit `.boost.idx` Search Booster when present (with seamless fallback) for 10x–50x speedups. Executes multi-core filtering across the database and caches matching game IDs and `matching_plies` in a `search_id` session for pagination via `query_games`. Emits streaming `search_progress` events and supports cancellation.
 - **Params**:
   - `query` / `cql`: `string` (optional CQL query)
   - `player`: `string` (matches White or Black)
@@ -225,7 +234,7 @@ Unified search endpoint. Accepts structured multi-criteria JSON filters (`white`
 - **Returns**: `{ search_id: "search_1", total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
 
 ### `search_cql` (or `cql_search`, `dsl_search`, `query_search`)
-Directly parses and executes a CQL query script, storing matching game IDs and `matching_plies` in an in-memory `search_id` session. Automatically returns the cached `search_id` if the identical query is run on the same database. Emits streaming `search_progress` events.
+Directly parses and executes a CQL query script, storing matching game IDs and `matching_plies` in an in-memory `search_id` session. Automatically accelerated with `.boost.idx` when available with transparent fallback for complex sequence/path queries or non-standard starting positions. Automatically returns the cached `search_id` if the identical query is run on the same database. Emits streaming `search_progress` events and supports cancellation.
 - **Params**:
   - `query`: `string` (CQL query text)
   - `pgn_path`: `string` (optional custom PGN path)

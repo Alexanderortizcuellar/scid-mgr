@@ -37,6 +37,8 @@ class OpeningTreeWidget(QWidget):
         self.current_report = None
 
         self.init_ui()
+        if hasattr(self.client, "event_received"):
+            self.client.event_received.connect(self.on_backend_event)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -79,6 +81,14 @@ class OpeningTreeWidget(QWidget):
         )
         self.combo_scope.currentIndexChanged.connect(self.on_scope_changed)
         tb_layout.addWidget(self.combo_scope)
+
+        self.btn_cancel_tree = QPushButton("⛔ Stop Scan")
+        self.btn_cancel_tree.setStyleSheet(
+            "font-weight: bold; background-color: #d32f2f; color: white; padding: 3px 8px; font-size: 11px;"
+        )
+        self.btn_cancel_tree.setVisible(False)
+        self.btn_cancel_tree.clicked.connect(self.cancel_tree_scan)
+        tb_layout.addWidget(self.btn_cancel_tree)
 
         self.btn_unload = QPushButton("🧹 Free Memory")
         self.btn_unload.setToolTip("Unloads the position index from RAM")
@@ -381,7 +391,22 @@ class OpeningTreeWidget(QWidget):
                 text_parts.append(san)
         self.lbl_moves_seq.setText(" ".join(text_parts))
 
+    def on_backend_event(self, event: str, data: dict):
+        if event == "opening_tree_progress":
+            scanned = data.get("scanned", 0)
+            total = data.get("total", 0)
+            pct = data.get("percent", 0.0)
+            self.lbl_summary_games.setText(f"🌲 Scanning Tree: {scanned:,} / {total:,} games ({pct:.1f}%)...")
+            self.btn_cancel_tree.setVisible(True)
+
+    def cancel_tree_scan(self):
+        if self.client and self.client.is_running():
+            self.lbl_summary_games.setText("Aborting tree scan...")
+            self.client.cancel_task()
+        self.btn_cancel_tree.setVisible(False)
+
     def on_tree_report(self, report: dict):
+        self.btn_cancel_tree.setVisible(False)
         self.current_report = report
         total_games = report.get("total_games", 0)
         w_pct = report.get("white_pct", 0.0)

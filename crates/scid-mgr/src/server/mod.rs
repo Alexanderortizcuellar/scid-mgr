@@ -40,10 +40,6 @@ pub fn run_interactive_server(
     initial_db_path: Option<PathBuf>,
     initial_threads: Option<usize>,
 ) -> Result<()> {
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    let mut reader = stdin.lock();
-
     let max_system_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
@@ -84,30 +80,78 @@ pub fn run_interactive_server(
         }
     }
 
-    let mut line = String::new();
-    while reader.read_line(&mut line)? > 0 {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            line.clear();
-            continue;
-        }
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let is_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel::<Option<RequestMessage>>();
 
-        let req: RequestMessage = match serde_json::from_str(trimmed) {
-            Ok(r) => r,
-            Err(e) => {
-                let resp = ResponseMessage {
-                    id: None,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some(format!("Invalid JSON request: {}", e)),
-                };
-                writeln!(stdout, "{}", serde_json::to_string(&resp)?)?;
-                stdout.flush()?;
+    let stdin_cancel_flag = cancel_flag.clone();
+    let stdin_is_busy = is_busy.clone();
+
+    // Dedicated background thread for reading stdin asynchronously
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut reader = stdin.lock();
+        let mut line = String::new();
+
+        while let Ok(n) = reader.read_line(&mut line) {
+            if n == 0 {
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
                 line.clear();
                 continue;
             }
-        };
 
+            let req_res: Result<RequestMessage, _> = serde_json::from_str(trimmed);
+            match req_res {
+                Ok(req) => {
+                    let cmd = req.command.as_str();
+                    if cmd == "cancel" || cmd == "stop" || cmd == "abort" {
+                        let had_active = stdin_is_busy.load(std::sync::atomic::Ordering::SeqCst);
+                        stdin_cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let resp = ResponseMessage {
+                            id: req.id,
+                            status: "ok".to_string(),
+                            data: Some(serde_json::json!({
+                                "canceled": true,
+                                "active_task": had_active,
+                            })),
+                            error: None,
+                        };
+                        if let Ok(json_str) = serde_json::to_string(&resp) {
+                            let mut out = io::stdout().lock();
+                            let _ = writeln!(out, "{}", json_str);
+                            let _ = out.flush();
+                        }
+                    } else {
+                        let is_shutdown = cmd == "shutdown" || cmd == "exit" || cmd == "quit";
+                        let _ = tx.send(Some(req));
+                        if is_shutdown {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let resp = ResponseMessage {
+                        id: None,
+                        status: "error".to_string(),
+                        data: None,
+                        error: Some(format!("Invalid JSON request: {}", e)),
+                    };
+                    if let Ok(json_str) = serde_json::to_string(&resp) {
+                        let mut out = io::stdout().lock();
+                        let _ = writeln!(out, "{}", json_str);
+                        let _ = out.flush();
+                    }
+                }
+            }
+            line.clear();
+        }
+        let _ = tx.send(None);
+    });
+
+    while let Ok(Some(req)) = rx.recv() {
         if req.command == "shutdown" || req.command == "exit" || req.command == "quit" {
             let resp = ResponseMessage {
                 id: req.id,
@@ -115,10 +159,14 @@ pub fn run_interactive_server(
                 data: Some(serde_json::json!({"message": "Shutting down"})),
                 error: None,
             };
-            writeln!(stdout, "{}", serde_json::to_string(&resp)?)?;
-            stdout.flush()?;
+            let mut out = io::stdout().lock();
+            let _ = writeln!(out, "{}", serde_json::to_string(&resp)?);
+            let _ = out.flush();
             break;
         }
+
+        cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        is_busy.store(true, std::sync::atomic::Ordering::SeqCst);
 
         let resp = handle_command(
             &mut current_db,
@@ -128,11 +176,15 @@ pub fn run_interactive_server(
             &mut thread_pool,
             &mut current_thread_count,
             max_system_threads,
+            &cancel_flag,
             &req,
         );
-        writeln!(stdout, "{}", serde_json::to_string(&resp)?)?;
-        stdout.flush()?;
-        line.clear();
+
+        is_busy.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let mut out = io::stdout().lock();
+        let _ = writeln!(out, "{}", serde_json::to_string(&resp)?);
+        let _ = out.flush();
     }
 
     Ok(())
@@ -147,13 +199,20 @@ fn handle_command(
     thread_pool: &mut rayon::ThreadPool,
     current_thread_count: &mut usize,
     max_system_threads: usize,
+    cancel_token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     req: &RequestMessage,
 ) -> ResponseMessage {
     let id = req.id;
     let cmd = req.command.as_str();
 
     match cmd {
-        // System / Configuration
+        // System / Configuration / Task Control
+        "cancel" | "stop" | "abort" => ResponseMessage {
+            id,
+            status: "ok".to_string(),
+            data: Some(serde_json::json!({ "canceled": true })),
+            error: None,
+        },
         "set_threads" | "set_config" => handlers::config::handle_set_threads(
             req,
             thread_pool,
@@ -200,6 +259,7 @@ fn handle_command(
             current_db,
             current_pos_index,
             current_tree_index,
+            cancel_token,
         ),
         "tree_index_status" | "get_tree_index_status" | "tree_status" => {
             handlers::tree::handle_tree_index_status(req, current_db, current_tree_index)
@@ -218,7 +278,12 @@ fn handle_command(
 
         // Common Continuations Operations
         "continuations" | "common_continuations" | "hot_continuations" | "get_continuations" => {
-            handlers::continuations::handle_continuations(req, current_db, current_pos_index)
+            handlers::continuations::handle_continuations(
+                req,
+                current_db,
+                current_pos_index,
+                cancel_token,
+            )
         }
         "build_continuations" | "build_hot_index" | "build_hot" | "rebuild_continuations" => {
             handlers::continuations::handle_build_continuations_index(
@@ -304,10 +369,16 @@ fn handle_command(
             handlers::search::handle_explain_dsl(req)
         }
         "search" | "search_games" | "filter_search" => {
-            handlers::search::handle_search(req, current_db, session_mgr, thread_pool)
+            handlers::search::handle_search(req, current_db, session_mgr, thread_pool, cancel_token)
         }
         "search_cql" | "cql_search" | "search_query" | "query_search" | "dsl_search" => {
-            handlers::search::handle_cql_search(req, current_db, session_mgr, thread_pool)
+            handlers::search::handle_cql_search(
+                req,
+                current_db,
+                session_mgr,
+                thread_pool,
+                cancel_token,
+            )
         }
 
         unknown => ResponseMessage {

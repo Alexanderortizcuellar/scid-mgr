@@ -7,8 +7,8 @@ use std::collections::{BinaryHeap, HashMap};
 
 use super::codec::{format_continuation_moves, parse_fen_fullmove, MmapHotGraph};
 use super::types::{
-    ContinuationLine, ContinuationResult, HotEdge, HotGraphMetadata, HotHashEntry, HotNode, NodeId,
-    PackedMove, NO_NODE,
+    ContinuationLine, ContinuationQuery, ContinuationResult, HotEdge, HotGraphMetadata,
+    HotHashEntry, HotNode, NodeId, PackedMove, NO_NODE,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -199,6 +199,121 @@ pub trait HotGraphQueryable {
             lines: final_lines,
             tree: None,
         }
+    }
+
+    fn query_opening_tree(
+        &self,
+        start_pos: &Chess,
+        fen_str: &str,
+        continuation_config: Option<&ContinuationQuery>,
+    ) -> Option<crate::tree_index::OpeningTreeReport> {
+        let start_hash_val: Zobrist64 = start_pos.zobrist_hash(EnPassantMode::Legal);
+        let start_hash = start_hash_val.0;
+
+        let start_node_id = self.get_node_id(start_hash)?;
+        let start_node = self.get_node(start_node_id)?;
+
+        let edges = self.get_edges(start_node);
+        if start_node.total_games == 0 {
+            return Some(crate::tree_index::OpeningTreeReport {
+                fen: fen_str.to_string(),
+                zobrist_hash: start_hash,
+                total_games: 0,
+                white_wins: 0,
+                draws: 0,
+                black_wins: 0,
+                white_pct: 0.0,
+                draw_pct: 0.0,
+                black_pct: 0.0,
+                moves: Vec::new(),
+                sample_game_ids: Vec::new(),
+                sample_games: Vec::new(),
+                continuations: None,
+            });
+        }
+
+        let total_games = start_node.total_games;
+        let white_pct = (start_node.white_wins as f64 / total_games as f64) * 100.0;
+        let draw_pct = (start_node.draws as f64 / total_games as f64) * 100.0;
+        let black_pct = (start_node.black_wins as f64 / total_games as f64) * 100.0;
+
+        let mut move_views = Vec::with_capacity(edges.len());
+        for edge in edges {
+            let pm = edge.packed_move();
+            let mut sim_pos = start_pos.clone();
+            let san = if let Some(m) = pm.to_shakmaty_move(&sim_pos) {
+                let san_plus = SanPlus::from_move_and_play_unchecked(&mut sim_pos, &m);
+                san_plus.to_string()
+            } else {
+                pm.to_uci_string()
+            };
+            let uci = pm.to_uci_string();
+            let m_total = edge.total_games;
+            let m_white_pct = if m_total > 0 {
+                (edge.white_wins as f64 / m_total as f64) * 100.0
+            } else {
+                0.0
+            };
+            let m_draw_pct = if m_total > 0 {
+                (edge.draws as f64 / m_total as f64) * 100.0
+            } else {
+                0.0
+            };
+            let m_black_pct = if m_total > 0 {
+                (edge.black_wins as f64 / m_total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            move_views.push(crate::tree_index::OpeningTreeMoveView {
+                san,
+                uci,
+                total_games: m_total,
+                white_pct: m_white_pct,
+                draw_pct: m_draw_pct,
+                black_pct: m_black_pct,
+                white_wins: edge.white_wins,
+                draws: edge.draws,
+                black_wins: edge.black_wins,
+                avg_white_elo: None,
+                avg_black_elo: None,
+                last_played: None,
+                sample_game_ids: Vec::new(),
+            });
+        }
+
+        // Sort moves by total_games descending
+        move_views.sort_by_key(|a| std::cmp::Reverse(a.total_games));
+
+        let continuations = if let Some(c_cfg) = continuation_config {
+            let cont_res = self.query_continuations(
+                start_pos,
+                fen_str,
+                c_cfg.max_depth,
+                c_cfg.max_lines,
+                c_cfg.min_games,
+                c_cfg.min_percentage,
+            );
+            Some(cont_res.lines)
+        } else {
+            None
+        };
+
+        Some(crate::tree_index::OpeningTreeReport {
+            fen: fen_str.to_string(),
+            zobrist_hash: start_hash,
+            total_games,
+            white_wins: start_node.white_wins,
+            draws: start_node.draws,
+            black_wins: start_node.black_wins,
+            white_pct,
+            draw_pct,
+            black_pct,
+            moves: move_views,
+            sample_game_ids: Vec::new(),
+            sample_games: Vec::new(),
+            continuations,
+        })
     }
 
     fn extract_top_lines(

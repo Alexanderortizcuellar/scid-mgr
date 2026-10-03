@@ -2,8 +2,9 @@ use serde_json::json;
 use std::time::Instant;
 
 use crate::continuation_index::{
-    calculate_continuations_for_pgn, calculate_continuations_for_scid, resolve_companion_hot_path,
-    ContinuationQuery, ContinuationResult, HotGraphBuildConfig, HotGraphQueryable, MmapHotGraph,
+    calculate_continuations_for_pgn_with_progress, calculate_continuations_for_scid_with_progress,
+    resolve_companion_hot_path, ContinuationQuery, ContinuationResult, HotGraphBuildConfig,
+    HotGraphQueryable, MmapHotGraph,
 };
 use crate::position_index::PositionIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
@@ -13,6 +14,7 @@ pub fn handle_continuations(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,
+    cancel_token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ResponseMessage {
     let id = req.id;
     let fen_str = req
@@ -90,7 +92,42 @@ pub fn handle_continuations(
         DatabaseBackend::Pgn(p) => p.pgn_path.as_path(),
     };
 
-    // 1. Ultra-Fast Search Booster (.boost.idx) calculation
+    // 1. Instant Precalculated Continuations Graph Index (.hot.idx) - Sub-millisecond (< 1 ms) lookup
+    // NOTE: .hot.idx represents the unfiltered full database graph. If the user requests filtered
+    // search results or custom player/rating filters, .hot.idx is bypassed to dynamically evaluate
+    // the filtered candidate subset via .boost.idx.
+    let has_filter = req
+        .params
+        .get("use_search_results")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || req.params.get("filter").is_some()
+        || req.params.get("game_ids").is_some();
+
+    let hot_path = resolve_companion_hot_path(db_path);
+    if !has_filter && hot_path.exists() {
+        if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
+            let res = mmap_hot.query_continuations(
+                &target_pos,
+                fen_str,
+                max_depth,
+                max_lines,
+                min_games,
+                min_percentage,
+            );
+            // If the position was indexed in the graph (i.e. games were found), return instantly
+            if res.games_reaching_position > 0 {
+                return ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::to_value(res).unwrap_or(json!({}))),
+                    error: None,
+                };
+            }
+        }
+    }
+
+    // 2. Search Booster (.boost.idx) Dynamic Calculation Fallback
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
     if booster_path.exists() {
         if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
@@ -158,28 +195,6 @@ pub fn handle_continuations(
         }
     }
 
-    let hot_path = resolve_companion_hot_path(db_path);
-
-    // 2. Fast Memory-Mapped Hot Graph path if companion index exists (legacy)
-    if hot_path.exists() {
-        if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
-            let res = mmap_hot.query_continuations(
-                &target_pos,
-                fen_str,
-                max_depth,
-                max_lines,
-                min_games,
-                min_percentage,
-            );
-            return ResponseMessage {
-                id,
-                status: "ok".to_string(),
-                data: Some(serde_json::to_value(res).unwrap_or(json!({}))),
-                error: None,
-            };
-        }
-    }
-
     // 2. Candidate acceleration via companion .pos.idx if present
     let mut candidate_ids: Option<Vec<usize>> = None;
     let target_hash_val: Zobrist64 = target_pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
@@ -206,17 +221,46 @@ pub fn handle_continuations(
     }
 
     // 3. Dynamic on-the-fly calculation
+    let emit_cont_progress = |scanned: usize, total: usize| {
+        let event_json = serde_json::json!({
+            "event": "continuations_progress",
+            "data": {
+                "scanned": scanned,
+                "total": total,
+                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+            }
+        });
+        if let Ok(line) = serde_json::to_string(&event_json) {
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{}", line);
+            let _ = out.flush();
+        }
+    };
+
     let res = match db {
-        DatabaseBackend::Scid(s) => calculate_continuations_for_scid(
+        DatabaseBackend::Scid(s) => calculate_continuations_for_scid_with_progress(
             s.entries(),
             s.games_path(),
             &query,
             candidate_ids.as_deref(),
+            emit_cont_progress,
         ),
-        DatabaseBackend::Pgn(p) => {
-            calculate_continuations_for_pgn(&p.pgn_path, &query, candidate_ids.as_deref())
-        }
+        DatabaseBackend::Pgn(p) => calculate_continuations_for_pgn_with_progress(
+            &p.pgn_path,
+            &query,
+            candidate_ids.as_deref(),
+            emit_cont_progress,
+        ),
     };
+
+    if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+        return ResponseMessage {
+            id,
+            status: "canceled".to_string(),
+            data: None,
+            error: Some("Operation canceled by client".to_string()),
+        };
+    }
 
     match res {
         Some(result) => ResponseMessage {

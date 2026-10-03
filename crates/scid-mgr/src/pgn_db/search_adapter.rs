@@ -203,6 +203,29 @@ impl PgnDatabaseWrapper {
     where
         F: Fn(usize, usize, usize) + Sync,
     {
+        if crate::search_booster::BoosterLanguageSearchAdapter::can_booster_evaluate(query) {
+            let (status, _) = crate::search_booster::MmapBoostIndex::check_status(
+                &self.pgn_path,
+                self.game_count(),
+            );
+            if status == crate::position_index::IndexStatus::Valid {
+                let booster_path =
+                    crate::search_booster::resolve_companion_booster_path(&self.pgn_path);
+                if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                    return crate::search_booster::BoosterLanguageSearchAdapter::search_pgn_with_booster(
+                        query,
+                        &boost_idx,
+                        &self.entries,
+                        &self.names,
+                        start_game,
+                        end_game,
+                        |gid| self.get_game_pgn(gid),
+                        progress,
+                    );
+                }
+            }
+        }
+
         let total_entries = self.game_count();
         let start = start_game.min(total_entries);
         let end = end_game.min(total_entries);

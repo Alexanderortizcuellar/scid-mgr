@@ -188,4 +188,62 @@ fn test_scid_hot_graph_index_build_and_query() {
     assert!(res.total_games_processed > 0);
     assert!(res.games_reaching_position > 0);
     assert!(!res.lines.is_empty());
+
+    // Test opening tree calculation directly from .hot.idx nodes graph
+    let tree_rep = mmap_hot.query_opening_tree(&target_pos, fen, None);
+    assert!(tree_rep.is_some());
+    let rep = tree_rep.unwrap();
+    assert_eq!(rep.total_games, 5);
+    assert!(!rep.moves.is_empty());
+    let e4_move = rep.moves.iter().find(|m| m.san == "e4");
+    assert!(e4_move.is_some());
+    assert_eq!(e4_move.unwrap().total_games, 4);
+    let d4_move = rep.moves.iter().find(|m| m.san == "d4");
+    assert!(d4_move.is_some());
+    assert_eq!(d4_move.unwrap().total_games, 1);
+}
+
+#[test]
+fn test_booster_accelerated_hot_graph_build() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("test_boost_scid.si5");
+
+    let mut db = ScidDatabaseWrapper::create(&db_path, scid_mgr::db::ScidFormat::Si5).unwrap();
+    for game_str in SAMPLE_PGN.split("[Event ").filter(|s| !s.trim().is_empty()) {
+        let full_pgn = format!("[Event {}", game_str);
+        db.add_game(&full_pgn).unwrap();
+    }
+    db.save().unwrap();
+    assert_eq!(db.game_count(), 5);
+
+    // 1. Build booster companion index
+    let booster_path = tmp_dir.path().join("test_boost_scid.boost.idx");
+    let (_, game_count, _, _) = scid_mgr::search_booster::BoostIndexBuilder::build_for_scid(
+        &db,
+        Some(booster_path.clone()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(game_count, 5);
+
+    // 2. Build hot graph - should automatically detect and use booster for fast ingestion
+    let hot_path = tmp_dir.path().join("test_boost_scid.hot.idx");
+    let config = HotGraphBuildConfig {
+        max_ply: 20,
+        min_games: 1,
+    };
+    let meta = build_for_scid(&db_path, &hot_path, config).unwrap();
+    assert_eq!(meta.db_game_count, 5);
+    assert!(meta.node_count > 0);
+
+    let mmap_hot = MmapHotGraph::open(&hot_path).unwrap();
+    let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    let target_pos = shakmaty::fen::Fen::from_ascii(fen.as_bytes())
+        .unwrap()
+        .into_position(shakmaty::CastlingMode::Standard)
+        .unwrap();
+
+    let tree_rep = mmap_hot.query_opening_tree(&target_pos, fen, None).unwrap();
+    assert_eq!(tree_rep.total_games, 5);
+    assert_eq!(tree_rep.moves.len(), 2);
 }

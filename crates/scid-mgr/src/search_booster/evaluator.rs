@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use shakmaty::fen::Fen;
 use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{CastlingMode, Chess, EnPassantMode, Position, Role, Square};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::continuation_index::{
     format_continuation_moves, parse_fen_fullmove, ContinuationLine, ContinuationQuery,
@@ -302,8 +302,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     let done =
                         progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                     if done % step == 0 || done == total_games {
-                        let cur_matches =
-                            match_counter.load(std::sync::atomic::Ordering::Relaxed);
+                        let cur_matches = match_counter.load(std::sync::atomic::Ordering::Relaxed);
                         progress(done, total_games, cur_matches);
                     }
                     return None;
@@ -340,8 +339,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     }
                 }
 
-                let done =
-                    progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let done = progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 let res = if !matching_plies.is_empty() {
                     match_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     Some(BoostMatch {
@@ -402,40 +400,37 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let move_counts = (0..total_games)
             .into_par_iter()
-            .fold(
-                HashMap::<u16, u32>::default,
-                |mut acc, gid| {
-                    let _entry = match self.index.get_game_entry(gid) {
-                        Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
-                        _ => return acc,
-                    };
-                    let moves = match self.index.get_game_moves(gid) {
-                        Some(m) => m,
-                        None => return acc,
-                    };
-                    let limit = match max_ply {
-                        Some(mp) => moves.len().min(mp),
-                        None => moves.len(),
-                    };
+            .fold(HashMap::<u16, u32>::default, |mut acc, gid| {
+                let _entry = match self.index.get_game_entry(gid) {
+                    Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
+                    _ => return acc,
+                };
+                let moves = match self.index.get_game_moves(gid) {
+                    Some(m) => m,
+                    None => return acc,
+                };
+                let limit = match max_ply {
+                    Some(mp) => moves.len().min(mp),
+                    None => moves.len(),
+                };
 
-                    let mut replay = FastReplayState::new();
-                    if replay.board == target_board && !moves.is_empty() {
-                        *acc.entry(moves[0].0).or_insert(0) += 1;
+                let mut replay = FastReplayState::new();
+                if replay.board == target_board && !moves.is_empty() {
+                    *acc.entry(moves[0].0).or_insert(0) += 1;
+                }
+
+                for (ply_idx, &m) in moves[..limit].iter().enumerate() {
+                    replay.apply_move(m);
+                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                        break;
                     }
-
-                    for (ply_idx, &m) in moves[..limit].iter().enumerate() {
-                        replay.apply_move(m);
-                        if replay.white_pieces < target_w || replay.black_pieces < target_b {
-                            break;
-                        }
-                        if replay.board == target_board && ply_idx + 1 < moves.len() {
-                            *acc.entry(moves[ply_idx + 1].0).or_insert(0) += 1;
-                        }
+                    if replay.board == target_board && ply_idx + 1 < moves.len() {
+                        *acc.entry(moves[ply_idx + 1].0).or_insert(0) += 1;
                     }
+                }
 
-                    acc
-                },
-            )
+                acc
+            })
             .reduce(HashMap::default, |mut map1, map2| {
                 for (k, v) in map2 {
                     *map1.entry(k).or_insert(0) += v;
@@ -472,45 +467,42 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let line_counts = (0..total_games)
             .into_par_iter()
-            .fold(
-                HashMap::<PackedPath256, u32>::default,
-                |mut acc, gid| {
-                    let _entry = match self.index.get_game_entry(gid) {
-                        Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
-                        _ => return acc,
-                    };
-                    let moves = match self.index.get_game_moves(gid) {
-                        Some(m) => m,
-                        None => return acc,
-                    };
-                    let limit = match max_ply {
-                        Some(mp) => moves.len().min(mp),
-                        None => moves.len(),
-                    };
+            .fold(HashMap::<PackedPath256, u32>::default, |mut acc, gid| {
+                let _entry = match self.index.get_game_entry(gid) {
+                    Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
+                    _ => return acc,
+                };
+                let moves = match self.index.get_game_moves(gid) {
+                    Some(m) => m,
+                    None => return acc,
+                };
+                let limit = match max_ply {
+                    Some(mp) => moves.len().min(mp),
+                    None => moves.len(),
+                };
 
-                    let mut replay = FastReplayState::new();
-                    if replay.board == target_board && !moves.is_empty() {
-                        let end = depth.min(moves.len());
-                        let path = PackedPath256::from_slice(&moves[0..end]);
+                let mut replay = FastReplayState::new();
+                if replay.board == target_board && !moves.is_empty() {
+                    let end = depth.min(moves.len());
+                    let path = PackedPath256::from_slice(&moves[0..end]);
+                    *acc.entry(path).or_insert(0) += 1;
+                }
+
+                for (ply_idx, &m) in moves[..limit].iter().enumerate() {
+                    replay.apply_move(m);
+                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                        break;
+                    }
+                    if replay.board == target_board && ply_idx + 1 < moves.len() {
+                        let start = ply_idx + 1;
+                        let end = (start + depth).min(moves.len());
+                        let path = PackedPath256::from_slice(&moves[start..end]);
                         *acc.entry(path).or_insert(0) += 1;
                     }
+                }
 
-                    for (ply_idx, &m) in moves[..limit].iter().enumerate() {
-                        replay.apply_move(m);
-                        if replay.white_pieces < target_w || replay.black_pieces < target_b {
-                            break;
-                        }
-                        if replay.board == target_board && ply_idx + 1 < moves.len() {
-                            let start = ply_idx + 1;
-                            let end = (start + depth).min(moves.len());
-                            let path = PackedPath256::from_slice(&moves[start..end]);
-                            *acc.entry(path).or_insert(0) += 1;
-                        }
-                    }
-
-                    acc
-                },
-            )
+                acc
+            })
             .reduce(HashMap::default, |mut map1, map2| {
                 for (k, v) in map2 {
                     *map1.entry(k).or_insert(0) += v;
@@ -525,6 +517,92 @@ impl<'a> BoostSearchEvaluator<'a> {
         sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         Ok(sorted)
+    }
+
+    /// Quickly samples matching game IDs for a target position with fast early exit
+    pub fn sample_position_game_ids(&self, target_pos: &Chess, max_samples: usize) -> Vec<u32> {
+        let target_board = chess_to_board_array(target_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
+        let total_games = self.index.header.db_game_count as usize;
+        let mut samples = Vec::with_capacity(max_samples);
+
+        for gid in 0..total_games {
+            if samples.len() >= max_samples {
+                break;
+            }
+            if let Some(moves) = self.index.get_game_moves(gid) {
+                let mut replay = FastReplayState::new();
+                if replay.board == target_board {
+                    samples.push(gid as u32);
+                    continue;
+                }
+                for &m in moves.iter() {
+                    replay.apply_move(m);
+                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                        break;
+                    }
+                    if replay.board == target_board {
+                        samples.push(gid as u32);
+                        break;
+                    }
+                }
+            }
+        }
+        samples
+    }
+
+    /// Quickly samples matching game IDs for child moves of a target position with fast early exit
+    pub fn sample_child_moves_game_ids(
+        &self,
+        target_pos: &Chess,
+        child_moves: &[crate::tree_index::types::PackedMove],
+        max_samples_per_move: usize,
+    ) -> HashMap<u16, Vec<u32>> {
+        let target_board = chess_to_board_array(target_pos);
+        let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
+        let total_games = self.index.header.db_game_count as usize;
+        let move_set: HashSet<u16> = child_moves.iter().map(|m| m.0).collect();
+        let mut samples_map: HashMap<u16, Vec<u32>> = HashMap::new();
+
+        for gid in 0..total_games {
+            if !move_set.is_empty()
+                && move_set
+                    .iter()
+                    .all(|m| samples_map.get(m).map_or(0, |v| v.len()) >= max_samples_per_move)
+            {
+                break;
+            }
+            if let Some(moves) = self.index.get_game_moves(gid) {
+                let mut replay = FastReplayState::new();
+                let mut hit_ply: Option<usize> = None;
+                if replay.board == target_board {
+                    hit_ply = Some(0);
+                } else {
+                    for (ply_idx, &m) in moves.iter().enumerate() {
+                        replay.apply_move(m);
+                        if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                            break;
+                        }
+                        if replay.board == target_board {
+                            hit_ply = Some(ply_idx + 1);
+                            break;
+                        }
+                    }
+                }
+                if let Some(ply) = hit_ply {
+                    if ply < moves.len() {
+                        let next_move = moves[ply].0;
+                        if move_set.contains(&next_move) {
+                            let list = samples_map.entry(next_move).or_default();
+                            if list.len() < max_samples_per_move {
+                                list.push(gid as u32);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        samples_map
     }
 
     /// Calculates a complete, dynamic opening tree report from the booster stream with rich W/D/L stats, ELO averages, and sample games

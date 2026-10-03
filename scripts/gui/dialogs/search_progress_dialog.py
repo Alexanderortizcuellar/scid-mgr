@@ -16,8 +16,9 @@ class SearchProgressDialog(QDialog):
     Automatically updates with scanned count, matches found, and scanning speed.
     """
 
-    def __init__(self, title: str = "Searching Games...", parent=None):
+    def __init__(self, title: str = "Searching Games...", parent=None, client=None):
         super().__init__(parent)
+        self.client = client
         self.setWindowTitle(title)
         self.resize(460, 180)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
@@ -64,13 +65,20 @@ class SearchProgressDialog(QDialog):
 
         btn_box = QHBoxLayout()
         btn_box.addStretch()
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_cancel = QPushButton("⛔ Stop Search")
+        self.btn_cancel.setStyleSheet("font-weight: bold; color: #c62828;")
+        self.btn_cancel.clicked.connect(self.on_cancel_clicked)
         btn_box.addWidget(self.btn_cancel)
         layout.addLayout(btn_box)
 
         self.start_time = time.time()
         self.last_scanned = 0
+
+    def on_cancel_clicked(self):
+        if self.client and self.client.is_running():
+            self.lbl_speed.setText("Aborting search...")
+            self.client.cancel_task()
+        self.reject()
 
     def update_progress(self, scanned: int, total: int, matches: int, percent: float):
         self.progress_bar.setValue(min(100, int(percent)))

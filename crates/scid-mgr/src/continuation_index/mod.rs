@@ -13,7 +13,10 @@ pub use codec::{
     format_continuation_moves, parse_fen_fullmove, resolve_companion_hot_path, MmapHotGraph,
 };
 pub use core::{HotGraph, HotGraphQueryable};
-pub use dynamic::{calculate_continuations_for_pgn, calculate_continuations_for_scid};
+pub use dynamic::{
+    calculate_continuations_for_pgn, calculate_continuations_for_pgn_with_progress,
+    calculate_continuations_for_scid, calculate_continuations_for_scid_with_progress,
+};
 pub use types::{
     ContinuationLine, ContinuationNode, ContinuationQuery, ContinuationResult, HotEdge,
     HotGraphHeader, HotGraphMetadata, HotHashEntry, HotNode, NodeId, PackedMove, HEADER_SIZE,

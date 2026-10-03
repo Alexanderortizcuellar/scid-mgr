@@ -320,6 +320,97 @@ impl StripedHotGraphBuilder {
     }
 }
 
+pub fn build_from_booster_direct<
+    F: Fn(usize, usize, usize) + Sync,
+    L: Fn(usize) -> (u32, u32, u32) + Sync,
+>(
+    boost_idx: &crate::search_booster::MmapBoostIndex,
+    dest_path: &Path,
+    results_lookup: L,
+    config: HotGraphBuildConfig,
+    threads: Option<usize>,
+    progress: F,
+) -> Result<HotGraphMetadata> {
+    let total_games = boost_idx.header.db_game_count as usize;
+    let builder = StripedHotGraphBuilder::new(config.clone());
+    let max_ply = config.max_ply;
+    let chunk_size = 5000;
+    let scanned_counter = std::sync::atomic::AtomicUsize::new(0);
+
+    let run_index = || {
+        (0..total_games)
+            .into_par_iter()
+            .step_by(chunk_size)
+            .for_each(|start_idx| {
+                let end_idx = (start_idx + chunk_size).min(total_games);
+
+                for gid in start_idx..end_idx {
+                    let moves = match boost_idx.get_game_moves(gid) {
+                        Some(m) => m,
+                        None => continue,
+                    };
+
+                    let (w_win, draw, b_win) = results_lookup(gid);
+                    let mut pos = Chess::default();
+                    let end_ply = moves.len().min(max_ply);
+
+                    for &bm in &moves[..end_ply] {
+                        let from_hash_val: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+                        let from_hash = from_hash_val.0;
+
+                        if let Some(mv) = bm.to_shakmaty_move(&pos) {
+                            let packed = PackedMove::from(&mv);
+                            let mut next_pos = pos.clone();
+                            next_pos.play_unchecked(&mv);
+                            let to_hash_val: Zobrist64 =
+                                next_pos.zobrist_hash(EnPassantMode::Legal);
+
+                            builder.record_game_transition(
+                                from_hash,
+                                packed.0,
+                                to_hash_val.0,
+                                w_win,
+                                draw,
+                                b_win,
+                            );
+
+                            pos = next_pos;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let final_hash: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+                    builder.record_leaf_position(final_hash.0, w_win, draw, b_win);
+
+                    let scanned = scanned_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if scanned.is_multiple_of(10000) {
+                        progress(scanned, total_games, builder.total_nodes());
+                    }
+                }
+            });
+    };
+
+    if let Some(t) = threads {
+        if t > 0 {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(t).build()?;
+            pool.install(run_index);
+        } else {
+            run_index();
+        }
+    } else {
+        run_index();
+    }
+
+    progress(total_games, total_games, builder.total_nodes());
+    builder.write_to_file(
+        dest_path,
+        total_games as u64,
+        boost_idx.header.db_mtime_secs,
+        boost_idx.header.db_file_size,
+    )
+}
+
 pub fn build_for_pgn<P: AsRef<Path>>(
     pgn_path: P,
     dest_path: P,
@@ -337,6 +428,32 @@ pub fn build_for_pgn_direct<P1: AsRef<Path>, P2: AsRef<Path>, F: Fn(usize, usize
 ) -> Result<HotGraphMetadata> {
     let pgn_p = pgn_path.as_ref();
     let dest_p = dest_path.as_ref();
+
+    // ⚡ Fast Booster-powered ingestion if .boost.idx is present
+    let booster_path = crate::search_booster::resolve_companion_booster_path(pgn_p);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            if let Ok(pgn_db) = crate::pgn_db::PgnDatabaseWrapper::open(pgn_p) {
+                if pgn_db.entries.len() == boost_idx.header.db_game_count as usize {
+                    let results_lookup = |gid: usize| match pgn_db.entries[gid].result {
+                        1 => (1, 0, 0),
+                        2 => (0, 0, 1),
+                        3 => (0, 1, 0),
+                        _ => (0, 0, 0),
+                    };
+                    return build_from_booster_direct(
+                        &boost_idx,
+                        dest_p,
+                        results_lookup,
+                        config,
+                        threads,
+                        progress,
+                    );
+                }
+            }
+        }
+    }
+
     let pgn_file =
         File::open(pgn_p).with_context(|| format!("Failed to open PGN at {:?}", pgn_p))?;
     let metadata = pgn_file.metadata()?;
@@ -443,6 +560,37 @@ pub fn build_for_scid_direct<
 ) -> Result<HotGraphMetadata> {
     let db_p = db_path.as_ref();
     let dest_p = dest_path.as_ref();
+
+    // ⚡ Fast Booster-powered ingestion if .boost.idx is present
+    let booster_path = crate::search_booster::resolve_companion_booster_path(db_p);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            if boost_idx.header.db_game_count as usize == entries.len() {
+                let results_lookup = |gid: usize| {
+                    let entry = &entries[gid];
+                    if entry.deleted {
+                        (0, 0, 0)
+                    } else {
+                        match entry.result {
+                            1 => (1, 0, 0),
+                            2 => (0, 0, 1),
+                            3 => (0, 1, 0),
+                            _ => (0, 0, 0),
+                        }
+                    }
+                };
+                return build_from_booster_direct(
+                    &boost_idx,
+                    dest_p,
+                    results_lookup,
+                    config,
+                    threads,
+                    progress,
+                );
+            }
+        }
+    }
+
     let file = File::open(games_path.as_ref()).with_context(|| {
         format!(
             "Failed to open games file: {}",

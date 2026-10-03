@@ -121,7 +121,8 @@ pub use position_index::{
 pub use position_search::{MaterialFilter, PositionMatch, PositionSearchResult};
 pub use search_booster::{
     resolve_companion_booster_path, BoostGameEntry, BoostGameMeta, BoostHeader, BoostIndexBuilder,
-    BoostMatch, BoostMove, BoostSearchEvaluator, FastReplayState, MmapBoostIndex, PackedPath256,
+    BoostMatch, BoostMove, BoostSearchEvaluator, BoosterLanguageSearchAdapter, FastReplayState,
+    MmapBoostIndex, PackedPath256,
 };
 pub use search_language::{
     ComparisonOp, GameSearchEvaluator, HeaderMatcher, HeaderPredicate, MaterialPredicate,

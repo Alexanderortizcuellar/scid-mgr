@@ -34,6 +34,8 @@ class DatabaseControlWidget(QWidget):
         super().__init__(parent)
         self.client = client
         self.current_db_stats: Optional[dict] = None
+        self.booster_index_status = "missing"
+        self.booster_index_plies = 0
         self.pos_index_status = "missing"
         self.pos_index_unique_positions = 0
         self.tree_index_status = "missing"
@@ -303,24 +305,40 @@ class DatabaseControlWidget(QWidget):
         self.lbl_players_count.setText(f"Players: {stats.get('players_count', 0):,}")
         self.lbl_events_count.setText(f"Events: {stats.get('events_count', 0):,}")
 
-    def update_indexes_badge(self, pos_status: str, pos_count: int = 0, tree_status: str = "missing", tree_count: int = 0):
+    def update_indexes_badge(
+        self,
+        pos_status: str = "missing",
+        pos_count: int = 0,
+        tree_status: str = "missing",
+        tree_count: int = 0,
+        booster_status: str = "missing",
+        booster_plies: int = 0,
+    ):
         self.pos_index_status = pos_status
         self.pos_index_unique_positions = pos_count
         self.tree_index_status = tree_status
         self.tree_index_unique_positions = tree_count
+        self.booster_index_status = booster_status
+        self.booster_index_plies = booster_plies
 
-        if pos_status == "valid" and tree_status == "valid":
+        if booster_status == "valid":
+            plies_str = f"{booster_plies / 1_000_000:.1f}M plies" if booster_plies > 1_000_000 else f"{booster_plies:,} plies"
+            self.btn_pos_index.setText(f"🚀 Booster Active ({plies_str})")
+            self.btn_pos_index.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #1b5e20; border: 1px solid #81c784; border-radius: 3px;"
+            )
+        elif pos_status == "valid" and tree_status == "valid":
             self.btn_pos_index.setText(f"🟢 Fast Indexes: Active (Tree: {tree_count:,} | Pos: {pos_count:,})")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
         elif tree_status == "valid":
-            self.btn_pos_index.setText(f"🟢 Tree Idx: Active ({tree_count:,}) | ⚪ Pos Idx")
+            self.btn_pos_index.setText(f"🟢 Tree Idx: Active ({tree_count:,}) | ⚪ Booster Missing")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
         elif pos_status == "valid":
-            self.btn_pos_index.setText(f"🟢 Pos Idx: Active ({pos_count:,}) | ⚪ Tree Idx")
+            self.btn_pos_index.setText(f"🟢 Pos Idx: Active ({pos_count:,}) | ⚪ Booster Missing")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #e8f5e9; color: #2e7d32; border: 1px solid #81c784; border-radius: 3px;")
-        elif pos_status == "outdated" or tree_status == "outdated":
+        elif booster_status == "outdated" or pos_status == "outdated" or tree_status == "outdated":
             self.btn_pos_index.setText("🟠 Fast Indexes: Outdated [Rebuild]")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; background-color: #fff3e0; color: #e65100; border: 1px solid #ffb74d; border-radius: 3px;")
         else:
-            self.btn_pos_index.setText("⚡ Build Fast Indexes")
+            self.btn_pos_index.setText("⚡ Build Booster & Fast Indexes")
             self.btn_pos_index.setStyleSheet("font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")

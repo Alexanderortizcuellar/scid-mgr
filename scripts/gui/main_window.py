@@ -345,7 +345,7 @@ class MainWindow(QMainWindow):
             pct = prog.get("percent", 0.0)
 
             if not self.search_progress_dialog:
-                self.search_progress_dialog = SearchProgressDialog("Searching Database Games...", self)
+                self.search_progress_dialog = SearchProgressDialog("Searching Database Games...", self, client=self.client)
 
             if not self.search_progress_dialog.isVisible() and pct < 98.0:
                 self.search_progress_dialog.show()
@@ -356,22 +356,24 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"🔍 Searching: {scanned:,} / {total:,} games ({pct:.1f}%) — Found {matches:,} matches...")
             return
 
-        if data.get("event") in ("build_pos_index_progress", "build_tree_progress", "build_continuations_progress"):
+        if data.get("event") in ("build_booster_progress", "build_pos_index_progress", "build_tree_progress", "build_continuations_progress"):
             event = data.get("event")
             prog = data.get("data", {})
             scanned = prog.get("scanned", 0)
             total = prog.get("total", 0)
-            positions = prog.get("positions", prog.get("nodes", 0))
+            positions = prog.get("plies", prog.get("positions", prog.get("nodes", 0)))
             pct = prog.get("percent", 0.0)
-            if event == "build_tree_progress":
+            if event == "build_booster_progress":
+                task_name = "Search Booster (.boost.idx)"
+            elif event == "build_tree_progress":
                 task_name = "Opening Tree (.tree.idx)"
             elif event == "build_continuations_progress":
                 task_name = "Continuations Graph (.hot.idx)"
             else:
-                task_name = "Position Booster (.pos.idx)"
+                task_name = "Position Inverted Index (.pos.idx)"
             if hasattr(self.db_panel, "build_pos_dialog") and self.db_panel.build_pos_dialog and self.db_panel.build_pos_dialog.isVisible():
                 self.db_panel.build_pos_dialog.update_progress(scanned, total, positions, pct, task_name)
-            self.status_bar.showMessage(f"⚡ Indexing [{task_name}]: {scanned:,} / {total:,} games ({pct:.1f}%) | Unique: {positions:,}")
+            self.status_bar.showMessage(f"⚡ Indexing [{task_name}]: {scanned:,} / {total:,} games ({pct:.1f}%)" + (f" | {positions:,} plies/pos" if positions > 0 else ""))
             return
 
         # 2. Append sanitized protocol log
@@ -379,6 +381,17 @@ class MainWindow(QMainWindow):
 
         status = data.get("status")
         err = data.get("error")
+
+        if status == "canceled":
+            if self.import_progress_dialog:
+                self.import_progress_dialog.close()
+            if self.export_progress_dialog:
+                self.export_progress_dialog.close()
+            if self.search_progress_dialog:
+                self.search_progress_dialog.close()
+            self.status_bar.showMessage("⏹ Operation canceled by client.", 4000)
+            return
+
         if status != "ok" and err:
             if self.import_progress_dialog:
                 self.import_progress_dialog.close()
@@ -402,20 +415,24 @@ class MainWindow(QMainWindow):
         if "stats" in resp_data:
             stats = resp_data["stats"]
             self.db_panel.update_stats(stats)
+            booster_status = stats.get("booster_index_status", resp_data.get("booster_index_status", "missing"))
+            booster_plies = stats.get("booster_index_plies", resp_data.get("booster_index_plies", 0))
             pos_status = stats.get("pos_index_status", resp_data.get("pos_index_status", "missing"))
             pos_count = stats.get("pos_index_unique_positions", resp_data.get("pos_index_unique_positions", 0))
             tree_status = stats.get("tree_index_status", resp_data.get("tree_index_status", "missing"))
             tree_count = stats.get("tree_index_unique_positions", resp_data.get("tree_index_unique_positions", 0))
-            self.update_indexes_badge(pos_status, pos_count, tree_status, tree_count)
+            self.update_indexes_badge(pos_status, pos_count, tree_status, tree_count, booster_status, booster_plies)
             self.table_model.set_filters(self.table_model.filters)
 
-        # 5. Handle Position / Tree Index Status
-        if "pos_index_status" in resp_data or "tree_index_status" in resp_data:
+        # 5. Handle Position / Tree / Booster Index Status
+        if "pos_index_status" in resp_data or "tree_index_status" in resp_data or "booster_index_status" in resp_data:
+            b_st = resp_data.get("booster_index_status", self.db_panel.booster_index_status)
+            b_plies = resp_data.get("booster_index_plies", self.db_panel.booster_index_plies)
             p_st = resp_data.get("pos_index_status", self.db_panel.pos_index_status)
             p_cnt = resp_data.get("pos_index_unique_positions", self.db_panel.pos_index_unique_positions)
             t_st = resp_data.get("tree_index_status", self.db_panel.tree_index_status)
             t_cnt = resp_data.get("tree_index_unique_positions", self.db_panel.tree_index_unique_positions)
-            self.update_indexes_badge(p_st, p_cnt, t_st, t_cnt)
+            self.update_indexes_badge(p_st, p_cnt, t_st, t_cnt, b_st, b_plies)
 
         if "unique_positions" in resp_data and "elapsed_ms" in resp_data and "moves" not in resp_data:
             self.refresh_database_info()
@@ -465,9 +482,19 @@ class MainWindow(QMainWindow):
         if "deleted" in resp_data or ("index" in resp_data and "pgn" not in resp_data):
             self.refresh_database_info()
 
-    def update_indexes_badge(self, pos_status: str, pos_count: int = 0, tree_status: str = "missing", tree_count: int = 0):
+    def update_indexes_badge(
+        self,
+        pos_status: str = "missing",
+        pos_count: int = 0,
+        tree_status: str = "missing",
+        tree_count: int = 0,
+        booster_status: str = "missing",
+        booster_plies: int = 0,
+    ):
         self.opening_tree_widget.update_tree_index_badge(tree_status, tree_count)
-        self.db_panel.update_indexes_badge(pos_status, pos_count, tree_status, tree_count)
+        self.db_panel.update_indexes_badge(
+            pos_status, pos_count, tree_status, tree_count, booster_status, booster_plies
+        )
 
     def on_process_error(self, err_msg: str):
         self.log_panel.append_message(f"[ERROR] {err_msg}")

@@ -1,3 +1,4 @@
+use crate::continuation_index::HotGraphQueryable;
 use crate::db::GameFilter;
 use crate::position_index::PositionIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
@@ -13,6 +14,7 @@ pub fn handle_opening_tree(
     current_db: &Option<DatabaseBackend>,
     current_pos_index: &mut Option<PositionIndex>,
     current_tree_index: &mut Option<TreeIndex>,
+    cancel_token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ResponseMessage {
     let id = req.id;
     let fen = req.params.get("fen").and_then(|v| v.as_str()).unwrap_or("");
@@ -182,73 +184,95 @@ pub fn handle_opening_tree(
         DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
     };
 
-    // 1. Try ultra-fast dynamic calculation from .boost.idx file
-    let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
-    if booster_path.exists() {
-        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
-            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-            match db {
-                DatabaseBackend::Scid(s) => {
-                    let entries = s.entries();
-                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
-                        entries.get(gid).map(|e| {
-                            let year = if e.date > 0 {
-                                Some((e.date / 10000) as u16)
-                            } else {
-                                None
-                            };
-                            crate::search_booster::BoostGameMeta::new(
-                                e.result,
-                                e.white_elo,
-                                e.black_elo,
-                                year,
-                            )
-                        })
-                    };
-                    report = evaluator
-                        .calculate_opening_tree(
-                            fen,
-                            target_game_ids.as_deref(),
-                            max_sample_ids,
-                            Some(meta_lookup),
-                            continuation_config.as_ref(),
-                        )
-                        .ok()
-                        .flatten();
+    // 0. Instant lookup from .hot.idx nodes graph (< 1 ms) if no filter is active
+    if target_game_ids.is_none() {
+        let hot_path = crate::continuation_index::resolve_companion_hot_path(&db_path);
+        if hot_path.exists() {
+            if let Ok(mmap_hot) = crate::continuation_index::MmapHotGraph::open(&hot_path) {
+                if let Some((target_pos, _)) = crate::tree_index::parse_target_position(fen) {
+                    if let Some(rep) =
+                        mmap_hot.query_opening_tree(&target_pos, fen, continuation_config.as_ref())
+                    {
+                        if rep.total_games > 0 {
+                            report = Some(rep);
+                        }
+                    }
                 }
-                DatabaseBackend::Pgn(p) => {
-                    let entries = &p.entries;
-                    let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
-                        entries.get(gid).map(|e| {
-                            let res = match e.result {
-                                1 => 1,
-                                2 => 2,
-                                3 => 3,
-                                _ => 0,
+            }
+        }
+    }
+
+    // 1. Try ultra-fast dynamic calculation from .boost.idx file
+    if report.is_none() {
+        let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
+        if booster_path.exists() {
+            if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+                match db {
+                    DatabaseBackend::Scid(s) => {
+                        let entries = s.entries();
+                        let meta_lookup =
+                            |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                                entries.get(gid).map(|e| {
+                                    let year = if e.date > 0 {
+                                        Some((e.date / 10000) as u16)
+                                    } else {
+                                        None
+                                    };
+                                    crate::search_booster::BoostGameMeta::new(
+                                        e.result,
+                                        e.white_elo,
+                                        e.black_elo,
+                                        year,
+                                    )
+                                })
                             };
-                            let year = if e.date > 0 {
-                                Some((e.date / 10000) as u16)
-                            } else {
-                                None
-                            };
-                            crate::search_booster::BoostGameMeta::new(
-                                res,
-                                e.white_elo,
-                                e.black_elo,
-                                year,
+                        report = evaluator
+                            .calculate_opening_tree(
+                                fen,
+                                target_game_ids.as_deref(),
+                                max_sample_ids,
+                                Some(meta_lookup),
+                                continuation_config.as_ref(),
                             )
-                        })
-                    };
-                    report = evaluator
-                        .calculate_opening_tree(
-                            fen,
-                            target_game_ids.as_deref(),
-                            max_sample_ids,
-                            Some(meta_lookup),
-                            continuation_config.as_ref(),
-                        )
-                        .ok()
-                        .flatten();
+                            .ok()
+                            .flatten();
+                    }
+                    DatabaseBackend::Pgn(p) => {
+                        let entries = &p.entries;
+                        let meta_lookup =
+                            |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                                entries.get(gid).map(|e| {
+                                    let res = match e.result {
+                                        1 => 1,
+                                        2 => 2,
+                                        3 => 3,
+                                        _ => 0,
+                                    };
+                                    let year = if e.date > 0 {
+                                        Some((e.date / 10000) as u16)
+                                    } else {
+                                        None
+                                    };
+                                    crate::search_booster::BoostGameMeta::new(
+                                        res,
+                                        e.white_elo,
+                                        e.black_elo,
+                                        year,
+                                    )
+                                })
+                            };
+                        report = evaluator
+                            .calculate_opening_tree(
+                                fen,
+                                target_game_ids.as_deref(),
+                                max_sample_ids,
+                                Some(meta_lookup),
+                                continuation_config.as_ref(),
+                            )
+                            .ok()
+                            .flatten();
+                    }
                 }
             }
         }
@@ -268,21 +292,48 @@ pub fn handle_opening_tree(
 
     // 3. Dynamic Fallback: If .boost.idx and .tree.idx are missing
     if report.is_none() {
+        let emit_tree_progress = |scanned: usize, total: usize| {
+            let event_json = serde_json::json!({
+                "event": "opening_tree_progress",
+                "data": {
+                    "scanned": scanned,
+                    "total": total,
+                    "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                }
+            });
+            if let Ok(line) = serde_json::to_string(&event_json) {
+                let mut out = io::stdout().lock();
+                let _ = writeln!(out, "{}", line);
+                let _ = out.flush();
+            }
+        };
+
         report = match db {
-            DatabaseBackend::Scid(s) => TreeIndex::calculate_tree_for_scid(
+            DatabaseBackend::Scid(s) => TreeIndex::calculate_tree_for_scid_with_progress(
                 s.entries(),
                 s.games_path(),
                 fen,
                 target_game_ids.as_deref(),
                 Some(500),
+                emit_tree_progress,
             ),
-            DatabaseBackend::Pgn(p) => TreeIndex::calculate_tree_for_pgn(
+            DatabaseBackend::Pgn(p) => TreeIndex::calculate_tree_for_pgn_with_progress(
                 &p.entries,
                 p.mmap_ref(),
                 fen,
                 target_game_ids.as_deref(),
                 Some(500),
+                emit_tree_progress,
             ),
+        };
+    }
+
+    if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+        return ResponseMessage {
+            id,
+            status: "canceled".to_string(),
+            data: None,
+            error: Some("Operation canceled by client".to_string()),
         };
     }
 
@@ -298,32 +349,83 @@ pub fn handle_opening_tree(
         .unwrap_or(true);
 
     if let Some(mut rep) = report {
-        // 1. Resolve sample game IDs from PositionIndex (.pos.idx) for the position
+        // 1. Resolve sample game IDs from Search Booster (.boost.idx) or PositionIndex (.pos.idx)
         if (include_sample_games || include_last_played) && rep.sample_game_ids.is_empty() {
             let db_path = match db {
                 DatabaseBackend::Scid(s) => s.index_path().to_path_buf(),
                 DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
             };
-            if current_pos_index.is_none() {
-                *current_pos_index = PositionIndex::load(&db_path).ok();
-            }
-            if let Some(pos_idx) = current_pos_index.as_ref() {
-                if let Some(matching_ids) = pos_idx.get_matching_game_ids(rep.zobrist_hash) {
-                    let mut filtered_ids: Vec<u32> = if let Some(ref t_ids) = target_game_ids {
-                        let t_set: std::collections::HashSet<usize> =
-                            t_ids.iter().copied().collect();
-                        matching_ids
+            let sample_limit = max_sample_ids.unwrap_or(20);
+
+            // A. Try high-speed early-exit sampling from Search Booster (.boost.idx)
+            let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
+            if booster_path.exists() {
+                if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                    let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+                    if let Some((ref pos, _)) = crate::tree_index::parse_target_position(fen) {
+                        rep.sample_game_ids = evaluator.sample_position_game_ids(pos, sample_limit);
+
+                        // Also sample child moves
+                        let child_moves: Vec<crate::tree_index::types::PackedMove> = rep
+                            .moves
                             .iter()
-                            .filter(|id| t_set.contains(id))
-                            .map(|&id| id as u32)
-                            .collect()
-                    } else {
-                        matching_ids.iter().map(|&id| id as u32).collect()
-                    };
-                    if let Some(limit) = max_sample_ids {
-                        filtered_ids.truncate(limit);
+                            .filter(|m| m.sample_game_ids.is_empty())
+                            .filter_map(|m| {
+                                m.uci.parse::<UciMove>().ok().and_then(|u| {
+                                    u.to_move(pos)
+                                        .ok()
+                                        .map(|sm| crate::tree_index::types::PackedMove::from(&sm))
+                                })
+                            })
+                            .collect();
+
+                        if !child_moves.is_empty() {
+                            let child_samples = evaluator.sample_child_moves_game_ids(
+                                pos,
+                                &child_moves,
+                                sample_limit.min(5),
+                            );
+                            for m in &mut rep.moves {
+                                if m.sample_game_ids.is_empty() {
+                                    if let Ok(u) = m.uci.parse::<UciMove>() {
+                                        if let Ok(sm) = u.to_move(pos) {
+                                            let pm =
+                                                crate::tree_index::types::PackedMove::from(&sm);
+                                            if let Some(samples) = child_samples.get(&pm.0) {
+                                                m.sample_game_ids = samples.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    rep.sample_game_ids = filtered_ids;
+                }
+            }
+
+            // B. Optional Fallback to PositionIndex (.pos.idx) if booster was not present
+            if rep.sample_game_ids.is_empty() {
+                if current_pos_index.is_none() {
+                    *current_pos_index = PositionIndex::load(&db_path).ok();
+                }
+                if let Some(pos_idx) = current_pos_index.as_ref() {
+                    if let Some(matching_ids) = pos_idx.get_matching_game_ids(rep.zobrist_hash) {
+                        let mut filtered_ids: Vec<u32> = if let Some(ref t_ids) = target_game_ids {
+                            let t_set: std::collections::HashSet<usize> =
+                                t_ids.iter().copied().collect();
+                            matching_ids
+                                .iter()
+                                .filter(|id| t_set.contains(id))
+                                .map(|&id| id as u32)
+                                .collect()
+                        } else {
+                            matching_ids.iter().map(|&id| id as u32).collect()
+                        };
+                        if let Some(limit) = max_sample_ids {
+                            filtered_ids.truncate(limit);
+                        }
+                        rep.sample_game_ids = filtered_ids;
+                    }
                 }
             }
         }

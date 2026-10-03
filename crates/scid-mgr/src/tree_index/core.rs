@@ -236,6 +236,25 @@ impl TreeIndex {
         )
     }
 
+    /// On-the-fly dynamic calculation of opening tree statistics for SCID databases with progress streaming
+    pub fn calculate_tree_for_scid_with_progress<P: AsRef<Path>, F: Fn(usize, usize) + Sync>(
+        entries: &[chess_scid_rw::entry::IndexEntry],
+        games_path: P,
+        fen_str: &str,
+        target_game_ids: Option<&[usize]>,
+        max_depth: Option<usize>,
+        progress: F,
+    ) -> Option<OpeningTreeReport> {
+        super::dynamic::calculate_tree_for_scid_with_progress(
+            entries,
+            games_path,
+            fen_str,
+            target_game_ids,
+            max_depth,
+            progress,
+        )
+    }
+
     /// On-the-fly dynamic calculation of opening tree statistics for PGN databases
     pub fn calculate_tree_for_pgn(
         entries: &[crate::pgn_db::PgnIndexEntry],
@@ -245,6 +264,25 @@ impl TreeIndex {
         max_depth: Option<usize>,
     ) -> Option<OpeningTreeReport> {
         super::dynamic::calculate_tree_for_pgn(entries, mmap, fen_str, target_game_ids, max_depth)
+    }
+
+    /// On-the-fly dynamic calculation of opening tree statistics for PGN databases with progress streaming
+    pub fn calculate_tree_for_pgn_with_progress<F: Fn(usize, usize) + Sync>(
+        entries: &[crate::pgn_db::PgnIndexEntry],
+        mmap: &memmap2::Mmap,
+        fen_str: &str,
+        target_game_ids: Option<&[usize]>,
+        max_depth: Option<usize>,
+        progress: F,
+    ) -> Option<OpeningTreeReport> {
+        super::dynamic::calculate_tree_for_pgn_with_progress(
+            entries,
+            mmap,
+            fen_str,
+            target_game_ids,
+            max_depth,
+            progress,
+        )
     }
 
     /// Build static, disk-backed .tree.idx file for SCID databases in parallel across CPU cores
