@@ -653,4 +653,44 @@ fn test_custom_fen_games_excluded_from_fast_evaluator() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_packed_path_256_encoding_equality_and_hashing() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn compute_hash<T: Hash>(item: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        item.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    let m1 = BoostMove(100);
+    let m2 = BoostMove(200);
+    let m3 = BoostMove(300);
+    let m4 = BoostMove(400);
+
+    let path_a = scid_mgr::search_booster::PackedPath256::from_slice(&[m1, m2, m3]);
+    let path_b = scid_mgr::search_booster::PackedPath256::from_slice(&[m1, m2, m3]);
+    let path_prefix = scid_mgr::search_booster::PackedPath256::from_slice(&[m1, m2]);
+    let path_diff = scid_mgr::search_booster::PackedPath256::from_slice(&[m1, m2, m4]);
+
+    assert_eq!(path_a, path_b);
+    assert_ne!(path_a, path_prefix);
+    assert_ne!(path_a, path_diff);
+
+    assert_eq!(compute_hash(&path_a), compute_hash(&path_b));
+    assert_ne!(compute_hash(&path_a), compute_hash(&path_prefix));
+    assert_ne!(compute_hash(&path_a), compute_hash(&path_diff));
+
+    assert_eq!(path_a.len(), 3);
+    assert_eq!(path_a.to_boost_moves(), vec![m1, m2, m3]);
+    assert_eq!(path_prefix.to_boost_moves(), vec![m1, m2]);
+
+    // Test up to 16 moves (across both lo and hi 128-bit words)
+    let sixteen_moves: Vec<BoostMove> = (1..=16).map(BoostMove).collect();
+    let packed_16 = scid_mgr::search_booster::PackedPath256::from_slice(&sixteen_moves);
+    assert_eq!(packed_16.len(), 16);
+    assert_eq!(packed_16.to_boost_moves(), sixteen_moves);
+}
+
 
