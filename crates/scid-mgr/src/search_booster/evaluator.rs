@@ -288,7 +288,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             .into_par_iter()
             .filter_map(|gid| {
                 let entry = self.index.get_game_entry(gid)?;
-                if entry.is_deleted() {
+                if entry.is_deleted() || entry.is_custom_fen() {
                     let done =
                         progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                     if done % step == 0 || done == total_games {
@@ -393,10 +393,10 @@ impl<'a> BoostSearchEvaluator<'a> {
         let move_counts = (0..total_games)
             .into_par_iter()
             .fold(
-                std::collections::HashMap::<u16, u32>::new,
+                HashMap::<u16, u32>::default,
                 |mut acc, gid| {
                     let _entry = match self.index.get_game_entry(gid) {
-                        Some(e) if !e.is_deleted() => e,
+                        Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
                         _ => return acc,
                     };
                     let moves = match self.index.get_game_moves(gid) {
@@ -426,7 +426,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     acc
                 },
             )
-            .reduce(std::collections::HashMap::new, |mut map1, map2| {
+            .reduce(HashMap::default, |mut map1, map2| {
                 for (k, v) in map2 {
                     *map1.entry(k).or_insert(0) += v;
                 }
@@ -463,10 +463,10 @@ impl<'a> BoostSearchEvaluator<'a> {
         let line_counts = (0..total_games)
             .into_par_iter()
             .fold(
-                std::collections::HashMap::<InlinePath, u32>::new,
+                HashMap::<InlinePath, u32>::default,
                 |mut acc, gid| {
                     let _entry = match self.index.get_game_entry(gid) {
-                        Some(e) if !e.is_deleted() => e,
+                        Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
                         _ => return acc,
                     };
                     let moves = match self.index.get_game_moves(gid) {
@@ -501,7 +501,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     acc
                 },
             )
-            .reduce(std::collections::HashMap::new, |mut map1, map2| {
+            .reduce(HashMap::default, |mut map1, map2| {
                 for (k, v) in map2 {
                     *map1.entry(k).or_insert(0) += v;
                 }
@@ -586,7 +586,7 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let process_game = |gid: usize, acc: &mut TreeAcc| {
             let _entry = match self.index.get_game_entry(gid) {
-                Some(e) if !e.is_deleted() => e,
+                Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
                 _ => return,
             };
             let moves = match self.index.get_game_moves(gid) {
@@ -934,7 +934,7 @@ impl<'a> BoostSearchEvaluator<'a> {
         let process_game = |gid: usize, acc: &mut ContAcc| {
             acc.total_processed += 1;
             let _entry = match self.index.get_game_entry(gid) {
-                Some(e) if !e.is_deleted() => e,
+                Some(e) if !e.is_deleted() && !e.is_custom_fen() => e,
                 _ => return,
             };
             let moves = match self.index.get_game_moves(gid) {

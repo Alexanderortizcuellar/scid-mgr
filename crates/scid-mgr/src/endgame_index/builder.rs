@@ -80,7 +80,7 @@ impl EndgameIndexBuilder {
                         }
                     };
 
-                    if entry.is_deleted() {
+                    if entry.is_deleted() || entry.is_custom_fen() {
                         chunk_records.push(GameFeatureRecord::new());
                         let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
                         if let Some(ref cb) = progress_cb {

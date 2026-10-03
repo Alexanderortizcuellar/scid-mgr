@@ -577,3 +577,80 @@ fn test_server_booster_json_rpc() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_custom_fen_games_excluded_from_fast_evaluator() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("custom_fen_test.pgn");
+
+    let pgn_content = r#"[Event "Normal Standard Game"]
+[Site "London"]
+[Date "2024.01.01"]
+[Round "1"]
+[White "Player A"]
+[Black "Player B"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0
+
+[Event "Custom FEN Puzzle Game"]
+[Site "Online"]
+[Date "2024.01.02"]
+[Round "2"]
+[White "Puzzle W"]
+[Black "Puzzle B"]
+[Result "1-0"]
+[FEN "r1bqk2r/pppp1ppp/2n5/4p3/2B1n3/2P2N2/PPP2PPP/R1BQK2R w KQkq - 0 7"]
+
+7. Bxf7+ Kxf7 8. Qd5+ Ke8 9. Qxe4 1-0
+"#;
+
+    std::fs::write(&pgn_path, pgn_content)?;
+    let booster_path = resolve_companion_booster_path(&pgn_path);
+
+    BoostIndexBuilder::build_for_pgn(&pgn_path, Some(booster_path.clone()), None)?;
+    let index = MmapBoostIndex::open(&booster_path)?;
+
+    assert_eq!(index.num_games(), 2);
+
+    let entry0 = index.game_entry(0).unwrap();
+    assert!(!entry0.is_custom_fen());
+
+    let entry1 = index.game_entry(1).unwrap();
+    assert!(entry1.is_custom_fen());
+
+    let evaluator = BoostSearchEvaluator::new(&index);
+
+    // Opening tree at starting position should only aggregate the 1 standard game
+    let start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    let report = evaluator
+        .calculate_opening_tree(start_fen, None, Some(50), None::<fn(usize) -> _>, None)?
+        .expect("Tree report exists");
+    assert_eq!(report.total_games, 1);
+    assert_eq!(report.moves.len(), 1);
+    assert_eq!(report.moves[0].san, "e4");
+
+    // Board search for starting position should match exactly 1 game (game 0)
+    let matches = evaluator.search_position(start_fen, None)?;
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].game_id, 0);
+
+    // Continuation query from start position should only process the standard game
+    let query = scid_mgr::continuation_index::ContinuationQuery {
+        position: start_fen.to_string(),
+        max_depth: 4,
+        min_games: 1,
+        min_percentage: 0.0,
+        max_lines: 10,
+        hot_idx: None,
+        pos_idx: None,
+    };
+    let cont_res = evaluator
+        .calculate_continuations(&query, None, None::<fn(usize) -> _>)?
+        .expect("Continuation result exists");
+    assert_eq!(cont_res.games_reaching_position, 1);
+
+    Ok(())
+}
+
+
