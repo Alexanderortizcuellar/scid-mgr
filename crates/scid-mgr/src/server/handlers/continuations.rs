@@ -227,7 +227,7 @@ pub fn handle_continuations(
             "data": {
                 "scanned": scanned,
                 "total": total,
-                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 0.0 }
             }
         });
         if let Ok(line) = serde_json::to_string(&event_json) {
@@ -340,7 +340,7 @@ pub fn handle_build_continuations_index(
                             "total": total,
                             "nodes": nodes,
                             "positions": nodes,
-                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 0.0 }
                         }
                     });
                     if let Ok(line) = serde_json::to_string(&event_json) {
@@ -366,7 +366,7 @@ pub fn handle_build_continuations_index(
                             "total": total,
                             "nodes": nodes,
                             "positions": nodes,
-                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 100.0 }
+                            "percent": if total > 0 { (scanned as f64 / total as f64) * 100.0 } else { 0.0 }
                         }
                     });
                     if let Ok(line) = serde_json::to_string(&event_json) {
