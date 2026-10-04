@@ -1,14 +1,16 @@
-use serde_json::json;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::db::GameFilter;
 use crate::endgame_index::{
     resolve_companion_feat_path, EndgameCatalog, EndgameIndexBuilder, EndgameQueryEngine,
     MmapFeatureIndex,
 };
 use crate::position_index::PositionIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
+use serde_json::json;
 use shakmaty::fen::Fen;
 use shakmaty::zobrist::ZobristHash;
 use shakmaty::{CastlingMode, Chess};
@@ -63,6 +65,23 @@ pub fn handle_endgames(
         .and_then(|v| v.as_str())
         .map(PathBuf::from);
 
+    let explicit_game_ids: Option<Vec<usize>> = req
+        .params
+        .get("game_ids")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    let use_search_results = req
+        .params
+        .get("use_search_results")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let filter_opt: Option<GameFilter> = req
+        .params
+        .get("filter")
+        .or_else(|| req.params.get("params"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
     let catalog = EndgameCatalog::load_or_default(catalog_path_opt.as_deref());
 
     let db_path = match db {
@@ -106,9 +125,87 @@ pub fn handle_endgames(
         }
     };
 
-    // 1. Feature Query Mode
+    // 1. Filter Game IDs Resolution (search session, inline filter, or explicit game_ids)
+    let mut filter_game_ids: Option<Vec<usize>> = explicit_game_ids;
+    if filter_game_ids.is_none() && use_search_results {
+        filter_game_ids = match db {
+            DatabaseBackend::Scid(s) => s.get_cached_query_indices(),
+            DatabaseBackend::Pgn(p) => p.get_cached_query_indices(),
+        };
+    } else if filter_game_ids.is_none() {
+        if let Some(ref f) = filter_opt {
+            if !f.is_empty() {
+                match db {
+                    DatabaseBackend::Scid(s) => {
+                        let _ = s.query_games(f, 0, 0);
+                    }
+                    DatabaseBackend::Pgn(p) => {
+                        let _ = p.query_games(f, 0, 0);
+                    }
+                };
+                filter_game_ids = match db {
+                    DatabaseBackend::Scid(s) => s.get_cached_query_indices(),
+                    DatabaseBackend::Pgn(p) => p.get_cached_query_indices(),
+                };
+            }
+        }
+    }
+
+    // 2. Position Filter Candidate Resolution
+    let mut position_game_ids: Option<HashSet<usize>> = None;
+    if let Some(fen_str) = fen_opt {
+        let fen_parsed: Result<Fen, _> = fen_str.parse();
+        match fen_parsed {
+            Ok(fen) => {
+                if let Ok(pos) = fen.into_position::<Chess>(CastlingMode::Chess960) {
+                    if current_pos_index.is_none() {
+                        *current_pos_index = PositionIndex::load(db_path).ok();
+                    }
+                    if let Some(ref pos_idx) = current_pos_index {
+                        let hash_val: shakmaty::zobrist::Zobrist64 =
+                            pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
+                        if let Some(postings) = pos_idx.get_all_position_games(hash_val.0) {
+                            position_game_ids = Some(postings.into_iter().collect());
+                        } else {
+                            position_game_ids = Some(HashSet::new());
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                return ResponseMessage {
+                    id,
+                    status: "error".to_string(),
+                    data: None,
+                    error: Some(format!("Invalid FEN '{}': {}", fen_str, e)),
+                };
+            }
+        }
+    }
+
+    // 3. Merge Position & Search Filters
+    let candidate_ids: Option<Vec<u32>> = match (position_game_ids, filter_game_ids) {
+        (Some(pos_set), Some(filt_list)) => Some(
+            filt_list
+                .into_iter()
+                .filter(|id| pos_set.contains(id))
+                .map(|id| id as u32)
+                .collect(),
+        ),
+        (Some(pos_set), None) => Some(pos_set.into_iter().map(|id| id as u32).collect()),
+        (None, Some(filt_list)) => Some(filt_list.into_iter().map(|id| id as u32).collect()),
+        (None, None) => None,
+    };
+
+    // 4. Feature Query Mode
     if let Some(feat_id) = feature_opt {
-        match EndgameQueryEngine::query_feature(&mmap_idx, &catalog, feat_id, max_samples) {
+        match EndgameQueryEngine::query_feature_filtered(
+            &mmap_idx,
+            &catalog,
+            feat_id,
+            max_samples,
+            candidate_ids.as_deref(),
+        ) {
             Ok(rep) => {
                 return ResponseMessage {
                     id,
@@ -123,39 +220,6 @@ pub fn handle_endgames(
                     status: "error".to_string(),
                     data: None,
                     error: Some(format!("Feature query failed: {}", e)),
-                };
-            }
-        }
-    }
-
-    // 2. Position Filter Candidate Resolution
-    let mut candidate_ids: Option<Vec<u32>> = None;
-    if let Some(fen_str) = fen_opt {
-        let fen_parsed: Result<Fen, _> = fen_str.parse();
-        match fen_parsed {
-            Ok(fen) => {
-                if let Ok(pos) = fen.into_position::<Chess>(CastlingMode::Chess960) {
-                    if current_pos_index.is_none() {
-                        *current_pos_index = PositionIndex::load(db_path).ok();
-                    }
-                    if let Some(ref pos_idx) = current_pos_index {
-                        let hash_val: shakmaty::zobrist::Zobrist64 =
-                            pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-                        if let Some(postings) = pos_idx.get_all_position_games(hash_val.0) {
-                            candidate_ids =
-                                Some(postings.into_iter().map(|gid| gid as u32).collect());
-                        } else {
-                            candidate_ids = Some(Vec::new());
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                return ResponseMessage {
-                    id,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some(format!("Invalid FEN '{}': {}", fen_str, e)),
                 };
             }
         }

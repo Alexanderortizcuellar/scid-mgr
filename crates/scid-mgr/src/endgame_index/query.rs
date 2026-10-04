@@ -174,6 +174,16 @@ impl EndgameQueryEngine {
         feature_id_or_bit: &str,
         max_samples: usize,
     ) -> Result<FeatureQueryReport> {
+        Self::query_feature_filtered(index, catalog, feature_id_or_bit, max_samples, None)
+    }
+
+    pub fn query_feature_filtered(
+        index: &MmapFeatureIndex,
+        catalog: &EndgameCatalog,
+        feature_id_or_bit: &str,
+        max_samples: usize,
+        candidate_games: Option<&[u32]>,
+    ) -> Result<FeatureQueryReport> {
         let feat = if let Ok(bit) = feature_id_or_bit.parse::<u8>() {
             catalog
                 .bit_to_feature
@@ -188,8 +198,24 @@ impl EndgameQueryEngine {
 
         let target_bit = feat.bit;
         let mask = 1u64 << target_bit;
-        let matching_ids = index.find_games_with_endgame_mask(mask);
-        let total_db_games = index.game_count() as usize;
+        let matching_ids: Vec<u32> = if let Some(candidates) = candidate_games {
+            candidates
+                .iter()
+                .copied()
+                .filter(|&gid| {
+                    index
+                        .get_record(gid)
+                        .map(|r| (r.endgame_bits & mask) != 0)
+                        .unwrap_or(false)
+                })
+                .collect()
+        } else {
+            index.find_games_with_endgame_mask(mask)
+        };
+
+        let total_db_games = candidate_games
+            .map(|c| c.len())
+            .unwrap_or_else(|| index.game_count() as usize);
         let count = matching_ids.len();
         let pct = (count as f64 / total_db_games.max(1) as f64) * 100.0;
 

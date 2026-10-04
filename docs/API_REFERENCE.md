@@ -170,12 +170,15 @@ Builds the 16-bit uncompressed `.boost.idx` Search Booster accelerator for SCID 
 - **Output**: Generates `<db_name>.boost.idx` containing 64-byte header, 8-byte game directory table, and continuous 16-bit move stream.
 
 ### `endgames`
-Calculates endgame popularity distribution and occurrence statistics across the database or for games reaching a specific position using the companion `.feat.idx` index.
+Calculates endgame popularity distribution and occurrence statistics across the database, for games reaching a specific position, or strictly for filtered search results using the companion `.feat.idx` index.
 - **Params**:
   - `fen`: `string` (optional FEN position filter)
   - `category`: `string` (optional category filter, e.g. `"PAWN"`, `"ROOK"`, `"BISHOP"`)
   - `feature_id`: `string` (optional feature ID filter, e.g. `"END_ROOK_RP_R"`)
   - `max_samples`: `number` (optional sample game IDs to return, default: `20`)
+  - `use_search_results`: `boolean` (optional; if `true`, calculates endgame stats strictly for the active search session / filtered subset)
+  - `game_ids`: `number[]` (optional; calculates endgame stats strictly for an explicit array of game IDs)
+  - `filter`: `GameFilter` (optional inline metadata filter)
 - **Returns**: `EndgamePopularityReport` (`{ db_path, total_db_games, games_reaching_position, position_filtered, fen, categories: [...], features: [...] }`)
 
 ### `build_endgames`

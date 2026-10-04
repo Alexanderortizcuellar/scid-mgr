@@ -485,7 +485,7 @@ Explores common multi-move continuation branches using `.boost.idx` or `.hot.idx
   ```
 
 #### `endgames` & `build_endgames`
-47-feature endgame taxonomy analytics using `.feat.idx` companion index.
+47-feature endgame taxonomy analytics using `.feat.idx` companion index. Supports full-database analysis, FEN position matches, or strictly filtered search results via `use_search_results: true`, `filter: {...}`, or explicit `game_ids: [...]`.
 
 ---
 

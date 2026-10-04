@@ -373,3 +373,75 @@ fn test_booster_accelerated_endgame_build_and_equivalence() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_filtered_endgame_queries() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("endgames_filter.pgn");
+    let mut file = std::fs::File::create(&pgn_path)?;
+    file.write_all(ENDGAME_PGN.as_bytes())?;
+    file.flush()?;
+
+    let builder = EndgameIndexBuilder::new();
+    let (idx_path, total_games, _elapsed) = builder.build_for_pgn(&pgn_path, None, None)?;
+    assert_eq!(total_games, 3);
+
+    let mmap_idx = MmapFeatureIndex::open(&idx_path)?;
+    let catalog = EndgameCatalog::default_catalog();
+
+    // 1. Filtered popularity calculation (games 0 and 1 only; excluding game 2 which has KP_K)
+    let pop_filtered = EndgameQueryEngine::calculate_popularity(
+        &mmap_idx,
+        &catalog,
+        pgn_path.to_str().unwrap(),
+        Some(&[0, 1]),
+        None,
+        None,
+    )?;
+
+    assert_eq!(pop_filtered.total_db_games, 3);
+    assert_eq!(pop_filtered.games_reaching_position, 2);
+    assert!(pop_filtered.position_filtered);
+
+    // Feature 0 (END_PAWN_KP_K) should have 0 games in games [0, 1]
+    let feat_kp = pop_filtered
+        .features
+        .iter()
+        .find(|f| f.id == "END_PAWN_KP_K")
+        .unwrap();
+    assert_eq!(feat_kp.game_count, 0);
+
+    // Feature 17 (END_BISHOP_OCB) should have 1 game in games [0, 1] (50%)
+    let feat_ocb = pop_filtered
+        .features
+        .iter()
+        .find(|f| f.id == "END_BISHOP_OCB")
+        .unwrap();
+    assert_eq!(feat_ocb.game_count, 1);
+    assert_eq!(feat_ocb.percentage, 50.0);
+
+    // 2. Filtered feature query
+    let q_excluded = EndgameQueryEngine::query_feature_filtered(
+        &mmap_idx,
+        &catalog,
+        "END_PAWN_KP_K",
+        5,
+        Some(&[0, 1]),
+    )?;
+    assert_eq!(q_excluded.matching_games_count, 0);
+    assert_eq!(q_excluded.total_db_games, 2);
+    assert!(q_excluded.sample_game_ids.is_empty());
+
+    let q_included = EndgameQueryEngine::query_feature_filtered(
+        &mmap_idx,
+        &catalog,
+        "END_PAWN_KP_K",
+        5,
+        Some(&[1, 2]),
+    )?;
+    assert_eq!(q_included.matching_games_count, 1);
+    assert_eq!(q_included.total_db_games, 2);
+    assert_eq!(q_included.sample_game_ids, vec![2]);
+
+    Ok(())
+}
