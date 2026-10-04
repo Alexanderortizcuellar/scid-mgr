@@ -305,22 +305,13 @@ where
         }
     };
 
-    // 2. SIMD Search for all [Event boundaries across the mmap buffer
-    let finder = memchr::memmem::Finder::new(b"[Event ");
-    let mut boundaries: Vec<usize> = Vec::with_capacity((total_bytes / 900) as usize);
-
-    for idx in finder.find_iter(&mmap) {
-        // Ensure boundary is at line start (idx == 0 or preceding char is \n)
-        if idx == 0 || mmap[idx - 1] == b'\n' {
-            boundaries.push(idx);
-        }
-    }
-
-    if boundaries.is_empty() {
+    // 2. Scan for all game boundaries across the mmap buffer
+    let offsets = crate::pgn::scan_pgn_game_offsets(&mmap);
+    if offsets.is_empty() {
         return Ok((0, 0));
     }
 
-    let total_games = boundaries.len();
+    let total_games = offsets.len();
     let mut entries: Vec<chess_scid_rw::entry::IndexEntry> = Vec::with_capacity(total_games);
     let mut names = FastNameTables::from_name_tables(&chess_scid_rw::names::NameTables::default());
     let mut games_bytes: Vec<u8> = Vec::with_capacity(total_bytes as usize / 8);
@@ -338,21 +329,10 @@ where
     for chunk_idx in 0..num_chunks {
         let start_game = chunk_idx * CHUNK_SIZE;
         let end_game = (start_game + CHUNK_SIZE).min(total_games);
-
-        let slice_indices: Vec<(usize, usize)> = (start_game..end_game)
-            .map(|i| {
-                let start_b = boundaries[i];
-                let end_b = if i + 1 < total_games {
-                    boundaries[i + 1]
-                } else {
-                    mmap.len()
-                };
-                (start_b, end_b)
-            })
-            .collect();
+        let chunk_offsets = &offsets[start_game..end_game];
 
         // Parallel parse & encode
-        let parsed_results: Vec<Option<(RawPgnTags, Vec<u8>)>> = slice_indices
+        let parsed_results: Vec<Option<(RawPgnTags, Vec<u8>)>> = chunk_offsets
             .par_iter()
             .map(|&(start_b, end_b)| parse_game_bytes_fast(&mmap[start_b..end_b]))
             .collect();
@@ -397,7 +377,7 @@ where
         }
 
         let processed_bytes = if end_game < total_games {
-            boundaries[end_game] as u64
+            offsets[end_game].0 as u64
         } else {
             total_bytes
         };

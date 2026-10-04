@@ -75,9 +75,18 @@ Overall Benchmark Duration: 18.57 seconds
 
 ---
 
+## 4. Benchmark Results on Master PGN (1,538,320 Games) — Boundary Resolution
+
+**Database**: `master.pgn` (1,354.26 MB raw text, 1,538,320 games)
+
+| Approach | Boundary Discovery Method | Time | Throughput | Consistency |
+| :--- | :--- | :---: | :---: | :---: |
+| **Old Approach** | Sequential Byte Scan (`scan_pgn_game_offsets`) | **4,391.15 ms** | 2.85 µs / game | ❌ Discrepancy on non-standard tags |
+| **New Approach** | Direct Binary Header Index (`.pgn.idx`) | **89.58 ms** | **0.058 µs / game** | ✅ **100% Synced (49.0x faster)** |
+
 ---
 
-## 4. Benchmark Results on TwChess Database (1,490,481 Games) — Position Indexing
+## 5. Benchmark Results on TwChess Database (1,490,481 Games) — Position Indexing
 
 **Database**: `database.si5` (1.49M games, 83.4 MB index, 142.4 MB move-stream)
 
@@ -93,7 +102,7 @@ Overall Benchmark Duration: 18.57 seconds
 
 ---
 
-## 5. How to Run Benchmarks
+## 6. How to Run Benchmarks
 
 ### Via Command-Line (CLI)
 ```powershell

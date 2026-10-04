@@ -94,11 +94,11 @@ pub(crate) fn scan_pgn_parallel(
         if rough_start >= mmap.len() {
             break;
         }
-        // Advance to next '[Event ' at start of line
+        // Advance to next tag line at start of line
         let mut pos = rough_start;
         let mut found = false;
-        while pos + 7 < mmap.len() {
-            if (pos == 0 || mmap[pos - 1] == b'\n') && &mmap[pos..pos + 7] == b"[Event " {
+        while pos < mmap.len() {
+            if (pos == 0 || mmap[pos - 1] == b'\n') && crate::pgn::is_pgn_tag_line(&mmap[pos..]) {
                 found = true;
                 break;
             }

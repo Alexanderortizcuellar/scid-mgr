@@ -162,10 +162,14 @@ impl EndgameIndexBuilder {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let file = File::open(pgn_ref)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-        let offsets = crate::pgn::scan_pgn_game_offsets(&mmap);
+        let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(pgn_ref)?;
+        let offsets: Vec<(usize, usize)> = pgn_db
+            .entries
+            .iter()
+            .map(|e| (e.offset as usize, (e.offset + e.length as u64) as usize))
+            .collect();
         let total_games = boost_idx.game_count().min(offsets.len());
+        let mmap = pgn_db.mmap_ref();
         let progress_counter = AtomicUsize::new(0);
 
         let game_ids: Vec<usize> = (0..total_games).collect();
@@ -480,12 +484,14 @@ impl EndgameIndexBuilder {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        // Scan PGN offsets for parallel indexing
-        let file = File::open(pgn_ref)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-
-        let offsets = crate::pgn::scan_pgn_game_offsets(&mmap);
+        let pgn_db = crate::pgn_db::PgnDatabaseWrapper::open(pgn_ref)?;
+        let offsets: Vec<(usize, usize)> = pgn_db
+            .entries
+            .iter()
+            .map(|e| (e.offset as usize, (e.offset + e.length as u64) as usize))
+            .collect();
         let total_games = offsets.len();
+        let mmap = pgn_db.mmap_ref();
 
         let progress_counter = AtomicUsize::new(0);
 

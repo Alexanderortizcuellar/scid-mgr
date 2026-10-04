@@ -784,3 +784,70 @@ fn test_booster_language_search_adapter_eval_game() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_pgn_missing_event_headers_booster_and_integrity_check() -> Result<()> {
+    use scid_mgr::cli::commands::check::handle_check;
+    use scid_mgr::pgn_db::PgnDatabaseWrapper;
+
+    let dir = tempdir()?;
+    let pgn_file = dir.path().join("mixed_headers.pgn");
+
+    // PGN with 3 games: Game 1 starts with [Site], Game 2 with [White], Game 3 with [Event]
+    let pgn_content = r#"[Site "Nagykanizsa HUN"]
+[Date "2026.08.15"]
+[Round "1.1"]
+[White "Golis,Wiktor"]
+[Black "Bluebaum,Alexander"]
+[Result "1-0"]
+
+1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 1-0
+
+[White "Carlsen, Magnus"]
+[Black "Nakamura, Hikaru"]
+[Date "2026.08.16"]
+[Result "1/2-1/2"]
+
+1. d4 Nf6 2. c4 e6 3. Nf3 d5 1/2-1/2
+
+[Event "World Cup"]
+[Site "Sochi"]
+[White "Duda, Jan-Krzysztof"]
+[Black "Karjakin, Sergey"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0
+"#;
+
+    std::fs::write(&pgn_file, pgn_content)?;
+
+    // 1. Open PgnDatabaseWrapper and verify game count
+    let pgn_db = PgnDatabaseWrapper::open(&pgn_file)?;
+    assert_eq!(pgn_db.game_count(), 3);
+
+    // 2. Build Booster Index
+    let (boost_path, indexed_games, _plies, _time) =
+        BoostIndexBuilder::build_for_pgn(&pgn_file, None, None)?;
+    assert_eq!(indexed_games, 3);
+
+    let boost_idx = MmapBoostIndex::open(&boost_path)?;
+    assert_eq!(boost_idx.game_count(), 3);
+
+    // 3. Verify move count & headers for all 3 games in booster
+    let g1_moves = boost_idx.get_game_moves(0).unwrap();
+    assert_eq!(g1_moves.len(), 10); // 1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6
+    assert_eq!(boost_idx.get_game_entry(0).unwrap().result, 1);
+
+    let g2_moves = boost_idx.get_game_moves(1).unwrap();
+    assert_eq!(g2_moves.len(), 6); // 1. d4 Nf6 2. c4 e6 3. Nf3 d5
+    assert_eq!(boost_idx.get_game_entry(1).unwrap().result, 3);
+
+    let g3_moves = boost_idx.get_game_moves(2).unwrap();
+    assert_eq!(g3_moves.len(), 6); // 1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5
+    assert_eq!(boost_idx.get_game_entry(2).unwrap().result, 1);
+
+    // 4. Run integrity check
+    handle_check(&pgn_file, true, false)?;
+
+    Ok(())
+}

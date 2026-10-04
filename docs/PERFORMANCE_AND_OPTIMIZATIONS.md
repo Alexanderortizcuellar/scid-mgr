@@ -268,5 +268,18 @@ The `.pgn.idx` format uses 64-bit offsets and 40-byte compact records:
 - **Impact**: Inflates a 20-million-game PGN from **~12–14 GB up to 44 GB** (>65% of the file is comment text).
 - **Solution / Preprocessing**: Strip `{ [%clk ...] }` and `{ [%eval ...] }` blocks. This shrinks disk I/O and speeds up move scanning and booster building by **3x to 4x**.
 
+---
 
+## 12. Robust Game Boundary Resolution & Header-Driven Indexing
 
+### The Non-Standard PGN Boundary Problem
+Standard PGN specifies the Seven Tag Roster (STR) beginning with `[Event ...]`. However, real-world databases (such as `master.pgn` with 1.54M games) frequently contain games missing `[Event ...]` and beginning directly with `[Site ...]`, `[Date ...]`, or `[White ...]`.
+
+Naive byte searching for `[Event ` caused game index drift (1-game discrepancy), where secondary index builders merged games missing `[Event ` into adjacent games.
+
+### The Solution: Tag-State-Machine & `.pgn.idx` Header Offset Ingestion
+1. **Tag-State-Machine**: Recognizes any bracketed tag at column 0 (`is_pgn_tag_line`), consuming tag blocks and then move text until the next tag block.
+2. **Direct Offset Reuse**: Secondary index builders (`.boost.idx`, `.feat.idx`) query `PgnDatabaseWrapper::open()`, directly reusing the pre-indexed `(entry.offset, entry.length)` pairs from `.pgn.idx` instead of rescanning the raw PGN text.
+
+### Benchmark Impact
+- **`master.pgn` (1.35 GB / 1,538,320 games)**: Boundary discovery dropped from **4,391.15 ms down to 89.58 ms** (**49.0x speedup**), completely eliminating the 4.4s disk scan before parallel move encoding and guaranteeing 100% database synchronization.
