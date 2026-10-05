@@ -194,6 +194,16 @@ fn test_unified_reference_pgn_database() {
     let data = resp.data.unwrap();
     assert!(data["search_id"].as_str().unwrap().starts_with("ref_"));
     assert!(data["tree"].is_object());
+    let moves = data["tree"]["moves"].as_array().unwrap();
+    if !moves.is_empty() {
+        let first_move = &moves[0];
+        if let Some(fy) = first_move.get("first_year").and_then(|v| v.as_u64()) {
+            assert!(fy >= 1800 && fy <= 2030, "first_year should be 4-digit calendar year, got {}", fy);
+        }
+        if let Some(ly) = first_move.get("last_year").and_then(|v| v.as_u64()) {
+            assert!(ly >= 1800 && ly <= 2030, "last_year should be 4-digit calendar year, got {}", ly);
+        }
+    }
 }
 
 #[test]
