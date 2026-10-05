@@ -647,6 +647,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             white_elo_sum: u64,
             black_elo_sum: u64,
             elo_game_count: u32,
+            min_year: Option<u16>,
             max_year: Option<u16>,
             sample_game_ids: Vec<u32>,
         }
@@ -657,6 +658,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             white_wins: u64,
             draws: u64,
             black_wins: u64,
+            last_year: Option<u16>,
         }
 
         #[derive(Debug, Clone, Default)]
@@ -733,6 +735,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                         m_acc.elo_game_count += 1;
                     }
                     if let Some(y) = meta.year {
+                        m_acc.min_year = Some(m_acc.min_year.map_or(y, |prev| prev.min(y)));
                         m_acc.max_year = Some(m_acc.max_year.map_or(y, |prev| prev.max(y)));
                     }
                     if m_acc.sample_game_ids.len() < sample_cap {
@@ -747,6 +750,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += w_win as u64;
                         st.draws += draw as u64;
                         st.black_wins += b_win as u64;
+                        if let Some(y) = meta.year {
+                            st.last_year = Some(st.last_year.map_or(y, |prev| prev.max(y)));
+                        }
                     }
                 }
             }
@@ -782,6 +788,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                         ma.white_elo_sum += v.white_elo_sum;
                         ma.black_elo_sum += v.black_elo_sum;
                         ma.elo_game_count += v.elo_game_count;
+                        ma.min_year = match (ma.min_year, v.min_year) {
+                            (Some(y1), Some(y2)) => Some(y1.min(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
                         ma.max_year = match (ma.max_year, v.max_year) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
@@ -803,6 +815,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
+                        st.last_year = match (st.last_year, v.last_year) {
+                            (Some(y1), Some(y2)) => Some(y1.max(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
                     }
                     a
                 })
@@ -835,6 +853,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                         ma.white_elo_sum += v.white_elo_sum;
                         ma.black_elo_sum += v.black_elo_sum;
                         ma.elo_game_count += v.elo_game_count;
+                        ma.min_year = match (ma.min_year, v.min_year) {
+                            (Some(y1), Some(y2)) => Some(y1.min(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
                         ma.max_year = match (ma.max_year, v.max_year) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
@@ -856,6 +880,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
+                        st.last_year = match (st.last_year, v.last_year) {
+                            (Some(y1), Some(y2)) => Some(y1.max(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
                     }
                     a
                 })
@@ -905,6 +935,8 @@ impl<'a> BoostSearchEvaluator<'a> {
                     black_wins: m_stat.black_wins,
                     avg_white_elo,
                     avg_black_elo,
+                    first_year: m_stat.min_year,
+                    last_year: m_stat.max_year,
                     last_played: m_stat.max_year.map(|y| y.to_string()),
                     sample_game_ids: m_stat.sample_game_ids,
                 }
@@ -945,6 +977,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                             white_wins: stats.white_wins,
                             draws: stats.draws,
                             black_wins: stats.black_wins,
+                            last_year: stats.last_year,
                         });
                     }
                 }
@@ -1006,6 +1039,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             white_wins: u64,
             draws: u64,
             black_wins: u64,
+            last_year: Option<u16>,
         }
 
         #[derive(Debug, Clone, Default)]
@@ -1068,6 +1102,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                     st.white_wins += w_win;
                     st.draws += draw;
                     st.black_wins += b_win;
+                    if let Some(y) = meta.year {
+                        st.last_year = Some(st.last_year.map_or(y, |prev| prev.max(y)));
+                    }
                 }
             }
         };
@@ -1089,6 +1126,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
+                        st.last_year = match (st.last_year, v.last_year) {
+                            (Some(y1), Some(y2)) => Some(y1.max(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
                     }
                     a
                 })
@@ -1108,6 +1151,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
+                        st.last_year = match (st.last_year, v.last_year) {
+                            (Some(y1), Some(y2)) => Some(y1.max(y2)),
+                            (Some(y1), None) => Some(y1),
+                            (None, Some(y2)) => Some(y2),
+                            (None, None) => None,
+                        };
                     }
                     a
                 })
@@ -1143,6 +1192,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                         white_wins: stats.white_wins,
                         draws: stats.draws,
                         black_wins: stats.black_wins,
+                        last_year: stats.last_year,
                     });
                 }
             }

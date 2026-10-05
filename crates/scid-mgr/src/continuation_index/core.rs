@@ -177,6 +177,7 @@ pub trait HotGraphQueryable {
                     white_wins: line.white_wins,
                     draws: line.draws,
                     black_wins: line.black_wins,
+                    last_year: None,
                 });
             }
         }
@@ -277,6 +278,8 @@ pub trait HotGraphQueryable {
                 black_wins: edge.black_wins,
                 avg_white_elo: None,
                 avg_black_elo: None,
+                first_year: None,
+                last_year: None,
                 last_played: None,
                 sample_game_ids: Vec::new(),
             });

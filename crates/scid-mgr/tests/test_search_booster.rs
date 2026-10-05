@@ -403,6 +403,8 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     assert_eq!(e4_move.draw_pct, 25.0);
     assert_eq!(e4_move.black_pct, 0.0);
     assert_eq!(e4_move.avg_white_elo, Some(2533)); // (2600 + 2700 + 2300) / 3 = 2533
+    assert_eq!(e4_move.first_year, Some(1851));
+    assert_eq!(e4_move.last_year, Some(2026));
     assert_eq!(e4_move.last_played, Some("2026".to_string()));
 
     // 2. Opening Tree after 1. e4 with single-pass continuations
@@ -433,9 +435,12 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     assert_eq!(e4_tree.moves[0].total_games, 2);
     assert_eq!(e4_tree.moves[0].white_wins, 2);
     assert_eq!(e4_tree.moves[0].white_pct, 100.0);
+    assert_eq!(e4_tree.moves[0].first_year, Some(1851));
+    assert_eq!(e4_tree.moves[0].last_year, Some(1858));
     assert!(e4_tree.continuations.is_some());
     let cont_lines = e4_tree.continuations.as_ref().unwrap();
     assert!(!cont_lines.is_empty());
+    assert!(cont_lines[0].last_year.is_some());
 
     // 3. Dynamic Continuation Queries
     let query = scid_mgr::continuation_index::ContinuationQuery {
@@ -460,6 +465,7 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     let top_line = &cont_res.lines[0];
     assert!(top_line.moves[0] == "e4");
     assert!(top_line.games >= 1);
+    assert_eq!(top_line.last_year, Some(2024));
 
     Ok(())
 }

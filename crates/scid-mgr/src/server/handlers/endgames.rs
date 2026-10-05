@@ -15,7 +15,7 @@ use serde_json::json;
 pub fn handle_endgames(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
-    current_pos_index: &mut Option<PositionIndex>,
+    _current_pos_index: &mut Option<PositionIndex>,
 ) -> ResponseMessage {
     let id = req.id;
     let db = match current_db {

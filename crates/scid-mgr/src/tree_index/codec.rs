@@ -120,6 +120,8 @@ pub fn generate_tree_report(
                 black_wins: m.black_wins,
                 avg_white_elo: m.avg_white_elo(),
                 avg_black_elo: m.avg_black_elo(),
+                first_year: None,
+                last_year: None,
                 last_played: None,
                 sample_game_ids: Vec::new(),
             }

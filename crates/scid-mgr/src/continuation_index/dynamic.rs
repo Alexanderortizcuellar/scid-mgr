@@ -493,6 +493,7 @@ fn build_final_result(
                     white_wins: stats.white_wins,
                     draws: stats.draws,
                     black_wins: stats.black_wins,
+                    last_year: None,
                 });
             }
         }

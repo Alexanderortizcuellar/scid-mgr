@@ -314,6 +314,10 @@ pub struct OpeningTreeMoveView {
     pub avg_white_elo: Option<u32>,
     pub avg_black_elo: Option<u32>,
     #[serde(default)]
+    pub first_year: Option<u16>,
+    #[serde(default)]
+    pub last_year: Option<u16>,
+    #[serde(default)]
     pub last_played: Option<String>,
     pub sample_game_ids: Vec<u32>,
 }
