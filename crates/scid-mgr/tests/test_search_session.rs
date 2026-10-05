@@ -352,3 +352,124 @@ fn test_search_session_scid_and_pgn_pagination() {
         assert_eq!(pgn_list_data["total"], pgn_matches);
     }
 }
+
+#[test]
+fn test_search_session_manager_lru_and_ownership() {
+    use scid_mgr::search::evaluator::QueryMatchResult;
+    use scid_mgr::search::ScidMatchResult;
+    use scid_mgr::server::search_session::{
+        PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
+    };
+
+    let mut mgr = SearchSessionManager::with_capacity(3); // Cap reference sessions at 3
+
+    // 1. Create a MainTable session
+    let main_id = mgr.create_session_with_metadata(
+        "db1",
+        "player:Carlsen",
+        1000,
+        vec![ScidMatchResult {
+            game_id: 1,
+            match_details: QueryMatchResult {
+                is_match: true,
+                matching_plies: vec![],
+                match_count: 1,
+            },
+        }],
+        10,
+        SessionOwner::Main,
+        SessionQuery::HeaderSearch {
+            filter: Box::new(scid_mgr::db::GameFilter {
+                player: Some("Carlsen".to_string()),
+                ..Default::default()
+            }),
+        },
+    );
+
+    assert!(main_id.starts_with("main_"));
+    assert!(mgr.main_session.is_some());
+
+    // 2. Create 4 reference sessions (exceeding capacity 3)
+    let ref1 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.e4",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+    let ref2 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.d4",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+    let ref3 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.c4",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq - 0 1".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    assert_eq!(mgr.reference_sessions.len(), 3);
+    assert!(mgr.get_session(&ref1).is_some());
+    assert!(mgr.get_session(&ref2).is_some());
+    assert!(mgr.get_session(&ref3).is_some());
+
+    // Creating 4th reference session should evict ref1 (oldest LRU)
+    let ref4 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.Nf3",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R b KQkq - 1 1".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    assert_eq!(mgr.reference_sessions.len(), 3);
+    assert!(mgr.get_session(&ref1).is_none()); // Evicted!
+    assert!(mgr.get_session(&ref2).is_some());
+    assert!(mgr.get_session(&ref3).is_some());
+    assert!(mgr.get_session(&ref4).is_some());
+
+    // Main session is completely untouched by reference LRU eviction!
+    assert!(mgr.get_session(&main_id).is_some());
+    assert_eq!(
+        mgr.get_session_by_owner(&main_id, Some(SessionOwner::Main))
+            .unwrap()
+            .owner,
+        SessionOwner::Main
+    );
+
+    // Mismatched owner lookup returns None
+    assert!(mgr
+        .get_session_by_owner(&main_id, Some(SessionOwner::Reference))
+        .is_none());
+    assert!(mgr
+        .get_session_by_owner(&ref4, Some(SessionOwner::Main))
+        .is_none());
+}

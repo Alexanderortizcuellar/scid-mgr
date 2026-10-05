@@ -481,19 +481,45 @@ pub fn handle_query_games(
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty());
 
+    let owner_opt = req
+        .params
+        .get("owner")
+        .or_else(|| req.params.get("target"))
+        .or_else(|| {
+            req.params
+                .get("params")
+                .and_then(|p| p.get("owner").or_else(|| p.get("target")))
+        })
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s.to_lowercase().as_str() {
+            "main" | "main_table" => Some(crate::server::search_session::SessionOwner::Main),
+            "reference" | "reference_explorer" | "ref" => {
+                Some(crate::server::search_session::SessionOwner::Reference)
+            }
+            _ => None,
+        });
+
     // ⚡ Search Session Pagination: Paginate through cached search results and resolve headers on-demand with multi-page sorting
     if let Some(search_id) = search_id_opt {
-        let session = match session_mgr.get_session_mut(search_id) {
+        let session = match session_mgr.get_session_mut_by_owner(search_id, owner_opt) {
             Some(s) => s,
             None => {
+                let err_msg = match owner_opt {
+                    Some(crate::server::search_session::SessionOwner::Main) => format!(
+                        "Search session '{}' not found for owner 'main' (it may belong to reference explorer or has expired)",
+                        search_id
+                    ),
+                    Some(crate::server::search_session::SessionOwner::Reference) => format!(
+                        "Search session '{}' not found in reference explorer (it may belong to main table or has expired)",
+                        search_id
+                    ),
+                    None => format!("Search session '{}' not found or expired", search_id),
+                };
                 return ResponseMessage {
                     id,
                     status: "error".to_string(),
                     data: None,
-                    error: Some(format!(
-                        "Search session '{}' not found or expired",
-                        search_id
-                    )),
+                    error: Some(err_msg),
                 };
             }
         };

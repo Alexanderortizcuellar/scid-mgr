@@ -1,23 +1,72 @@
 use crate::search::ScidMatchResult;
 use crate::server::DatabaseBackend;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 static NEXT_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// A cached search session containing the results of an executed CQL search
+/// Target consumer/owner of the search session
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOwner {
+    #[serde(rename = "main")]
+    Main,
+    #[serde(rename = "reference")]
+    Reference,
+}
+
+/// Board position matching criteria mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PositionMatchMode {
+    Exact,
+    Placement,
+    Material,
+}
+
+/// Structured query identity and criteria encapsulated inside a session
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum SessionQuery {
+    PurePosition {
+        fen: String,
+        match_mode: PositionMatchMode,
+        max_ply: Option<usize>,
+    },
+    FilteredPosition {
+        fen: String,
+        match_mode: PositionMatchMode,
+        max_ply: Option<usize>,
+        filter: Box<crate::db::GameFilter>,
+    },
+    HeaderSearch {
+        filter: Box<crate::db::GameFilter>,
+    },
+    CqlSearch {
+        query: String,
+    },
+    General {
+        description: String,
+    },
+}
+
+/// A cached search session containing the results of an executed search or position lookup
 #[derive(Debug, Clone)]
 pub struct SearchSession {
     pub search_id: String,
     pub db_key: String,
+    pub owner: SessionOwner,
+    pub query: SessionQuery,
     pub query_str: String,
     pub total_searched: usize,
     pub matches: Vec<ScidMatchResult>,
     pub sorted_cache: HashMap<(Option<String>, bool), Vec<ScidMatchResult>>,
     pub created_at: Instant,
+    pub last_accessed: Instant,
     pub duration_ms: u64,
 }
 
@@ -432,16 +481,37 @@ impl SearchSession {
     }
 }
 
-/// In-memory manager for search sessions and query caching
-#[derive(Debug, Default)]
+/// In-memory manager for search sessions with isolated main table filter and LRU-capped reference sessions
+#[derive(Debug)]
 pub struct SearchSessionManager {
-    sessions: HashMap<String, SearchSession>,
+    pub main_session: Option<SearchSession>,
+    pub reference_sessions: HashMap<String, SearchSession>,
+    pub reference_lru: VecDeque<String>,
+    pub max_reference_sessions: usize,
     query_to_id: HashMap<(String, String), String>, // (db_key, normalized_query) -> search_id
 }
 
+impl Default for SearchSessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SearchSessionManager {
+    pub const DEFAULT_MAX_REFERENCE_SESSIONS: usize = 32;
+
     pub fn new() -> Self {
-        Self::default()
+        Self::with_capacity(Self::DEFAULT_MAX_REFERENCE_SESSIONS)
+    }
+
+    pub fn with_capacity(max_reference_sessions: usize) -> Self {
+        Self {
+            main_session: None,
+            reference_sessions: HashMap::new(),
+            reference_lru: VecDeque::new(),
+            max_reference_sessions: max_reference_sessions.max(1),
+            query_to_id: HashMap::new(),
+        }
     }
 
     /// Generates a unique database key based on file path and game count
@@ -450,16 +520,16 @@ impl SearchSessionManager {
     }
 
     /// Looks up an existing cached search session for identical query on identical database state
-    pub fn find_cached(&self, db_key: &str, query_str: &str) -> Option<&SearchSession> {
+    pub fn find_cached(&mut self, db_key: &str, query_str: &str) -> Option<&SearchSession> {
         let key = (db_key.to_string(), query_str.trim().to_string());
-        if let Some(id) = self.query_to_id.get(&key) {
-            self.sessions.get(id)
+        if let Some(id) = self.query_to_id.get(&key).cloned() {
+            self.get_session_mut(&id).map(|s| &*s)
         } else {
             None
         }
     }
 
-    /// Stores a new search session and caches it by (db_key, query_str)
+    /// Stores a new search session defaulting to MainTable ownership
     pub fn create_session(
         &mut self,
         db_key: &str,
@@ -468,40 +538,172 @@ impl SearchSessionManager {
         matches: Vec<ScidMatchResult>,
         duration_ms: u64,
     ) -> String {
-        let count = NEXT_SESSION_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let search_id = format!("search_{}", count);
+        self.create_session_with_metadata(
+            db_key,
+            query_str,
+            total_searched,
+            matches,
+            duration_ms,
+            SessionOwner::Main,
+            SessionQuery::General {
+                description: query_str.to_string(),
+            },
+        )
+    }
 
+    /// Stores a new search session with full metadata (owner, structured query) and enforces LRU rules
+    pub fn create_session_with_metadata(
+        &mut self,
+        db_key: &str,
+        query_str: &str,
+        total_searched: usize,
+        matches: Vec<ScidMatchResult>,
+        duration_ms: u64,
+        owner: SessionOwner,
+        query: SessionQuery,
+    ) -> String {
+        let count = NEXT_SESSION_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let prefix = match owner {
+            SessionOwner::Main => "main",
+            SessionOwner::Reference => "ref",
+        };
+        let search_id = format!("{}_{}", prefix, count);
+
+        let now = Instant::now();
         let session = SearchSession {
             search_id: search_id.clone(),
             db_key: db_key.to_string(),
+            owner,
+            query,
             query_str: query_str.trim().to_string(),
             total_searched,
             matches,
             sorted_cache: HashMap::new(),
-            created_at: Instant::now(),
+            created_at: now,
+            last_accessed: now,
             duration_ms,
         };
 
         let cache_key = (db_key.to_string(), query_str.trim().to_string());
         self.query_to_id.insert(cache_key, search_id.clone());
-        self.sessions.insert(search_id.clone(), session);
+
+        match owner {
+            SessionOwner::Main => {
+                // If replacing main session, remove old query mapping if different
+                if let Some(old) = self.main_session.take() {
+                    let old_key = (old.db_key, old.query_str);
+                    if old_key != (db_key.to_string(), query_str.trim().to_string()) {
+                        self.query_to_id.remove(&old_key);
+                    }
+                }
+                self.main_session = Some(session);
+            }
+            SessionOwner::Reference => {
+                // Enforce LRU eviction for reference explorer sessions
+                while self.reference_sessions.len() >= self.max_reference_sessions {
+                    if let Some(old_id) = self.reference_lru.pop_front() {
+                        if let Some(evicted) = self.reference_sessions.remove(&old_id) {
+                            let old_key = (evicted.db_key, evicted.query_str);
+                            self.query_to_id.remove(&old_key);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                self.reference_lru.push_back(search_id.clone());
+                self.reference_sessions.insert(search_id.clone(), session);
+            }
+        }
 
         search_id
     }
 
-    /// Retrieves an existing search session by search_id
+    /// Retrieves an existing search session across all pools
     pub fn get_session(&self, search_id: &str) -> Option<&SearchSession> {
-        self.sessions.get(search_id)
+        self.get_session_by_owner(search_id, None)
     }
 
-    /// Retrieves a mutable reference to an existing search session by search_id
+    /// Retrieves an existing search session optionally constrained by expected owner
+    pub fn get_session_by_owner(
+        &self,
+        search_id: &str,
+        owner: Option<SessionOwner>,
+    ) -> Option<&SearchSession> {
+        match owner {
+            Some(SessionOwner::Main) => self
+                .main_session
+                .as_ref()
+                .filter(|s| s.search_id == search_id),
+            Some(SessionOwner::Reference) => self.reference_sessions.get(search_id),
+            None => {
+                if let Some(ref main) = self.main_session {
+                    if main.search_id == search_id {
+                        return Some(main);
+                    }
+                }
+                self.reference_sessions.get(search_id)
+            }
+        }
+    }
+
+    /// Retrieves a mutable reference to an existing search session across all pools
     pub fn get_session_mut(&mut self, search_id: &str) -> Option<&mut SearchSession> {
-        self.sessions.get_mut(search_id)
+        self.get_session_mut_by_owner(search_id, None)
     }
 
-    /// Clears all cached sessions
+    /// Retrieves a mutable reference to an existing search session optionally constrained by owner
+    pub fn get_session_mut_by_owner(
+        &mut self,
+        search_id: &str,
+        owner: Option<SessionOwner>,
+    ) -> Option<&mut SearchSession> {
+        let now = Instant::now();
+        match owner {
+            Some(SessionOwner::Main) => {
+                if let Some(ref mut main) = self.main_session {
+                    if main.search_id == search_id {
+                        main.last_accessed = now;
+                        return Some(main);
+                    }
+                }
+                None
+            }
+            Some(SessionOwner::Reference) => {
+                if self.reference_sessions.contains_key(search_id) {
+                    self.reference_lru.retain(|id| id != search_id);
+                    self.reference_lru.push_back(search_id.to_string());
+                    let s = self.reference_sessions.get_mut(search_id)?;
+                    s.last_accessed = now;
+                    Some(s)
+                } else {
+                    None
+                }
+            }
+            None => {
+                if let Some(ref mut main) = self.main_session {
+                    if main.search_id == search_id {
+                        main.last_accessed = now;
+                        return Some(main);
+                    }
+                }
+                if self.reference_sessions.contains_key(search_id) {
+                    self.reference_lru.retain(|id| id != search_id);
+                    self.reference_lru.push_back(search_id.to_string());
+                    let s = self.reference_sessions.get_mut(search_id)?;
+                    s.last_accessed = now;
+                    Some(s)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Clears all cached sessions across both pools
     pub fn clear(&mut self) {
-        self.sessions.clear();
+        self.main_session = None;
+        self.reference_sessions.clear();
+        self.reference_lru.clear();
         self.query_to_id.clear();
     }
 }
