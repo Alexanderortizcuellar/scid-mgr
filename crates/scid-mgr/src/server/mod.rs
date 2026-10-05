@@ -253,6 +253,19 @@ fn handle_command(
             handlers::position::handle_search_material(req, current_db, session_mgr, thread_pool)
         }
 
+        // Reference Explorer Unified Operations
+        "reference" | "query_reference" | "reference_explorer" | "get_reference" => {
+            handlers::reference::handle_reference(
+                req,
+                current_db,
+                current_pos_index,
+                current_tree_index,
+                session_mgr,
+                thread_pool,
+                cancel_token,
+            )
+        }
+
         // Opening Tree Operations
         "opening_tree" | "query_tree" => handlers::tree::handle_opening_tree(
             req,

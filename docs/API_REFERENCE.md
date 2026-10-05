@@ -92,6 +92,26 @@ Performs Zobrist-hashed binary position search. If `.pos.idx` is valid and loade
   - `max_ply`: `number` (optional maximum search depth)
 - **Returns**: `{ search_id: string, total_searched: number, matched_count: number, duration_ms: number, cached: boolean }`
 
+### `reference` (or `query_reference`, `reference_explorer`)
+Unified, single-round-trip orchestrator endpoint for the Reference Tab. Computes and returns the **Opening Tree**, **Continuation Lines**, **Endgame Taxonomy Breakdown**, and creates an in-memory reference search session (`search_id: "ref_X"`) with the first page of matching games for virtual pagination and sorting.
+- **Params**:
+  - `fen`: `string` (optional FEN position; defaults to starting board)
+  - `include_tree`: `boolean` (optional, default: `true`; returns opening tree move statistics)
+  - `include_continuations`: `boolean` (optional, default: `false`; returns multi-ply variation lines)
+  - `include_endgames`: `boolean` (optional, default: `false`; returns endgame popularity breakdown)
+  - `include_games`: `boolean` (optional, default: `true`; creates `ref_X` session in 3-slot LRU pool and returns initial page slice)
+  - `page`: `number` (optional, default: 0; initial page for games table)
+  - `page_size`: `number` (optional, default: 20; page size for games table)
+  - `sort_by`: `string` (optional, default: `"date"`; sort field for games table)
+  - `sort_asc`: `boolean` (optional, default: `false`; sort direction for games table)
+  - `filter`: `GameFilter` (optional inline metadata filter)
+  - `max_sample_games`: `number` (optional, default: 20; sample game IDs per tree move)
+  - `continuation_depth` / `max_depth`: `number` (optional, default: 8; plies lookahead)
+  - `max_lines`: `number` (optional, default: 10; max continuation lines)
+  - `min_games`: `number` (optional, default: 1; minimum games threshold)
+  - `min_percentage`: `number` (optional, default: 0.0; branch percentage threshold)
+- **Returns**: `{ fen, total_games, search_id, tree?: {...}, continuations?: [...], endgames?: {...}, games?: [...], page, page_size, duration_ms }`
+
 ### `opening_tree` (or `query_tree`)
 Queries the instant Opening Tree / Explorer for any board position (FEN or starting board). Supports **single-pass combined computation** of both opening tree candidate moves and multi-ply continuation lines simultaneously.
 - **Params**:

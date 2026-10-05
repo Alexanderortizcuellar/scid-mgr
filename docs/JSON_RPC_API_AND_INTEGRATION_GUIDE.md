@@ -382,6 +382,52 @@ Fetches complete standard PGN text for a single game ID.
 
 ### 2.4 Instant Positional & Graph Engines
 
+#### `reference` (alias: `query_reference`, `reference_explorer`)
+The unified, single-round-trip orchestrator endpoint for the Reference Tab. Computes and returns the **Opening Tree**, **Continuation Lines**, and **Endgame Taxonomy Breakdown**, while creating an in-memory reference session (`search_id: "ref_X"`) in the 3-slot LRU pool and returning the first page of matching games with `matching_plies`.
+- **Request**:
+  ```json
+  {
+    "id": 25,
+    "command": "reference",
+    "params": {
+      "fen": "r1bqk2r/pppp1ppp/2n5/4p3/2B1n3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
+      "include_tree": true,
+      "include_continuations": true,
+      "include_endgames": true,
+      "include_games": true,
+      "page": 0,
+      "page_size": 25,
+      "sort_by": "date",
+      "sort_asc": false
+    }
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "id": 25,
+    "status": "ok",
+    "data": {
+      "fen": "r1bqk2r/pppp1ppp/2n5/4p3/2B1n3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
+      "total_games": 3840,
+      "search_id": "ref_1",
+      "tree": {
+        "moves": [ ... ],
+        "white_pct": 38.2,
+        "draw_pct": 31.0,
+        "black_pct": 30.8
+      },
+      "continuations": [ ... ],
+      "endgames": { ... },
+      "games": [ ... ],
+      "page": 0,
+      "page_size": 25,
+      "duration_ms": 1
+    },
+    "error": null
+  }
+  ```
+
 #### `opening_tree` (alias: `query_tree`)
 Sub-millisecond opening explorer for any position (starting board or arbitrary FEN). Supports **single-pass combined computation** of both 1-ply tree moves and multi-ply continuation lines simultaneously.
 - **Tree Params**:

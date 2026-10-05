@@ -5,5 +5,6 @@ pub mod endgames;
 pub mod import_export;
 pub mod index;
 pub mod position;
+pub mod reference;
 pub mod search;
 pub mod tree;
