@@ -4,7 +4,6 @@ use crate::position_index::PositionIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use crate::tree_index::TreeIndex;
 use shakmaty::uci::UciMove;
-use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::Position;
 use std::io::{self, Write};
 use std::time::Instant;
@@ -12,7 +11,7 @@ use std::time::Instant;
 pub fn handle_opening_tree(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
-    current_pos_index: &mut Option<PositionIndex>,
+    _current_pos_index: &mut Option<PositionIndex>,
     current_tree_index: &mut Option<TreeIndex>,
     cancel_token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ResponseMessage {
@@ -402,32 +401,6 @@ pub fn handle_opening_tree(
                     }
                 }
             }
-
-            // B. Optional Fallback to PositionIndex (.pos.idx) if booster was not present
-            if rep.sample_game_ids.is_empty() {
-                if current_pos_index.is_none() {
-                    *current_pos_index = PositionIndex::load(&db_path).ok();
-                }
-                if let Some(pos_idx) = current_pos_index.as_ref() {
-                    if let Some(matching_ids) = pos_idx.get_matching_game_ids(rep.zobrist_hash) {
-                        let mut filtered_ids: Vec<u32> = if let Some(ref t_ids) = target_game_ids {
-                            let t_set: std::collections::HashSet<usize> =
-                                t_ids.iter().copied().collect();
-                            matching_ids
-                                .iter()
-                                .filter(|id| t_set.contains(id))
-                                .map(|&id| id as u32)
-                                .collect()
-                        } else {
-                            matching_ids.iter().map(|&id| id as u32).collect()
-                        };
-                        if let Some(limit) = max_sample_ids {
-                            filtered_ids.truncate(limit);
-                        }
-                        rep.sample_game_ids = filtered_ids;
-                    }
-                }
-            }
         }
 
         if let Some(limit) = max_sample_ids {
@@ -446,22 +419,6 @@ pub fn handle_opening_tree(
                             if let Ok(shak_move) = uci_move.to_move(pos) {
                                 let mut child_pos = pos.clone();
                                 child_pos.play_unchecked(&shak_move);
-                                let child_hash: Zobrist64 =
-                                    child_pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-                                if let Some(pos_idx) = current_pos_index.as_ref() {
-                                    if let Some(child_gids) =
-                                        pos_idx.get_matching_game_ids(child_hash.0)
-                                    {
-                                        let mut gids: Vec<u32> =
-                                            child_gids.into_iter().map(|id| id as u32).collect();
-                                        if let Some(limit) = max_sample_ids {
-                                            gids.truncate(limit.min(5));
-                                        } else {
-                                            gids.truncate(5);
-                                        }
-                                        m.sample_game_ids = gids;
-                                    }
-                                }
                             }
                         }
                     }

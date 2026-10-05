@@ -9,7 +9,7 @@ use std::time::Instant;
 pub fn handle_search_position(
     req: &RequestMessage,
     current_db: &Option<DatabaseBackend>,
-    current_pos_index: &mut Option<PositionIndex>,
+    _current_pos_index: &mut Option<PositionIndex>,
     session_mgr: &mut SearchSessionManager,
     thread_pool: &rayon::ThreadPool,
 ) -> ResponseMessage {
@@ -59,13 +59,6 @@ pub fn handle_search_position(
                 .and_then(|p| p.get("match_mode").or_else(|| p.get("mode")))
         })
         .and_then(|v| v.as_str());
-
-    let is_exact = mode_param
-        .map(|m| {
-            let m = m.to_lowercase();
-            m == "exact" || m == "auto" || m.is_empty()
-        })
-        .unwrap_or(true);
 
     let max_ply = req
         .params
@@ -175,52 +168,6 @@ pub fn handle_search_position(
                             "matched_count": matched_count,
                             "duration_ms": duration_ms,
                             "engine": "search_booster",
-                            "cached": false,
-                        })),
-                        error: None,
-                    };
-                }
-            }
-        }
-    }
-
-    // ⚡ 2. Instant Sub-Millisecond candidate lookup if PositionIndex is active
-    if is_exact && turn_param.is_none() {
-        if current_pos_index.is_none() {
-            *current_pos_index = PositionIndex::load(&db_path).ok();
-        }
-
-        if let Some(pos_idx) = current_pos_index.as_ref() {
-            if let Some((_pos, zobrist_hash)) = crate::position_index::parse_target_position(fen) {
-                if let Some(game_ids) = pos_idx.get_all_position_games(zobrist_hash) {
-                    let matches: Vec<ScidMatchResult> = game_ids
-                        .into_iter()
-                        .map(|gid| ScidMatchResult {
-                            game_id: gid,
-                            match_details: QueryMatchResult {
-                                is_match: true,
-                                matching_plies: vec![0],
-                                match_count: 1,
-                            },
-                        })
-                        .collect();
-                    let duration_ms = start_time.elapsed().as_millis() as u64;
-                    let matched_count = matches.len();
-                    let search_id = session_mgr.create_session(
-                        &db_key,
-                        &query_key,
-                        total_games,
-                        matches,
-                        duration_ms,
-                    );
-                    return ResponseMessage {
-                        id,
-                        status: "ok".to_string(),
-                        data: Some(serde_json::json!({
-                            "search_id": search_id,
-                            "total_searched": total_games,
-                            "matched_count": matched_count,
-                            "duration_ms": duration_ms,
                             "cached": false,
                         })),
                         error: None,

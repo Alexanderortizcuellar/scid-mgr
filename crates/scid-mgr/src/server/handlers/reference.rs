@@ -13,7 +13,6 @@ use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use crate::tree_index::{OpeningTreeReport, TreeIndex};
 use serde_json::json;
 use shakmaty::fen::Fen;
-use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{CastlingMode, Chess};
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -269,13 +268,7 @@ pub fn handle_reference(
     let search_id = if let Some(cached) = session_mgr.find_cached(&db_key, &query_key) {
         cached.search_id.clone()
     } else {
-        let pos_matches = evaluate_position_matches(
-            fen_str,
-            db,
-            &db_path,
-            current_pos_index,
-            filter_opt.as_ref(),
-        );
+        let pos_matches = evaluate_position_matches(fen_str, db, &db_path, filter_opt.as_ref());
 
         let duration = start_time.elapsed().as_millis() as u64;
         let session_query = match filter_opt.clone() {
@@ -439,41 +432,33 @@ pub fn handle_reference(
     }
 }
 
-/// Evaluates matching games for a position, utilizing .pos.idx or .boost.idx
+/// Evaluates matching games for a position, utilizing .boost.idx or direct database scan
 fn evaluate_position_matches(
     fen_str: &str,
     db: &DatabaseBackend,
     db_path: &std::path::Path,
-    current_pos_index: &mut Option<PositionIndex>,
     filter_opt: Option<&GameFilter>,
 ) -> Vec<ScidMatchResult> {
     let mut matching_ids = Vec::new();
 
-    let fen_parsed: Result<Fen, _> = fen_str.parse();
-    if let Ok(fen) = fen_parsed {
-        if let Ok(pos) = fen.into_position::<Chess>(CastlingMode::Chess960) {
-            let hash_val: Zobrist64 = pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-
-            // Fast .pos.idx index candidate lookup
-            if current_pos_index.is_none() {
-                *current_pos_index = PositionIndex::load(db_path).ok();
-            }
-            if let Some(ref pos_idx) = current_pos_index {
-                if let Some(postings) = pos_idx.get_all_position_games(hash_val.0) {
-                    matching_ids = postings;
-                }
+    let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+    if booster_path.exists() {
+        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+            if let Ok(boost_res) = evaluator.search_position(fen_str, None) {
+                matching_ids = boost_res.into_iter().map(|m| m.game_id).collect();
             }
         }
-    }
-
-    // If pos index was missing, check .boost.idx
-    if matching_ids.is_empty() {
-        let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
-        if booster_path.exists() {
-            if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
-                let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-                if let Ok(boost_res) = evaluator.search_position(fen_str, None) {
-                    matching_ids = boost_res.into_iter().map(|m| m.game_id).collect();
+    } else {
+        match db {
+            DatabaseBackend::Scid(s) => {
+                if let Ok(res) = s.search_position(fen_str, None, None, None) {
+                    matching_ids = res.matches.into_iter().map(|m| m.game_id).collect();
+                }
+            }
+            DatabaseBackend::Pgn(p) => {
+                if let Ok(res) = p.search_position(fen_str, None, None, None, |_, _, _| {}) {
+                    matching_ids = res.matches.into_iter().map(|m| m.game_id).collect();
                 }
             }
         }

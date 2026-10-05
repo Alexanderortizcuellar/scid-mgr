@@ -11,9 +11,6 @@ use crate::endgame_index::{
 use crate::position_index::PositionIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use serde_json::json;
-use shakmaty::fen::Fen;
-use shakmaty::zobrist::ZobristHash;
-use shakmaty::{CastlingMode, Chess};
 
 pub fn handle_endgames(
     req: &RequestMessage,
@@ -154,31 +151,29 @@ pub fn handle_endgames(
     // 2. Position Filter Candidate Resolution
     let mut position_game_ids: Option<HashSet<usize>> = None;
     if let Some(fen_str) = fen_opt {
-        let fen_parsed: Result<Fen, _> = fen_str.parse();
-        match fen_parsed {
-            Ok(fen) => {
-                if let Ok(pos) = fen.into_position::<Chess>(CastlingMode::Chess960) {
-                    if current_pos_index.is_none() {
-                        *current_pos_index = PositionIndex::load(db_path).ok();
-                    }
-                    if let Some(ref pos_idx) = current_pos_index {
-                        let hash_val: shakmaty::zobrist::Zobrist64 =
-                            pos.zobrist_hash(shakmaty::EnPassantMode::Legal);
-                        if let Some(postings) = pos_idx.get_all_position_games(hash_val.0) {
-                            position_game_ids = Some(postings.into_iter().collect());
-                        } else {
-                            position_game_ids = Some(HashSet::new());
-                        }
-                    }
+        let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+        if booster_path.exists() {
+            if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+                if let Ok(matches) = evaluator.search_position(fen_str, None) {
+                    position_game_ids = Some(matches.into_iter().map(|m| m.game_id).collect());
                 }
             }
-            Err(e) => {
-                return ResponseMessage {
-                    id,
-                    status: "error".to_string(),
-                    data: None,
-                    error: Some(format!("Invalid FEN '{}': {}", fen_str, e)),
-                };
+        }
+        if position_game_ids.is_none() {
+            match db {
+                DatabaseBackend::Scid(s) => {
+                    if let Ok(res) = s.search_position(fen_str, None, None, None) {
+                        position_game_ids =
+                            Some(res.matches.into_iter().map(|m| m.game_id).collect());
+                    }
+                }
+                DatabaseBackend::Pgn(p) => {
+                    if let Ok(res) = p.search_position(fen_str, None, None, None, |_, _, _| {}) {
+                        position_game_ids =
+                            Some(res.matches.into_iter().map(|m| m.game_id).collect());
+                    }
+                }
             }
         }
     }
