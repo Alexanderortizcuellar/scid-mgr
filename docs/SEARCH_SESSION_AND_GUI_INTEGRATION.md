@@ -56,13 +56,41 @@ In the Rust engine (`src/search/scid_adapter.rs`), each matched game record stor
 
 ### `SearchSession`
 Cached in the server (`src/server/search_session.rs`):
-* **`search_id`** (`String`): Identifier token returned to the client.
+* **`search_id`** (`String`): Identifier token returned to the client (`main_1`, `ref_2`, etc.).
+* **`owner`** (`SessionOwner`): Distinguishes the consumer context:
+  * **`SessionOwner::Main` (`"main"`)**: Primary database filter / CQL search applied to the main database grid view. Permanent and never evicted by explorer navigation.
+  * **`SessionOwner::Reference` (`"reference"`)**: Opening tree reference explorer session. Stored in a bounded LRU pool (default capacity: 3).
+* **`query`** (`SessionQuery`): Encapsulates query identity and metadata (`PurePosition`, `FilteredPosition`, `HeaderSearch`, `CqlSearch`, `General`).
 * **`matches`** (`Vec<ScidMatchResult>`): Complete vector of matching games and their plies.
 * **`sorted_cache`** (`HashMap<(Option<String>, bool), Vec<ScidMatchResult>>`): Caches sorted order per column and direction so repeated page requests or scrolling are instantaneous.
 
 ---
 
-## 3. The 2-Phase Communication Protocol
+## 3. Dual-Pool Architecture & Session Isolation
+
+To prevent rapid board navigation in the Reference Explorer / Opening Tree from evicting active database filters, `scid-mgr` uses a dual-pool session manager:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        SearchSessionManager                            │
+├───────────────────────────────────┬────────────────────────────────────┤
+│         Main Table Pool           │      Reference Explorer Pool       │
+│  (Advanced Search / CQL / Filter) │     (Opening Tree Board Moves)     │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ • `main_session: Option<Search>`  │ • `reference_sessions: HashMap`    │
+│ • **Permanent Lifetime**          │ • **Bounded LRU Cache (cap: 3)**   │
+│ • Never evicted by tree moves     │ • Automatically evicts oldest move │
+└───────────────────────────────────┴────────────────────────────────────┘
+```
+
+When requesting games via `query_games`:
+* The client can optionally pass `"owner": "main"` or `"owner": "reference"`.
+* If omitted, `scid-mgr` resolves against `main_session` first, then falls back to `reference_sessions`.
+* If an explicit owner is provided and mismatched, an explicit error is returned (e.g. `"Search session 'ref_1' not found for owner 'main'"`).
+
+---
+
+## 4. The 2-Phase Communication Protocol
 
 ### Phase 1: Initiating the Search
 
@@ -196,7 +224,7 @@ The server resolves game header metadata **only for the requested 50-game slice*
 
 ---
 
-## 4. Frontend GUI Implementation Guide
+## 5. Frontend GUI Implementation Guide
 
 ### A. Game Table Display
 1. Configure table model with `total` matching games.
@@ -220,7 +248,7 @@ When a user clicks on a game row in the GUI:
 
 ---
 
-## 5. Summary of Supported Sorting Fields in `query_games`
+## 6. Summary of Supported Sorting Fields in `query_games`
 
 | `sort_by` Value | Description |
 | :--- | :--- |
@@ -234,3 +262,94 @@ When a user clicks on a game row in the GUI:
 | `"event"` | Tournament / Event name |
 | `"site"` | Location / Site name |
 | `"id"` / `"index"` | Natural database index order |
+| `"matches"` / `"match_count"` | Number of matching plies in the game |
+| `"first_ply"` / `"ply"` | First ply number where the match occurred |
+
+---
+
+## 7. Frontend Widget Wiring & Best Practices
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Desktop GUI Application                          │
+├──────────────────────────────────────┬──────────────────────────────────────┤
+│       Main Database Games Grid       │     Reference Explorer / Tree Tab    │
+│  (e.g. QTableView / Virtual Scroll)  │      (Live Interactive Board)        │
+├──────────────────────────────────────┼──────────────────────────────────────┤
+│ 1. User sets Filter / CQL query      │ 1. User plays move on board (FEN)    │
+│ 2. `search` -> receives `main_1`     │ 2. `search_position` -> `ref_1`      │
+│ 3. `query_games(search_id: "main_1", │ 3. `query_games(search_id: "ref_1",  │
+│                 owner: "main")`      │                 owner: "reference")` │
+│ 4. Retained permanently while active │ 4. Keeps last 3 moves in LRU pool    │
+└──────────────────────────────────────┴──────────────────────────────────────┘
+```
+
+### Key Principles for GUI Developers & AI Agents
+
+1. **Explicit Owner Parameterization**:
+   - When querying games for the main database table, pass `"owner": "main"`.
+   - When querying games for the live opening tree or board reference explorer, pass `"owner": "reference"`.
+   - This ensures the server validates that the session belongs to the expected view, providing clear error diagnosis if a stale or mismatched ID is used.
+
+2. **Main Table Persistence**:
+   - The main database search is held in **1 dedicated slot**. It is never pushed into an LRU queue and will **never** be evicted regardless of how many hundreds of moves the user clicks through in the Opening Tree or Reference Explorer.
+
+3. **Reference Pool LRU Lifecycle**:
+   - The Reference Explorer LRU pool holds the **3 most recent board positions**.
+   - Navigating forward and backward across the last 3 positions reuses cached results with 0 ms latency.
+   - If an older position is evicted and requested, the server responds with `{ "status": "error", "error": "Search session 'ref_X' not found in reference explorer" }`. The frontend simply sends a fresh `search_position` request.
+
+### Example Integration Blueprint (Python / PyQt)
+
+```python
+class ChessGuiController:
+    def __init__(self, rpc_client):
+        self.rpc = rpc_client
+        self.main_search_id = None
+        self.reference_search_id = None
+
+    def apply_main_database_filter(self, cql_query: str):
+        """Applies a global filter to the main database grid view."""
+        resp = self.rpc.send_command("search", {"query": cql_query})
+        if resp["status"] == "ok":
+            self.main_search_id = resp["data"]["search_id"]
+            self.load_main_table_page(page=0)
+
+    def load_main_table_page(self, page: int, page_size: int = 50, sort_by: str = "date"):
+        """Loads a paginated slice for the main database table."""
+        resp = self.rpc.send_command("query_games", {
+            "search_id": self.main_search_id,
+            "owner": "main",
+            "page": page,
+            "page_size": page_size,
+            "sort_by": sort_by,
+            "sort_asc": False
+        })
+        if resp["status"] == "ok":
+            self.main_grid.update_rows(resp["data"]["games"], total=resp["data"]["total"])
+
+    def on_board_move_changed(self, fen: str):
+        """Triggered when the user navigates moves in the Reference Explorer."""
+        resp = self.rpc.send_command("search_position", {
+            "fen": fen,
+            "match_mode": "exact"
+        })
+        if resp["status"] == "ok":
+            self.reference_search_id = resp["data"]["search_id"]
+            self.load_reference_games(page=0)
+
+    def load_reference_games(self, page: int):
+        """Loads games for the current Reference Explorer board position."""
+        resp = self.rpc.send_command("query_games", {
+            "search_id": self.reference_search_id,
+            "owner": "reference",
+            "page": page,
+            "page_size": 20
+        })
+        if resp["status"] == "ok":
+            self.reference_list.update_rows(resp["data"]["games"])
+        elif "not found" in resp.get("error", ""):
+            # Session was evicted from LRU; re-query position
+            self.on_board_move_changed(self.current_board_fen)
+```
+

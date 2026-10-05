@@ -319,14 +319,15 @@ Analyzes query AST, expands board symmetry variations, and identifies header-onl
 ### 2.3 Querying Games & Virtual Pagination
 
 #### `query_games` (alias: `get_games`)
-Retrieves paginated game headers and matching ply indices.
+Retrieves paginated game headers and matching ply indices. Supports dual-pool session resolution (`owner: "main"` vs `"reference"`).
 - **Request**:
   ```json
   {
     "id": 20,
     "command": "query_games",
     "params": {
-      "search_id": "search_1",
+      "search_id": "main_1",
+      "owner": "main",
       "page": 0,
       "page_size": 25,
       "sort_by": "white_elo",
@@ -334,6 +335,12 @@ Retrieves paginated game headers and matching ply indices.
     }
   }
   ```
+
+> [!NOTE]
+> **Session Ownership & Dual-Pool Isolation**:
+> - `owner: "main"` / `"main_table"` targets the primary database filter session (e.g. CQL search or Advanced Search). This session has a permanent lifetime and is never evicted by board navigation in the Reference Explorer.
+> - `owner: "reference"` / `"reference_explorer"` targets the Reference Explorer LRU pool (default capacity: 3).
+> - When `owner` is omitted, the server checks the main session first, then falls back to the reference pool. If an explicit owner is specified and mismatched, an explicit error is returned (e.g., `"Search session 'ref_1' not found for owner 'main'"`).
 
 - **Response**:
   ```json

@@ -59,6 +59,7 @@ Opens a database on disk (`.si5`, `.si4`, or `.pgn`).
 Queries, filters, sorts, and paginates games. When `search_id` is supplied, paginates through the cached search result set and resolves game metadata and `matching_plies` on-demand for the requested page slice (see [Search Session & GUI Integration Guide](file:///C:/Users/ASUS/programming/qt_programs/chess/scid-mgr/docs/SEARCH_SESSION_AND_GUI_INTEGRATION.md) for full workflow and UI examples).
 - **Params**:
   - `search_id`: `string` (optional; paginates through results of a previous `search` session)
+  - `owner` / `target`: `string` (optional; `"main"` / `"main_table"` or `"reference"` / `"reference_explorer"`. Constrains session lookup to the corresponding session pool; if omitted, checks the primary main session first followed by reference LRU pool)
   - `page`: `number` (0-indexed, default: 0)
   - `page_size`: `number` (default: 100)
   - `player`: `string` (matches White or Black)
@@ -69,11 +70,12 @@ Queries, filters, sorts, and paginates games. When `search_id` is supplied, pagi
   - `date`: `string` (e.g. `"1999"`)
   - `event`: `string`
   - `site`: `string`
-  - `sort_by`: `string` (`"date"`, `"white"`, `"black"`, `"white_elo"`, `"black_elo"`, `"eco"`, `"result"`, `"event"`, `"site"`, `"id"`)
+  - `sort_by`: `string` (`"date"`, `"white"`, `"black"`, `"white_elo"`, `"black_elo"`, `"eco"`, `"result"`, `"event"`, `"site"`, `"id"`, `"matches"`, `"match_count"`, `"first_ply"`, `"ply"`)
   - `sort_asc`: `boolean` (default: `true`)
   - `fen`: `string` (exact or partial board placement)
   - `material`: `object` (`MaterialFilter`)
 - **Returns**: `{ page, page_size, total, search_id, games: [{ id, white, black, date, result, event, site, white_elo, black_elo, eco, round, matching_plies, match_count }, ...] }`
+- **Error Handling**: If `search_id` is expired or does not belong to the requested `owner`, returns an explicit error (e.g., `"Search session 'ref_1' not found for owner 'main'"` or `"Search session '...' not found or expired"`).
 
 ### `get_pgn`
 Retrieves the standard PGN text for a specific game.

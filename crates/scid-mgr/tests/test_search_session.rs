@@ -473,3 +473,514 @@ fn test_search_session_manager_lru_and_ownership() {
         .get_session_by_owner(&ref4, Some(SessionOwner::Main))
         .is_none());
 }
+
+#[test]
+fn test_search_session_lru_touch_mru_promotion() {
+    use scid_mgr::server::search_session::{
+        PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
+    };
+
+    let mut mgr = SearchSessionManager::with_capacity(3);
+
+    let ref1 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.e4",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen_1".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+    let ref2 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.d4",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen_2".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+    let ref3 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.c4",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen_3".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    // LRU state is [ref1, ref2, ref3]
+    // Accessing ref1 moves it to MRU -> LRU becomes [ref2, ref3, ref1]
+    let accessed = mgr.get_session_mut(&ref1);
+    assert!(accessed.is_some());
+
+    // Creating ref4 should now evict ref2 (the oldest unaccessed), NOT ref1!
+    let ref4 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.Nf3",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen_4".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    assert_eq!(mgr.reference_sessions.len(), 3);
+    assert!(
+        mgr.get_session(&ref1).is_some(),
+        "ref1 should have been kept because it was promoted to MRU"
+    );
+    assert!(
+        mgr.get_session(&ref2).is_none(),
+        "ref2 should have been evicted as the oldest LRU session"
+    );
+    assert!(mgr.get_session(&ref3).is_some());
+    assert!(mgr.get_session(&ref4).is_some());
+
+    // Access ref3 via find_cached -> moves ref3 to MRU: LRU becomes [ref1, ref4, ref3]
+    let found = mgr.find_cached("db1", "pos:1.c4");
+    assert!(found.is_some());
+
+    // Creating ref5 should now evict ref1 (oldest in LRU)
+    let ref5 = mgr.create_session_with_metadata(
+        "db1",
+        "pos:1.g3",
+        1000,
+        vec![],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen_5".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    assert_eq!(mgr.reference_sessions.len(), 3);
+    assert!(
+        mgr.get_session(&ref1).is_none(),
+        "ref1 should now be evicted"
+    );
+    assert!(
+        mgr.get_session(&ref3).is_some(),
+        "ref3 was touched by find_cached so kept"
+    );
+    assert!(mgr.get_session(&ref4).is_some());
+    assert!(mgr.get_session(&ref5).is_some());
+}
+
+#[test]
+fn test_search_session_main_session_retention_under_flood() {
+    use scid_mgr::search::evaluator::QueryMatchResult;
+    use scid_mgr::search::ScidMatchResult;
+    use scid_mgr::server::search_session::{
+        PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
+    };
+
+    let mut mgr = SearchSessionManager::with_capacity(5);
+
+    // Create persistent main session
+    let main_id = mgr.create_session_with_metadata(
+        "db_main",
+        "player:Kasparov",
+        50000,
+        vec![ScidMatchResult {
+            game_id: 42,
+            match_details: QueryMatchResult {
+                is_match: true,
+                matching_plies: vec![10],
+                match_count: 1,
+            },
+        }],
+        15,
+        SessionOwner::Main,
+        SessionQuery::HeaderSearch {
+            filter: Box::new(scid_mgr::db::GameFilter {
+                player: Some("Kasparov".to_string()),
+                ..Default::default()
+            }),
+        },
+    );
+
+    // Generate 100 reference sessions simulating rapid board moves in Reference Explorer
+    for i in 0..100 {
+        let fen = format!("fen_pos_{}", i);
+        let query = format!("pos:{}", i);
+        mgr.create_session_with_metadata(
+            "db_main",
+            &query,
+            50000,
+            vec![],
+            1,
+            SessionOwner::Reference,
+            SessionQuery::PurePosition {
+                fen,
+                match_mode: PositionMatchMode::Exact,
+                max_ply: None,
+            },
+        );
+    }
+
+    // Capacity is strictly enforced at 5
+    assert_eq!(mgr.reference_sessions.len(), 5);
+    assert_eq!(mgr.reference_lru.len(), 5);
+
+    // Main session is completely preserved and unaffected!
+    let main_session = mgr
+        .get_session(&main_id)
+        .expect("Main session must survive reference flood");
+    assert_eq!(main_session.owner, SessionOwner::Main);
+    assert_eq!(main_session.matches.len(), 1);
+    assert_eq!(main_session.matches[0].game_id, 42);
+}
+
+#[test]
+fn test_search_session_main_session_replacement_and_query_cache() {
+    use scid_mgr::search::evaluator::QueryMatchResult;
+    use scid_mgr::search::ScidMatchResult;
+    use scid_mgr::server::search_session::{SearchSessionManager, SessionOwner, SessionQuery};
+
+    let mut mgr = SearchSessionManager::new();
+
+    let id1 = mgr.create_session_with_metadata(
+        "db1",
+        "eco:C50",
+        1000,
+        vec![ScidMatchResult {
+            game_id: 1,
+            match_details: QueryMatchResult::default(),
+        }],
+        10,
+        SessionOwner::Main,
+        SessionQuery::General {
+            description: "eco:C50".to_string(),
+        },
+    );
+
+    assert_eq!(
+        mgr.find_cached("db1", "eco:C50")
+            .map(|s| s.search_id.as_str()),
+        Some(id1.as_str())
+    );
+
+    // Replacing main session with a new query
+    let id2 = mgr.create_session_with_metadata(
+        "db1",
+        "eco:B90",
+        1000,
+        vec![ScidMatchResult {
+            game_id: 2,
+            match_details: QueryMatchResult::default(),
+        }],
+        12,
+        SessionOwner::Main,
+        SessionQuery::General {
+            description: "eco:B90".to_string(),
+        },
+    );
+
+    assert_ne!(id1, id2);
+    // Old query is no longer cached
+    assert!(mgr.find_cached("db1", "eco:C50").is_none());
+    // New query is cached
+    assert_eq!(
+        mgr.find_cached("db1", "eco:B90")
+            .map(|s| s.search_id.as_str()),
+        Some(id2.as_str())
+    );
+    assert_eq!(mgr.main_session.as_ref().unwrap().search_id, id2);
+}
+
+#[test]
+fn test_handle_query_games_ownership_and_error_handling() {
+    use scid_mgr::search::evaluator::QueryMatchResult;
+    use scid_mgr::search::ScidMatchResult;
+    use scid_mgr::server::search_session::{
+        PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
+    };
+
+    let thread_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    let scid_path = Path::new("tests/fixtures/sample.si5");
+    if !scid_path.exists() {
+        return;
+    }
+    let scid_db = ScidDatabaseWrapper::open(scid_path).unwrap();
+    let db_backend = Some(DatabaseBackend::Scid(scid_db));
+    let mut mgr = SearchSessionManager::with_capacity(2);
+
+    let main_id = mgr.create_session_with_metadata(
+        "sample",
+        "main_query",
+        100,
+        vec![ScidMatchResult {
+            game_id: 0,
+            match_details: QueryMatchResult {
+                is_match: true,
+                matching_plies: vec![1, 2],
+                match_count: 2,
+            },
+        }],
+        5,
+        SessionOwner::Main,
+        SessionQuery::General {
+            description: "main".to_string(),
+        },
+    );
+
+    let ref_id1 = mgr.create_session_with_metadata(
+        "sample",
+        "ref_query_1",
+        100,
+        vec![ScidMatchResult {
+            game_id: 0,
+            match_details: QueryMatchResult {
+                is_match: true,
+                matching_plies: vec![3],
+                match_count: 1,
+            },
+        }],
+        5,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen1".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    // 1. Query main session with NO owner -> should succeed
+    let req_no_owner = RequestMessage {
+        id: Some(101),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": main_id,
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_no_owner, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "ok");
+    assert_eq!(resp.data.unwrap()["total"], 1);
+
+    // 2. Query main session with owner="main" -> should succeed
+    let req_main_owner = RequestMessage {
+        id: Some(102),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": main_id,
+            "owner": "main",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_main_owner, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "ok");
+
+    // 3. Query main session with target="main_table" -> should succeed
+    let req_target_main = RequestMessage {
+        id: Some(103),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": main_id,
+            "target": "main_table",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_target_main, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "ok");
+
+    // 4. Query main session with owner="reference" -> should fail with specific error
+    let req_mismatched_owner = RequestMessage {
+        id: Some(104),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": main_id,
+            "owner": "reference",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_mismatched_owner, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "error");
+    let err = resp.error.unwrap();
+    assert!(
+        err.contains("not found in reference explorer"),
+        "Error was: {}",
+        err
+    );
+
+    // 5. Query reference session with NO owner -> should succeed
+    let req_ref_no_owner = RequestMessage {
+        id: Some(105),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": ref_id1,
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_ref_no_owner, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "ok");
+
+    // 6. Query reference session with owner="reference" -> should succeed
+    let req_ref_owner = RequestMessage {
+        id: Some(106),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": ref_id1,
+            "owner": "reference",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_ref_owner, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "ok");
+
+    // 7. Query reference session with owner="main" -> should fail with specific error
+    let req_ref_as_main = RequestMessage {
+        id: Some(107),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": ref_id1,
+            "owner": "main",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_ref_as_main, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "error");
+    let err = resp.error.unwrap();
+    assert!(
+        err.contains("not found for owner 'main'"),
+        "Error was: {}",
+        err
+    );
+
+    // 8. Evict ref_id1 by pushing 2 more reference sessions
+    let _ref_id2 = mgr.create_session_with_metadata(
+        "sample",
+        "ref_query_2",
+        100,
+        vec![],
+        1,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen2".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+    let _ref_id3 = mgr.create_session_with_metadata(
+        "sample",
+        "ref_query_3",
+        100,
+        vec![],
+        1,
+        SessionOwner::Reference,
+        SessionQuery::PurePosition {
+            fen: "fen3".to_string(),
+            match_mode: PositionMatchMode::Exact,
+            max_ply: None,
+        },
+    );
+
+    // Querying evicted ref_id1 with owner="reference" -> fails
+    let req_evicted = RequestMessage {
+        id: Some(108),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": ref_id1,
+            "owner": "reference",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_evicted, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "error");
+    let err = resp.error.unwrap();
+    assert!(
+        err.contains("not found in reference explorer"),
+        "Error was: {}",
+        err
+    );
+
+    // Querying completely invalid ID without owner -> fails with general expired message
+    let req_non_existent = RequestMessage {
+        id: Some(109),
+        command: "query_games".to_string(),
+        params: serde_json::json!({
+            "search_id": "random_xyz_999",
+            "page": 0,
+            "page_size": 10
+        }),
+    };
+    let resp = handle_query_games(&req_non_existent, &db_backend, &mut mgr, &thread_pool);
+    assert_eq!(resp.status, "error");
+    let err = resp.error.unwrap();
+    assert!(err.contains("not found or expired"), "Error was: {}", err);
+}
+
+#[test]
+fn test_session_query_and_metadata_serialization() {
+    use scid_mgr::server::search_session::{PositionMatchMode, SessionOwner, SessionQuery};
+
+    // SessionOwner serialization
+    let owner_main = SessionOwner::Main;
+    let json_main = serde_json::to_string(&owner_main).unwrap();
+    assert_eq!(json_main, "\"main\"");
+    let de_main: SessionOwner = serde_json::from_str(&json_main).unwrap();
+    assert_eq!(de_main, SessionOwner::Main);
+
+    let owner_ref = SessionOwner::Reference;
+    let json_ref = serde_json::to_string(&owner_ref).unwrap();
+    assert_eq!(json_ref, "\"reference\"");
+    let de_ref: SessionOwner = serde_json::from_str(&json_ref).unwrap();
+    assert_eq!(de_ref, SessionOwner::Reference);
+
+    // PositionMatchMode serialization
+    let mode = PositionMatchMode::Placement;
+    let json_mode = serde_json::to_string(&mode).unwrap();
+    assert_eq!(json_mode, "\"placement\"");
+    let de_mode: PositionMatchMode = serde_json::from_str(&json_mode).unwrap();
+    assert_eq!(de_mode, PositionMatchMode::Placement);
+
+    // SessionQuery variants serialization
+    let q_pure = SessionQuery::PurePosition {
+        fen: "8/8/8/8/8/8/8/8 w - - 0 1".to_string(),
+        match_mode: PositionMatchMode::Exact,
+        max_ply: Some(20),
+    };
+    let json_pure = serde_json::to_string(&q_pure).unwrap();
+    assert!(json_pure.contains("\"type\":\"pure_position\""));
+    let de_pure: SessionQuery = serde_json::from_str(&json_pure).unwrap();
+    assert_eq!(de_pure, q_pure);
+
+    let q_cql = SessionQuery::CqlSearch {
+        query: "cql(input) { [Q] == 2 }".to_string(),
+    };
+    let json_cql = serde_json::to_string(&q_cql).unwrap();
+    assert!(json_cql.contains("\"type\":\"cql_search\""));
+    let de_cql: SessionQuery = serde_json::from_str(&json_cql).unwrap();
+    assert_eq!(de_cql, q_cql);
+}
