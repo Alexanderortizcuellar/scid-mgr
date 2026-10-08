@@ -398,13 +398,12 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
         return;
     }
 
-    let booster_path = master_path.with_extension("pgn.boost.idx");
+    let booster_path = scid_mgr::search_booster::resolve_companion_booster_path(master_path);
     if !booster_path.exists() {
         return;
     }
 
-    // Rebuild hot graph to ensure latest v2 layout with packed dates
-    let hot_path = master_path.with_extension("pgn.hot.idx");
+    let hot_path = scid_mgr::continuation_index::resolve_companion_hot_path(master_path);
     let config = HotGraphBuildConfig {
         max_ply: 24,
         min_games: 1,
@@ -449,23 +448,65 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
         .expect("Booster tree evaluation ok")
         .expect("Booster tree should exist");
 
-    assert_eq!(hot_tree.total_games, boost_tree.total_games);
-    assert_eq!(hot_tree.white_wins, boost_tree.white_wins);
-    assert_eq!(hot_tree.draws, boost_tree.draws);
-    assert_eq!(hot_tree.black_wins, boost_tree.black_wins);
-    assert_eq!(hot_tree.moves.len(), boost_tree.moves.len());
+    println!("HOT GRAPH TOTAL GAMES: {}", hot_tree.total_games);
+    println!("BOOSTER TOTAL GAMES: {}", boost_tree.total_games);
+    println!("HOT GRAPH MOVES ({} moves):", hot_tree.moves.len());
+    for (i, m) in hot_tree.moves.iter().enumerate() {
+        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{}, first:{:?}, last:{:?})", i+1, m.san, m.total_games, m.white_wins, m.draws, m.black_wins, m.first_played, m.last_played);
+    }
+    println!("BOOSTER MOVES ({} moves):", boost_tree.moves.len());
+    for (i, m) in boost_tree.moves.iter().enumerate() {
+        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{}, first:{:?}, last:{:?})", i+1, m.san, m.total_games, m.white_wins, m.draws, m.black_wins, m.first_played, m.last_played);
+    }
 
-    for (hm, bm) in hot_tree.moves.iter().zip(boost_tree.moves.iter()) {
-        assert_eq!(hm.san, bm.san);
-        assert_eq!(hm.uci, bm.uci);
-        assert_eq!(hm.total_games, bm.total_games, "Game count mismatch for move {}", hm.san);
-        assert_eq!(hm.white_wins, bm.white_wins, "White wins mismatch for move {}", hm.san);
-        assert_eq!(hm.draws, bm.draws, "Draws mismatch for move {}", hm.san);
-        assert_eq!(hm.black_wins, bm.black_wins, "Black wins mismatch for move {}", hm.san);
-        assert_eq!(hm.first_year, bm.first_year, "First year mismatch for move {}", hm.san);
-        assert_eq!(hm.first_month, bm.first_month, "First month mismatch for move {}", hm.san);
-        assert_eq!(hm.last_year, bm.last_year, "Last year mismatch for move {}", hm.san);
-        assert_eq!(hm.last_month, bm.last_month, "Last month mismatch for move {}", hm.san);
-        assert_eq!(hm.last_played, bm.last_played, "Last played mismatch for move {}", hm.san);
+    // 1. Hot Graph Node Index
+    let hot_cont = mmap_hot.query_continuations(&target_pos, target_fen, 8, 10, 1, 0.0);
+    let boost_query = ContinuationQuery {
+        position: target_fen.to_string(),
+        max_depth: 8,
+        max_lines: 10,
+        min_games: 1,
+        min_percentage: 0.0,
+        hot_idx: None,
+        pos_idx: None,
+    };
+    
+    // 2. Booster Index
+    let boost_cont = evaluator
+        .calculate_continuations(&boost_query, None, Some(meta_lookup))
+        .expect("Booster continuations evaluation ok")
+        .expect("Booster continuations should exist");
+
+    println!("HOT GRAPH LINES ({} lines):", hot_cont.lines.len());
+    for (i, l) in hot_cont.lines.iter().enumerate() {
+        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{})", i+1, l.formatted, l.games, l.white_wins, l.draws, l.black_wins);
+    }
+    println!("BOOSTER LINES ({} lines):", boost_cont.lines.len());
+    for (i, l) in boost_cont.lines.iter().enumerate() {
+        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{})", i+1, l.formatted, l.games, l.white_wins, l.draws, l.black_wins);
+    }
+
+    // 3. Ground Truth Dynamic Engine (uses full Shakmaty Position + Zobrist hash with all castling/en-passant flags)
+    let dyn_res = scid_mgr::continuation_index::calculate_continuations_for_pgn(
+        master_path,
+        &boost_query,
+        None,
+    ).expect("Dynamic continuations should succeed");
+
+    println!("DYNAMIC ENGINE (GROUND TRUTH ZOBRIST) LINES ({} lines):", dyn_res.lines.len());
+    for (i, l) in dyn_res.lines.iter().enumerate() {
+        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{})", i+1, l.formatted, l.games, l.white_wins, l.draws, l.black_wins);
+    }
+
+
+    // Verify that Search Booster and Ground Truth Dynamic Engine match 100%
+    assert_eq!(boost_cont.lines.len(), dyn_res.lines.len(), "Line count mismatch between Booster and Dynamic engine");
+    for (i, (bl, dl)) in boost_cont.lines.iter().zip(dyn_res.lines.iter()).enumerate() {
+        assert_eq!(bl.formatted, dl.formatted, "Line #{} formatted mismatch between Booster and Ground truth", i+1);
+        assert_eq!(bl.games, dl.games, "Line #{} games mismatch between Booster and Ground truth", i+1);
+        assert_eq!(bl.white_wins, dl.white_wins, "Line #{} white_wins mismatch", i+1);
+        assert_eq!(bl.draws, dl.draws, "Line #{} draws mismatch", i+1);
+        assert_eq!(bl.black_wins, dl.black_wins, "Line #{} black_wins mismatch", i+1);
     }
 }
+

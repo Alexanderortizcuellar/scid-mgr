@@ -149,24 +149,6 @@ pub fn handle_continuations(
         }
     }
 
-    let hot_path = resolve_companion_hot_path(db_path);
-
-    // 2. Fast Memory-Mapped Hot Graph path if companion index exists
-    if hot_path.exists() {
-        if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
-            let res = mmap_hot.query_continuations(
-                &target_pos,
-                fen_str,
-                max_depth,
-                max_lines,
-                min_games,
-                min_percentage,
-            );
-            print_continuation_report(&res);
-            return Ok(());
-        }
-    }
-
     // 2. Candidate acceleration via companion .pos.idx if present
     let mut candidate_ids: Option<Vec<usize>> = None;
     if let Ok(pos_idx) = PositionIndex::load(db_path) {

@@ -183,121 +183,103 @@ pub fn handle_opening_tree(
         DatabaseBackend::Pgn(p) => p.pgn_path.clone(),
     };
 
-    // 0. Try ultra-fast dynamic calculation from .boost.idx file (Search Booster)
+    // 1. Dynamic calculation from .boost.idx file (Search Booster)
     let booster_path = crate::search_booster::resolve_companion_booster_path(&db_path);
     if booster_path.exists() {
-        if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
-            let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
-            match db {
-                DatabaseBackend::Scid(s) => {
-                    let entries = s.entries();
-                    let meta_lookup =
-                        |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
-                            entries.get(gid).map(|e| {
-                                let year = {
-                                    let y = (e.date >> 9) as u16;
-                                    if y > 0 {
-                                        Some(y)
-                                    } else {
-                                        None
-                                    }
-                                };
-                                let month = {
-                                    let m = ((e.date >> 5) & 0x0F) as u8;
-                                    if (1..=12).contains(&m) {
-                                        Some(m)
-                                    } else {
-                                        None
-                                    }
-                                };
-                                crate::search_booster::BoostGameMeta::new(
-                                    e.result,
-                                    e.white_elo,
-                                    e.black_elo,
-                                    year,
-                                    month,
-                                )
-                            })
-                        };
-                    report = evaluator
-                        .calculate_opening_tree(
-                            fen,
-                            target_game_ids.as_deref(),
-                            max_sample_ids,
-                            Some(meta_lookup),
-                            continuation_config.as_ref(),
-                        )
-                        .ok()
-                        .flatten();
-                }
-                DatabaseBackend::Pgn(p) => {
-                    let entries = &p.entries;
-                    let meta_lookup =
-                        |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
-                            entries.get(gid).map(|e| {
-                                let res = match e.result {
-                                    1 => 1,
-                                    2 => 2,
-                                    3 => 3,
-                                    _ => 0,
-                                };
-                                let year = {
-                                    let y = (e.date >> 9) as u16;
-                                    if y > 0 {
-                                        Some(y)
-                                    } else {
-                                        None
-                                    }
-                                };
-                                let month = {
-                                    let m = ((e.date >> 5) & 0x0F) as u8;
-                                    if (1..=12).contains(&m) {
-                                        Some(m)
-                                    } else {
-                                        None
-                                    }
-                                };
-                                crate::search_booster::BoostGameMeta::new(
-                                    res,
-                                    e.white_elo,
-                                    e.black_elo,
-                                    year,
-                                    month,
-                                )
-                            })
-                        };
-                    report = evaluator
-                        .calculate_opening_tree(
-                            fen,
-                            target_game_ids.as_deref(),
-                            max_sample_ids,
-                            Some(meta_lookup),
-                            continuation_config.as_ref(),
-                        )
-                        .ok()
-                        .flatten();
-                }
-            }
-        }
-    }
-
-    // 1. Instant lookup from .hot.idx nodes graph (< 1 ms) if no filter is active fallback
-    if report.is_none() && target_game_ids.is_none() {
-        let hot_path = crate::continuation_index::resolve_companion_hot_path(&db_path);
-        if hot_path.exists() {
-            if let Ok(mmap_hot) = crate::continuation_index::MmapHotGraph::open(&hot_path) {
-                if let Some((target_pos, _)) = crate::tree_index::parse_target_position(fen) {
-                    if let Some(rep) =
-                        mmap_hot.query_opening_tree(&target_pos, fen, continuation_config.as_ref())
-                    {
-                        if rep.total_games > 0 {
-                            report = Some(rep);
-                        }
+            if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                let evaluator = crate::search_booster::BoostSearchEvaluator::new(&boost_idx);
+                match db {
+                    DatabaseBackend::Scid(s) => {
+                        let entries = s.entries();
+                        let meta_lookup =
+                            |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                                entries.get(gid).map(|e| {
+                                    let year = {
+                                        let y = (e.date >> 9) as u16;
+                                        if y > 0 {
+                                            Some(y)
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    let month = {
+                                        let m = ((e.date >> 5) & 0x0F) as u8;
+                                        if (1..=12).contains(&m) {
+                                            Some(m)
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    crate::search_booster::BoostGameMeta::new(
+                                        e.result,
+                                        e.white_elo,
+                                        e.black_elo,
+                                        year,
+                                        month,
+                                    )
+                                })
+                            };
+                        report = evaluator
+                            .calculate_opening_tree(
+                                fen,
+                                target_game_ids.as_deref(),
+                                max_sample_ids,
+                                Some(meta_lookup),
+                                continuation_config.as_ref(),
+                            )
+                            .ok()
+                            .flatten();
+                    }
+                    DatabaseBackend::Pgn(p) => {
+                        let entries = &p.entries;
+                        let meta_lookup =
+                            |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
+                                entries.get(gid).map(|e| {
+                                    let res = match e.result {
+                                        1 => 1,
+                                        2 => 2,
+                                        3 => 3,
+                                        _ => 0,
+                                    };
+                                    let year = {
+                                        let y = (e.date >> 9) as u16;
+                                        if y > 0 {
+                                            Some(y)
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    let month = {
+                                        let m = ((e.date >> 5) & 0x0F) as u8;
+                                        if (1..=12).contains(&m) {
+                                            Some(m)
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    crate::search_booster::BoostGameMeta::new(
+                                        res,
+                                        e.white_elo,
+                                        e.black_elo,
+                                        year,
+                                        month,
+                                    )
+                                })
+                            };
+                        report = evaluator
+                            .calculate_opening_tree(
+                                fen,
+                                target_game_ids.as_deref(),
+                                max_sample_ids,
+                                Some(meta_lookup),
+                                continuation_config.as_ref(),
+                            )
+                            .ok()
+                            .flatten();
                     }
                 }
             }
         }
-    }
 
     // 2. Try fast lookup from .tree.idx file (legacy)
     if report.is_none() {

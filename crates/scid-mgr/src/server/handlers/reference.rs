@@ -514,7 +514,7 @@ fn calculate_tree_and_continuations(
     continuation_config: Option<&ContinuationQuery>,
     _cancel_token: &Arc<AtomicBool>,
 ) -> Option<OpeningTreeReport> {
-    // 0. Ultra-fast dynamic calculation from .boost.idx (Search Booster)
+    // 1. Ultra-fast dynamic calculation from .boost.idx (Search Booster)
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
     if booster_path.exists() {
         if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
@@ -608,23 +608,7 @@ fn calculate_tree_and_continuations(
         }
     }
 
-    // 1. Instant lookup from .hot.idx (< 1 ms) if unfiltered fallback
-    if target_game_ids.is_none() {
-        let hot_path = crate::continuation_index::resolve_companion_hot_path(db_path);
-        if hot_path.exists() {
-            if let Ok(mmap_hot) = crate::continuation_index::MmapHotGraph::open(&hot_path) {
-                if let Some(rep) =
-                    mmap_hot.query_opening_tree(target_pos, fen_str, continuation_config)
-                {
-                    if rep.total_games > 0 {
-                        return Some(rep);
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Pre-calculated .tree.idx lookup if unfiltered
+    // 3. Pre-calculated .tree.idx lookup if unfiltered
     if current_tree_index.is_none() {
         *current_tree_index = TreeIndex::load(db_path).ok();
     }

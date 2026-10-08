@@ -223,6 +223,10 @@ To provide historical date ranges (`first_year`, `first_month`, `last_year`, `la
 - **Zero-allocation sorting**: Because the 12-bit year occupies the high bits, chronological comparison and `min`/`max` reductions operate directly via standard integer comparisons (`u16`).
 - **Exact 24-byte record**: `draws` is computed dynamically as `total_games.saturating_sub(white_wins + black_wins)`, preserving fixed 24-byte record alignment.
 
+> [!NOTE]
+> **Scope of `.hot.idx` (Positional DAG)**:
+> `.hot.idx` is designed for 1-ply position branch statistics (Opening Tree). Multi-ply continuation lines evaluate via the Search Booster (`.boost.idx`) to prevent transposition paths from merging at common position nodes.
+
 ---
 
 ## 6. ♟️ Endgame Taxonomy Index (`.feat.idx`)

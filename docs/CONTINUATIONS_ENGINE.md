@@ -4,14 +4,29 @@ The **Common Continuations Engine** is a high-performance sequence analyzer and 
 
 ---
 
-## ⚡ Architecture: Dual Execution Modes
+## ⚡ Architecture & Engine Evaluation
 
-The engine operates under two complementary modes:
+The engine calculates continuations using exact game cohort evaluation via the **Search Booster (`.boost.idx`)** and dynamic game replays.
 
-### 1. Precomputed Memory-Mapped Graph (`.hot.idx`)
-* **Zero-Allocation Binary Graph**: Serialized directed acyclic graph storing precomputed position nodes, outgoing move edges, and frequency statistics.
-* **Instant Lookup**: Traverses top continuation lines in sub-milliseconds without disk I/O or position re-parsing.
-* **Striped Parallel Builders**: Index builder processes massive PGN or native SCID databases across multiple worker threads, writing atomic `.tmp` files.
+### 1. Primary Engine: Search Booster (`.boost.idx`)
+* **Exact Move-Sequence Cohort Tracking**: Evaluates the true, unmerged move sequences following any target position.
+* **Transposition Invariance**: Correctly distinguishes unique move orders (e.g. `3. e5 Nd5 4. d4 cxd4 5. Nf3 Nc6 6. cxd4 d6` [510 games] vs `3. e5 Nd5 4. Nf3 Nc6 5. d4 cxd4 6. cxd4 d6` [281 games]).
+* **Full SIMD & Parallel Stream Processing**: Scans candidate game move streams in parallel with Rayon and FastReplayState.
+
+---
+
+### 2. Historical & Architectural Analysis: Positional Graph (`.hot.idx`)
+The codebase retains the `.hot.idx` binary format and builder module for position node experiments and 1-ply opening tree statistics.
+
+> [!NOTE]
+> **Why the Positional DAG Merges Transpositions in Multi-Ply Paths**:
+> A node graph stores state transitions where each node is a Zobrist board hash ($V = \text{Positions}, E = \text{Moves}$). Because nodes represent board states rather than historical move sequences, multiple move orders that arrive at the same board state merge into the same node (Markov property). 
+> When traversing multi-ply paths across the node graph, outgoing edge counts reflect the *total game volume flowing through those board states*, rather than the single-sequence cohort. For 100% exact multi-ply sequences, queries evaluate via `.boost.idx`.
+
+---
+
+### 3. Future Roadmap: Pre-Materialized Top-$K$ Continuation Index (`.cont.idx`)
+For instant ($< 0.01\text{ ms}$) lookups on massive 10M+ game databases without dynamic replay overhead, a dedicated pre-materialized index will store pre-computed Top-10 exact sequence records per position hash directly.
 
 #### Binary Graph Format (`.hot.idx`):
 

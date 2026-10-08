@@ -152,6 +152,7 @@ pub fn handle_continuations(
                                 1 => 1,
                                 2 => 2,
                                 3 => 3,
+                                4 => 0,
                                 _ => 0,
                             };
                             let year = {
@@ -187,29 +188,6 @@ pub fn handle_continuations(
             };
 
             if let Some(res) = cont_res {
-                return ResponseMessage {
-                    id,
-                    status: "ok".to_string(),
-                    data: Some(serde_json::to_value(res).unwrap_or(json!({}))),
-                    error: None,
-                };
-            }
-        }
-    }
-
-    // 2. Precalculated Continuations Graph Index (.hot.idx) fallback if unfiltered
-    let hot_path = resolve_companion_hot_path(db_path);
-    if !has_filter && hot_path.exists() {
-        if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
-            let res = mmap_hot.query_continuations(
-                &target_pos,
-                fen_str,
-                max_depth,
-                max_lines,
-                min_games,
-                min_percentage,
-            );
-            if res.games_reaching_position > 0 {
                 return ResponseMessage {
                     id,
                     status: "ok".to_string(),
