@@ -104,30 +104,7 @@ pub fn handle_continuations(
         || req.params.get("filter").is_some()
         || req.params.get("game_ids").is_some();
 
-    let hot_path = resolve_companion_hot_path(db_path);
-    if !has_filter && hot_path.exists() {
-        if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
-            let res = mmap_hot.query_continuations(
-                &target_pos,
-                fen_str,
-                max_depth,
-                max_lines,
-                min_games,
-                min_percentage,
-            );
-            // If the position was indexed in the graph (i.e. games were found), return instantly
-            if res.games_reaching_position > 0 {
-                return ResponseMessage {
-                    id,
-                    status: "ok".to_string(),
-                    data: Some(serde_json::to_value(res).unwrap_or(json!({}))),
-                    error: None,
-                };
-            }
-        }
-    }
-
-    // 2. Search Booster (.boost.idx) Dynamic Calculation Fallback
+    // 1. Search Booster (.boost.idx) Calculation (Ultra-fast exact cohort evaluation)
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
     if booster_path.exists() {
         if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
@@ -208,7 +185,31 @@ pub fn handle_continuations(
                         .flatten()
                 }
             };
+
             if let Some(res) = cont_res {
+                return ResponseMessage {
+                    id,
+                    status: "ok".to_string(),
+                    data: Some(serde_json::to_value(res).unwrap_or(json!({}))),
+                    error: None,
+                };
+            }
+        }
+    }
+
+    // 2. Precalculated Continuations Graph Index (.hot.idx) fallback if unfiltered
+    let hot_path = resolve_companion_hot_path(db_path);
+    if !has_filter && hot_path.exists() {
+        if let Ok(mmap_hot) = MmapHotGraph::open(&hot_path) {
+            let res = mmap_hot.query_continuations(
+                &target_pos,
+                fen_str,
+                max_depth,
+                max_lines,
+                min_games,
+                min_percentage,
+            );
+            if res.games_reaching_position > 0 {
                 return ResponseMessage {
                     id,
                     status: "ok".to_string(),
