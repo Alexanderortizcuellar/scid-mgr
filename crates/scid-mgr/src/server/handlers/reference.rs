@@ -548,11 +548,20 @@ fn calculate_tree_and_continuations(
                                     None
                                 }
                             };
+                            let month = {
+                                let m = ((e.date >> 5) & 0x0F) as u8;
+                                if (1..=12).contains(&m) {
+                                    Some(m)
+                                } else {
+                                    None
+                                }
+                            };
                             crate::search_booster::BoostGameMeta::new(
                                 e.result,
                                 e.white_elo,
                                 e.black_elo,
                                 year,
+                                month,
                             )
                         })
                     };
@@ -584,11 +593,20 @@ fn calculate_tree_and_continuations(
                                     None
                                 }
                             };
+                            let month = {
+                                let m = ((e.date >> 5) & 0x0F) as u8;
+                                if (1..=12).contains(&m) {
+                                    Some(m)
+                                } else {
+                                    None
+                                }
+                            };
                             crate::search_booster::BoostGameMeta::new(
                                 res,
                                 e.white_elo,
                                 e.black_elo,
                                 year,
+                                month,
                             )
                         })
                     };

@@ -107,11 +107,20 @@ pub fn handle_tree(
                                     None
                                 }
                             };
+                            let month = {
+                                let m = ((e.date >> 5) & 0x0F) as u8;
+                                if (1..=12).contains(&m) {
+                                    Some(m)
+                                } else {
+                                    None
+                                }
+                            };
                             crate::search_booster::BoostGameMeta::new(
                                 res,
                                 e.white_elo,
                                 e.black_elo,
                                 year,
+                                month,
                             )
                         })
                     };
@@ -130,16 +139,28 @@ pub fn handle_tree(
                 let entries = scid_db.entries();
                 let meta_lookup = |gid: usize| -> Option<crate::search_booster::BoostGameMeta> {
                     entries.get(gid).map(|e| {
-                        let year = if e.date > 0 {
-                            Some((e.date / 10000) as u16)
-                        } else {
-                            None
+                        let year = {
+                            let y = (e.date >> 9) as u16;
+                            if y > 0 {
+                                Some(y)
+                            } else {
+                                None
+                            }
+                        };
+                        let month = {
+                            let m = ((e.date >> 5) & 0x0F) as u8;
+                            if (1..=12).contains(&m) {
+                                Some(m)
+                            } else {
+                                None
+                            }
                         };
                         crate::search_booster::BoostGameMeta::new(
                             e.result,
                             e.white_elo,
                             e.black_elo,
                             year,
+                            month,
                         )
                     })
                 };

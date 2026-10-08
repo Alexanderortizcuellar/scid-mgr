@@ -25,8 +25,9 @@ struct BuilderEdge {
     target_hash: u64,
     total_games: u32,
     white_wins: u32,
-    draws: u32,
     black_wins: u32,
+    first_year_month: u16,
+    last_year_month: u16,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -93,6 +94,7 @@ impl StripedHotGraphBuilder {
         w_win: u32,
         draw: u32,
         b_win: u32,
+        year_month: u16,
     ) {
         let idx = Self::stripe_index(from_hash);
         let mut map = self.stripes[idx].lock().unwrap();
@@ -115,17 +117,25 @@ impl StripedHotGraphBuilder {
             let edge = &mut node.edges[pos];
             edge.total_games += 1;
             edge.white_wins += w_win;
-            edge.draws += draw;
             edge.black_wins += b_win;
             edge.target_hash = to_hash;
+            if year_month > 0 {
+                edge.first_year_month = if edge.first_year_month == 0 {
+                    year_month
+                } else {
+                    edge.first_year_month.min(year_month)
+                };
+                edge.last_year_month = edge.last_year_month.max(year_month);
+            }
         } else {
             node.edges.push(BuilderEdge {
                 packed_move,
                 target_hash: to_hash,
                 total_games: 1,
                 white_wins: w_win,
-                draws: draw,
                 black_wins: b_win,
+                first_year_month: year_month,
+                last_year_month: year_month,
             });
         }
     }
@@ -208,8 +218,9 @@ impl StripedHotGraphBuilder {
                     target_node,
                     e.total_games,
                     e.white_wins,
-                    e.draws,
                     e.black_wins,
+                    e.first_year_month,
+                    e.last_year_month,
                 ));
             }
 
@@ -322,7 +333,7 @@ impl StripedHotGraphBuilder {
 
 pub fn build_from_booster_direct<
     F: Fn(usize, usize, usize) + Sync,
-    L: Fn(usize) -> (u32, u32, u32) + Sync,
+    L: Fn(usize) -> (u32, u32, u32, u16) + Sync,
 >(
     boost_idx: &crate::search_booster::MmapBoostIndex,
     dest_path: &Path,
@@ -350,7 +361,7 @@ pub fn build_from_booster_direct<
                         None => continue,
                     };
 
-                    let (w_win, draw, b_win) = results_lookup(gid);
+                    let (w_win, draw, b_win, year_month) = results_lookup(gid);
                     let mut pos = Chess::default();
                     let end_ply = moves.len().min(max_ply);
 
@@ -372,6 +383,7 @@ pub fn build_from_booster_direct<
                                 w_win,
                                 draw,
                                 b_win,
+                                year_month,
                             );
 
                             pos = next_pos;
@@ -435,11 +447,18 @@ pub fn build_for_pgn_direct<P1: AsRef<Path>, P2: AsRef<Path>, F: Fn(usize, usize
         if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
             if let Ok(pgn_db) = crate::pgn_db::PgnDatabaseWrapper::open(pgn_p) {
                 if pgn_db.entries.len() == boost_idx.header.db_game_count as usize {
-                    let results_lookup = |gid: usize| match pgn_db.entries[gid].result {
-                        1 => (1, 0, 0),
-                        2 => (0, 0, 1),
-                        3 => (0, 1, 0),
-                        _ => (0, 0, 0),
+                    let results_lookup = |gid: usize| {
+                        let e = &pgn_db.entries[gid];
+                        let (w, d, b) = match e.result {
+                            1 => (1, 0, 0),
+                            2 => (0, 0, 1),
+                            3 => (0, 1, 0),
+                            _ => (0, 0, 0),
+                        };
+                        let year = (e.date >> 9) as u16;
+                        let month = ((e.date >> 5) & 0x0F) as u8;
+                        let ym = HotEdge::pack_year_month(year, month);
+                        (w, d, b, ym)
                     };
                     return build_from_booster_direct(
                         &boost_idx,
@@ -569,14 +588,18 @@ pub fn build_for_scid_direct<
                 let results_lookup = |gid: usize| {
                     let entry = &entries[gid];
                     if entry.deleted {
-                        (0, 0, 0)
+                        (0, 0, 0, 0)
                     } else {
-                        match entry.result {
+                        let (w, d, b) = match entry.result {
                             1 => (1, 0, 0),
                             2 => (0, 0, 1),
                             3 => (0, 1, 0),
                             _ => (0, 0, 0),
-                        }
+                        };
+                        let year = (entry.date >> 9) as u16;
+                        let month = ((entry.date >> 5) & 0x0F) as u8;
+                        let ym = HotEdge::pack_year_month(year, month);
+                        (w, d, b, ym)
                     }
                 };
                 return build_from_booster_direct(
@@ -640,6 +663,9 @@ pub fn build_for_scid_direct<
                         3 => (0, 1, 0),
                         _ => (0, 0, 0),
                     };
+                    let year = (entry.date >> 9) as u16;
+                    let month = ((entry.date >> 5) & 0x0F) as u8;
+                    let year_month = HotEdge::pack_year_month(year, month);
 
                     let mut slots = crate::position_search::standard_piece_slots();
                     let mut counts = [16usize, 16usize];
@@ -692,6 +718,7 @@ pub fn build_for_scid_direct<
                             w_win,
                             draw,
                             b_win,
+                            year_month,
                         );
 
                         let side_idx = usize::from(pos.turn() == shakmaty::Color::Black);
@@ -757,6 +784,7 @@ struct HotGraphPgnVisitor<'a> {
     w_win: u32,
     draw: u32,
     b_win: u32,
+    year_month: u16,
 }
 
 impl<'a> HotGraphPgnVisitor<'a> {
@@ -769,6 +797,7 @@ impl<'a> HotGraphPgnVisitor<'a> {
             w_win: 0,
             draw: 0,
             b_win: 0,
+            year_month: 0,
         }
     }
 
@@ -778,6 +807,7 @@ impl<'a> HotGraphPgnVisitor<'a> {
         self.w_win = 0;
         self.draw = 0;
         self.b_win = 0;
+        self.year_month = 0;
     }
 }
 
@@ -793,6 +823,13 @@ impl<'a> Visitor for HotGraphPgnVisitor<'a> {
                 self.b_win = 1;
             } else if val == b"1/2-1/2" {
                 self.draw = 1;
+            }
+        } else if key == b"Date" {
+            if let Ok(date_str) = std::str::from_utf8(value.as_bytes()) {
+                let d = crate::pgn_db::pack_date(date_str);
+                let year = (d >> 9) as u16;
+                let month = ((d >> 5) & 0x0F) as u8;
+                self.year_month = HotEdge::pack_year_month(year, month);
             }
         } else if key == b"FEN" {
             if let Ok(fen_str) = std::str::from_utf8(value.as_bytes()) {
@@ -829,6 +866,7 @@ impl<'a> Visitor for HotGraphPgnVisitor<'a> {
                 self.w_win,
                 self.draw,
                 self.b_win,
+                self.year_month,
             );
 
             self.pos = next_pos;

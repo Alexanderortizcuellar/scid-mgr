@@ -126,7 +126,7 @@ Queries the instant Opening Tree / Explorer for any board position (FEN or start
   - `max_lines`: `number` (optional, default: `10`; max variation lines to return)
   - `min_games`: `number` (optional, default: `1`; frequency cutoff)
   - `min_percentage`: `number` (optional, default: `0.0`; branch percentage threshold)
-- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo, first_year, last_year, last_played, sample_game_ids }], sample_game_ids, continuations?: [{ moves, formatted, games, percentage, white_wins, draws, black_wins, last_year }] }`
+- **Returns**: `{ fen, total_games, white_pct, draw_pct, black_pct, moves: [{ san, uci, total_games, white_pct, draw_pct, black_pct, avg_white_elo, avg_black_elo, first_year, first_month, last_year, last_month, last_played, sample_game_ids }], sample_game_ids, continuations?: [{ moves, formatted, games, percentage, white_wins, draws, black_wins, last_year, last_month, last_played }] }`
 
 ### `pos_index_status`
 Checks the companion `.pos.idx` index status (`valid`, `outdated`, `missing`) and game counts.
@@ -165,7 +165,7 @@ Calculates top multi-move continuation lines from any position using `.hot.idx` 
   - `game_ids`: `number[]` (optional; calculates stats strictly for an explicit array of game IDs)
   - `filter`: `GameFilter` (optional inline metadata filter)
   - `include_tree`: `boolean` (optional, default: `false`)
-- **Returns**: `{ fen, total_games_processed, games_reaching_position, lines: [{ moves, formatted, games, percentage, white_wins, draws, black_wins, last_year }] }`
+- **Returns**: `{ fen, total_games_processed, games_reaching_position, lines: [{ moves, formatted, games, percentage, white_wins, draws, black_wins, last_year, last_month, last_played }] }`
 
 ### `build_continuations`
 Builds or rebuilds the `.hot.idx` binary graph in the background across worker threads, emitting streaming `build_continuations_progress` events.

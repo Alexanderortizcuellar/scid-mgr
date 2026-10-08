@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::continuation_index::{
     format_continuation_moves, parse_fen_fullmove, ContinuationLine, ContinuationQuery,
-    ContinuationResult,
+    ContinuationResult, HotEdge,
 };
 use crate::tree_index::{OpeningTreeMoveView, OpeningTreeReport};
 
@@ -647,8 +647,8 @@ impl<'a> BoostSearchEvaluator<'a> {
             white_elo_sum: u64,
             black_elo_sum: u64,
             elo_game_count: u32,
-            min_year: Option<u16>,
-            max_year: Option<u16>,
+            min_year_month: Option<u16>,
+            max_year_month: Option<u16>,
             sample_game_ids: Vec<u32>,
         }
 
@@ -658,7 +658,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             white_wins: u64,
             draws: u64,
             black_wins: u64,
-            last_year: Option<u16>,
+            last_year_month: Option<u16>,
         }
 
         #[derive(Debug, Clone, Default)]
@@ -734,9 +734,19 @@ impl<'a> BoostSearchEvaluator<'a> {
                         m_acc.black_elo_sum += meta.black_elo as u64;
                         m_acc.elo_game_count += 1;
                     }
-                    if let Some(y) = meta.year {
-                        m_acc.min_year = Some(m_acc.min_year.map_or(y, |prev| prev.min(y)));
-                        m_acc.max_year = Some(m_acc.max_year.map_or(y, |prev| prev.max(y)));
+                    let ym = {
+                        let val = HotEdge::pack_year_month_opt(meta.year, meta.month);
+                        if val > 0 {
+                            Some(val)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(ym_val) = ym {
+                        m_acc.min_year_month =
+                            Some(m_acc.min_year_month.map_or(ym_val, |prev| prev.min(ym_val)));
+                        m_acc.max_year_month =
+                            Some(m_acc.max_year_month.map_or(ym_val, |prev| prev.max(ym_val)));
                     }
                     if m_acc.sample_game_ids.len() < sample_cap {
                         m_acc.sample_game_ids.push(gid as u32);
@@ -750,8 +760,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += w_win as u64;
                         st.draws += draw as u64;
                         st.black_wins += b_win as u64;
-                        if let Some(y) = meta.year {
-                            st.last_year = Some(st.last_year.map_or(y, |prev| prev.max(y)));
+                        if let Some(ym_val) = ym {
+                            st.last_year_month =
+                                Some(st.last_year_month.map_or(ym_val, |prev| prev.max(ym_val)));
                         }
                     }
                 }
@@ -788,13 +799,13 @@ impl<'a> BoostSearchEvaluator<'a> {
                         ma.white_elo_sum += v.white_elo_sum;
                         ma.black_elo_sum += v.black_elo_sum;
                         ma.elo_game_count += v.elo_game_count;
-                        ma.min_year = match (ma.min_year, v.min_year) {
+                        ma.min_year_month = match (ma.min_year_month, v.min_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.min(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
                             (None, None) => None,
                         };
-                        ma.max_year = match (ma.max_year, v.max_year) {
+                        ma.max_year_month = match (ma.max_year_month, v.max_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
@@ -815,7 +826,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
-                        st.last_year = match (st.last_year, v.last_year) {
+                        st.last_year_month = match (st.last_year_month, v.last_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
@@ -853,13 +864,13 @@ impl<'a> BoostSearchEvaluator<'a> {
                         ma.white_elo_sum += v.white_elo_sum;
                         ma.black_elo_sum += v.black_elo_sum;
                         ma.elo_game_count += v.elo_game_count;
-                        ma.min_year = match (ma.min_year, v.min_year) {
+                        ma.min_year_month = match (ma.min_year_month, v.min_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.min(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
                             (None, None) => None,
                         };
-                        ma.max_year = match (ma.max_year, v.max_year) {
+                        ma.max_year_month = match (ma.max_year_month, v.max_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
@@ -880,7 +891,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
-                        st.last_year = match (st.last_year, v.last_year) {
+                        st.last_year_month = match (st.last_year_month, v.last_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
@@ -922,6 +933,17 @@ impl<'a> BoostSearchEvaluator<'a> {
                 } else {
                     None
                 };
+                let (first_year, first_month) = m_stat
+                    .min_year_month
+                    .map_or((None, None), HotEdge::unpack_year_month);
+                let (last_year, last_month) = m_stat
+                    .max_year_month
+                    .map_or((None, None), HotEdge::unpack_year_month);
+                let last_played = match (last_year, last_month) {
+                    (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                    (Some(y), None) => Some(format!("{}", y)),
+                    _ => None,
+                };
 
                 OpeningTreeMoveView {
                     san,
@@ -935,9 +957,11 @@ impl<'a> BoostSearchEvaluator<'a> {
                     black_wins: m_stat.black_wins,
                     avg_white_elo,
                     avg_black_elo,
-                    first_year: m_stat.min_year,
-                    last_year: m_stat.max_year,
-                    last_played: m_stat.max_year.map(|y| y.to_string()),
+                    first_year,
+                    first_month,
+                    last_year,
+                    last_month,
+                    last_played,
                     sample_game_ids: m_stat.sample_game_ids,
                 }
             })
@@ -969,6 +993,14 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                         let formatted =
                             format_continuation_moves(&target_pos, start_fullmove, &san_moves);
+                        let (last_year, last_month) = stats
+                            .last_year_month
+                            .map_or((None, None), HotEdge::unpack_year_month);
+                        let last_played = match (last_year, last_month) {
+                            (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                            (Some(y), None) => Some(format!("{}", y)),
+                            _ => None,
+                        };
                         lines.push(ContinuationLine {
                             moves: san_moves,
                             formatted,
@@ -977,7 +1009,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                             white_wins: stats.white_wins,
                             draws: stats.draws,
                             black_wins: stats.black_wins,
-                            last_year: stats.last_year,
+                            last_year,
+                            last_month,
+                            last_played,
                         });
                     }
                 }
@@ -1039,7 +1073,7 @@ impl<'a> BoostSearchEvaluator<'a> {
             white_wins: u64,
             draws: u64,
             black_wins: u64,
-            last_year: Option<u16>,
+            last_year_month: Option<u16>,
         }
 
         #[derive(Debug, Clone, Default)]
@@ -1102,8 +1136,17 @@ impl<'a> BoostSearchEvaluator<'a> {
                     st.white_wins += w_win;
                     st.draws += draw;
                     st.black_wins += b_win;
-                    if let Some(y) = meta.year {
-                        st.last_year = Some(st.last_year.map_or(y, |prev| prev.max(y)));
+                    let ym = {
+                        let val = HotEdge::pack_year_month_opt(meta.year, meta.month);
+                        if val > 0 {
+                            Some(val)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(ym_val) = ym {
+                        st.last_year_month =
+                            Some(st.last_year_month.map_or(ym_val, |prev| prev.max(ym_val)));
                     }
                 }
             }
@@ -1126,7 +1169,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
-                        st.last_year = match (st.last_year, v.last_year) {
+                        st.last_year_month = match (st.last_year_month, v.last_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
@@ -1151,7 +1194,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                         st.white_wins += v.white_wins;
                         st.draws += v.draws;
                         st.black_wins += v.black_wins;
-                        st.last_year = match (st.last_year, v.last_year) {
+                        st.last_year_month = match (st.last_year_month, v.last_year_month) {
                             (Some(y1), Some(y2)) => Some(y1.max(y2)),
                             (Some(y1), None) => Some(y1),
                             (None, Some(y2)) => Some(y2),
@@ -1184,6 +1227,14 @@ impl<'a> BoostSearchEvaluator<'a> {
 
                     let formatted =
                         format_continuation_moves(&start_pos, start_fullmove, &san_moves);
+                    let (last_year, last_month) = stats
+                        .last_year_month
+                        .map_or((None, None), HotEdge::unpack_year_month);
+                    let last_played = match (last_year, last_month) {
+                        (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                        (Some(y), None) => Some(format!("{}", y)),
+                        _ => None,
+                    };
                     lines.push(ContinuationLine {
                         moves: san_moves,
                         formatted,
@@ -1192,7 +1243,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                         white_wins: stats.white_wins,
                         draws: stats.draws,
                         black_wins: stats.black_wins,
-                        last_year: stats.last_year,
+                        last_year,
+                        last_month,
+                        last_played,
                     });
                 }
             }

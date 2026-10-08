@@ -14,16 +14,31 @@ pub struct BoostGameMeta {
     pub white_elo: u16,
     pub black_elo: u16,
     pub year: Option<u16>,
+    pub month: Option<u8>,
 }
 
 impl BoostGameMeta {
-    pub fn new(result: u8, white_elo: u16, black_elo: u16, year: Option<u16>) -> Self {
+    pub fn new(
+        result: u8,
+        white_elo: u16,
+        black_elo: u16,
+        year: Option<u16>,
+        month: Option<u8>,
+    ) -> Self {
         Self {
             result,
             white_elo,
             black_elo,
             year,
+            month,
         }
+    }
+
+    #[inline]
+    pub fn year_month(&self) -> Option<u16> {
+        self.year.map(|y| {
+            crate::continuation_index::HotEdge::pack_year_month(y, self.month.unwrap_or(0))
+        })
     }
 }
 

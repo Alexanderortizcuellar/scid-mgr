@@ -181,27 +181,47 @@ Precomputed opening tree index storing move statistics, win-rate distributions, 
 
 ## 5. 📈 Common Continuations Graph Index (`.hot.idx`)
 
-Directed Acyclic Graph (DAG) index representing common line continuations and branching paths.
+Directed Acyclic Graph (DAG) index representing precomputed position nodes, common move continuations, and multi-ply branching paths for sub-millisecond Opening Explorer and variation queries.
 
 ### File Layout
 
 ```
-+-------------------------------------------------------------+
-| 64-Byte HotGraphHeader (Magic "CHSHOTG1")                   |
-+-------------------------------------------------------------+
-| 256 Stripe Table                                            |
-+-------------------------------------------------------------+
-| Continuous Node Array (32 bytes per node):                  |
-|  - Zobrist Hash (u64)                                       |
-|  - Total Occurrences (u32)                                  |
-|  - Edge Slice (Start Index: u32, Length: u32)               |
-+-------------------------------------------------------------+
-| Continuous Edge Array (16 bytes per edge):                  |
-|  - Packed Move (u16)                                        |
-|  - Target Node ID (u32)                                     |
-|  - Edge Game Frequency (u32)                                |
-+-------------------------------------------------------------+
++-------------------------------------------------------------------------+
+| 96-Byte HotGraphMetadata Header (Magic "CHSHOTG1", Version 1)           |
++-------------------------------------------------------------------------+
+| Continuous HotNode Array (24 bytes per node, Total: node_count)         |
+|  - first_edge (u32 LE): Index into continuous edge array                |
+|  - edge_count (u16 LE): Number of outbound candidate moves              |
+|  - _padding (u16 LE): Struct 4-byte alignment                           |
+|  - total_games (u32 LE): Games reaching this position                   |
+|  - white_wins (u32 LE): White win count                                 |
+|  - draws (u32 LE): Draw count                                           |
+|  - black_wins (u32 LE): Black win count                                 |
++-------------------------------------------------------------------------+
+| Continuous HotEdge Array (24 bytes per edge, Total: edge_count)         |
+|  - packed_move (u16 LE): Packed 16-bit Shakmaty/SCID move               |
+|  - first_year_month (u16 LE): Packed (year << 4) | (month & 0x0F)      |
+|  - last_year_month (u16 LE): Packed (year << 4) | (month & 0x0F)       |
+|  - _padding (u16 LE): Struct 4-byte alignment                           |
+|  - target_node (u32 LE): NodeId of child node (or NO_NODE = 0xFFFFFFFF) |
+|  - total_games (u32 LE): Total occurrences for this move                |
+|  - white_wins (u32 LE): White win count                                 |
+|  - black_wins (u32 LE): Black win count                                 |
+|  * Note: draws is derived on the fly: total_games - (white + black)    |
++-------------------------------------------------------------------------+
+| Sorted HotHashEntry Array (16 bytes per entry, Total: hash_count)       |
+|  - hash (u64 LE): Zobrist64 position hash (Binary Search key)           |
+|  - node_id (u32 LE): Index into HotNode array                           |
+|  - _padding (u32 LE): Struct 8-byte alignment                           |
++-------------------------------------------------------------------------+
 ```
+
+### HotEdge Year + Month Bitfield Format
+To provide historical date ranges (`first_year`, `first_month`, `last_year`, `last_month`, `last_played`) with zero storage overhead:
+- **`first_year_month` (16 bits)**: `(year: 12 bits << 4) | (month: 4 bits & 0x0F)`
+- **`last_year_month` (16 bits)**: `(year: 12 bits << 4) | (month: 4 bits & 0x0F)`
+- **Zero-allocation sorting**: Because the 12-bit year occupies the high bits, chronological comparison and `min`/`max` reductions operate directly via standard integer comparisons (`u16`).
+- **Exact 24-byte record**: `draws` is computed dynamically as `total_games.saturating_sub(white_wins + black_wins)`, preserving fixed 24-byte record alignment.
 
 ---
 

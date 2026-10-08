@@ -359,24 +359,28 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
                 2600,
                 2500,
                 Some(1851),
+                Some(6),
             )),
             1 => Some(scid_mgr::search_booster::BoostGameMeta::new(
                 1,
                 2700,
                 2400,
                 Some(1858),
+                Some(10),
             )),
             2 => Some(scid_mgr::search_booster::BoostGameMeta::new(
                 3,
                 2300,
                 2300,
                 Some(2024),
+                Some(5),
             )),
             3 => Some(scid_mgr::search_booster::BoostGameMeta::new(
                 0,
                 0,
                 0,
                 Some(2026),
+                Some(11),
             )),
             _ => None,
         }
@@ -404,8 +408,10 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     assert_eq!(e4_move.black_pct, 0.0);
     assert_eq!(e4_move.avg_white_elo, Some(2533)); // (2600 + 2700 + 2300) / 3 = 2533
     assert_eq!(e4_move.first_year, Some(1851));
+    assert_eq!(e4_move.first_month, Some(6));
     assert_eq!(e4_move.last_year, Some(2026));
-    assert_eq!(e4_move.last_played, Some("2026".to_string()));
+    assert_eq!(e4_move.last_month, Some(11));
+    assert_eq!(e4_move.last_played, Some("2026-11".to_string()));
 
     // 2. Opening Tree after 1. e4 with single-pass continuations
     let after_e4_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
@@ -436,7 +442,10 @@ fn test_boost_evaluator_opening_tree_and_continuations() -> Result<()> {
     assert_eq!(e4_tree.moves[0].white_wins, 2);
     assert_eq!(e4_tree.moves[0].white_pct, 100.0);
     assert_eq!(e4_tree.moves[0].first_year, Some(1851));
+    assert_eq!(e4_tree.moves[0].first_month, Some(6));
     assert_eq!(e4_tree.moves[0].last_year, Some(1858));
+    assert_eq!(e4_tree.moves[0].last_month, Some(10));
+    assert_eq!(e4_tree.moves[0].last_played, Some("1858-10".to_string()));
     assert!(e4_tree.continuations.is_some());
     let cont_lines = e4_tree.continuations.as_ref().unwrap();
     assert!(!cont_lines.is_empty());

@@ -494,6 +494,8 @@ fn build_final_result(
                     draws: stats.draws,
                     black_wins: stats.black_wins,
                     last_year: None,
+                    last_month: None,
+                    last_played: None,
                 });
             }
         }

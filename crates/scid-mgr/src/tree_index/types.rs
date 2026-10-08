@@ -313,11 +313,15 @@ pub struct OpeningTreeMoveView {
     pub black_wins: u32,
     pub avg_white_elo: Option<u32>,
     pub avg_black_elo: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_year: Option<u16>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_month: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_year: Option<u16>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_month: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_played: Option<String>,
     pub sample_game_ids: Vec<u32>,
 }

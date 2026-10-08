@@ -19,6 +19,7 @@ pub struct SearchPath {
     white_wins: u64,
     draws: u64,
     black_wins: u64,
+    last_year_month: u16,
 }
 
 impl Ord for SearchPath {
@@ -169,6 +170,12 @@ pub trait HotGraphQueryable {
                 }
 
                 let formatted = format_continuation_moves(start_pos, start_fullmove, &san_moves);
+                let (last_year, last_month) = HotEdge::unpack_year_month(line.last_year_month);
+                let last_played = match (last_year, last_month) {
+                    (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                    (Some(y), None) => Some(format!("{}", y)),
+                    _ => None,
+                };
                 final_lines.push(ContinuationLine {
                     moves: san_moves,
                     formatted,
@@ -177,7 +184,9 @@ pub trait HotGraphQueryable {
                     white_wins: line.white_wins,
                     draws: line.draws,
                     black_wins: line.black_wins,
-                    last_year: None,
+                    last_year,
+                    last_month,
+                    last_played,
                 });
             }
         }
@@ -256,7 +265,7 @@ pub trait HotGraphQueryable {
                 0.0
             };
             let m_draw_pct = if m_total > 0 {
-                (edge.draws as f64 / m_total as f64) * 100.0
+                (edge.draws() as f64 / m_total as f64) * 100.0
             } else {
                 0.0
             };
@@ -265,6 +274,9 @@ pub trait HotGraphQueryable {
             } else {
                 0.0
             };
+            let (first_year, first_month) = edge.first_year_month_tuple();
+            let (last_year, last_month) = edge.last_year_month_tuple();
+            let last_played = edge.last_played_str();
 
             move_views.push(crate::tree_index::OpeningTreeMoveView {
                 san,
@@ -274,13 +286,15 @@ pub trait HotGraphQueryable {
                 draw_pct: m_draw_pct,
                 black_pct: m_black_pct,
                 white_wins: edge.white_wins,
-                draws: edge.draws,
+                draws: edge.draws(),
                 black_wins: edge.black_wins,
                 avg_white_elo: None,
                 avg_black_elo: None,
-                first_year: None,
-                last_year: None,
-                last_played: None,
+                first_year,
+                first_month,
+                last_year,
+                last_month,
+                last_played,
                 sample_game_ids: Vec::new(),
             });
         }
@@ -342,8 +356,9 @@ pub trait HotGraphQueryable {
                     moves: vec![e.packed_move()],
                     games: e.total_games as u64,
                     white_wins: e.white_wins as u64,
-                    draws: e.draws as u64,
+                    draws: e.draws() as u64,
                     black_wins: e.black_wins as u64,
+                    last_year_month: e.last_year_month,
                 });
             }
         }
@@ -377,8 +392,9 @@ pub trait HotGraphQueryable {
                         moves: new_moves,
                         games: e.total_games as u64,
                         white_wins: e.white_wins as u64,
-                        draws: e.draws as u64,
+                        draws: e.draws() as u64,
                         black_wins: e.black_wins as u64,
+                        last_year_month: e.last_year_month,
                     });
                     branched = true;
                 }

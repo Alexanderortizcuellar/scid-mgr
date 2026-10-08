@@ -52,13 +52,14 @@ impl HotNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[repr(C)]
 pub struct HotEdge {
-    pub packed_move: u16,
-    pub _padding: u16,
-    pub target_node: u32, // NodeId or NO_NODE if beyond hot cutoff
-    pub total_games: u32,
-    pub white_wins: u32,
-    pub draws: u32,
-    pub black_wins: u32,
+    pub packed_move: u16,        // 2 bytes
+    pub first_year_month: u16,   // 2 bytes: (year << 4) | (month & 0x0F)
+    pub last_year_month: u16,    // 2 bytes: (year << 4) | (month & 0x0F)
+    pub _padding: u16,           // 2 bytes (alignment)
+    pub target_node: u32,        // 4 bytes: NodeId or NO_NODE if beyond hot cutoff
+    pub total_games: u32,        // 4 bytes
+    pub white_wins: u32,         // 4 bytes
+    pub black_wins: u32,         // 4 bytes
 }
 
 impl HotEdge {
@@ -68,17 +69,92 @@ impl HotEdge {
         target_node: NodeId,
         total_games: u32,
         white_wins: u32,
-        draws: u32,
         black_wins: u32,
+        first_year_month: u16,
+        last_year_month: u16,
     ) -> Self {
         Self {
             packed_move: packed_move.0,
+            first_year_month,
+            last_year_month,
             _padding: 0,
             target_node,
             total_games,
             white_wins,
-            draws,
             black_wins,
+        }
+    }
+
+    #[inline]
+    pub fn draws(&self) -> u32 {
+        self.total_games.saturating_sub(self.white_wins + self.black_wins)
+    }
+
+    #[inline]
+    pub fn pack_year_month(year: u16, month: u8) -> u16 {
+        if year == 0 {
+            0
+        } else {
+            ((year & 0x0FFF) << 4) | ((month as u16) & 0x0F)
+        }
+    }
+
+    #[inline]
+    pub fn pack_year_month_opt(year: Option<u16>, month: Option<u8>) -> u16 {
+        match year {
+            Some(y) if y > 0 => Self::pack_year_month(y, month.unwrap_or(0)),
+            _ => 0,
+        }
+    }
+
+    #[inline]
+    pub fn unpack_year_month(val: u16) -> (Option<u16>, Option<u8>) {
+        if val == 0 {
+            (None, None)
+        } else {
+            let y = val >> 4;
+            let m = (val & 0x0F) as u8;
+            (Some(y), if (1..=12).contains(&m) { Some(m) } else { None })
+        }
+    }
+
+    #[inline]
+    pub fn first_year_month_tuple(&self) -> (Option<u16>, Option<u8>) {
+        Self::unpack_year_month(self.first_year_month)
+    }
+
+    #[inline]
+    pub fn last_year_month_tuple(&self) -> (Option<u16>, Option<u8>) {
+        Self::unpack_year_month(self.last_year_month)
+    }
+
+    #[inline]
+    pub fn first_year(&self) -> Option<u16> {
+        Self::unpack_year_month(self.first_year_month).0
+    }
+
+    #[inline]
+    pub fn first_month(&self) -> Option<u8> {
+        Self::unpack_year_month(self.first_year_month).1
+    }
+
+    #[inline]
+    pub fn last_year(&self) -> Option<u16> {
+        Self::unpack_year_month(self.last_year_month).0
+    }
+
+    #[inline]
+    pub fn last_month(&self) -> Option<u8> {
+        Self::unpack_year_month(self.last_year_month).1
+    }
+
+    #[inline]
+    pub fn last_played_str(&self) -> Option<String> {
+        let (y_opt, m_opt) = Self::unpack_year_month(self.last_year_month);
+        match (y_opt, m_opt) {
+            (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+            (Some(y), None) => Some(format!("{}", y)),
+            _ => None,
         }
     }
 
@@ -216,6 +292,10 @@ pub struct ContinuationLine {
     pub black_wins: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_year: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_month: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_played: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
