@@ -183,8 +183,14 @@ impl PgnDatabaseWrapper {
                     scanned_names.sites.len(),
                     elapsed.as_secs_f64()
                 );
-                let storage = IndexStorage::from_vec(scanned_entries);
-                (scanned_names, storage)
+                if let Ok(loaded) =
+                    Self::load_index_file_with_mode(&idx_path, pgn_mtime_secs, pgn_len, load_mode)
+                {
+                    loaded
+                } else {
+                    let storage = IndexStorage::from_vec(scanned_entries);
+                    (scanned_names, storage)
+                }
             }
         };
 
