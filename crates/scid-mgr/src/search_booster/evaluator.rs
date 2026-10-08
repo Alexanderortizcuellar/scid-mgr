@@ -939,6 +939,11 @@ impl<'a> BoostSearchEvaluator<'a> {
                 let (last_year, last_month) = m_stat
                     .max_year_month
                     .map_or((None, None), HotEdge::unpack_year_month);
+                let first_played = match (first_year, first_month) {
+                    (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                    (Some(y), None) => Some(format!("{}", y)),
+                    _ => None,
+                };
                 let last_played = match (last_year, last_month) {
                     (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
                     (Some(y), None) => Some(format!("{}", y)),
@@ -961,6 +966,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     first_month,
                     last_year,
                     last_month,
+                    first_played,
                     last_played,
                     sample_game_ids: m_stat.sample_game_ids,
                 }
@@ -1009,8 +1015,11 @@ impl<'a> BoostSearchEvaluator<'a> {
                             white_wins: stats.white_wins,
                             draws: stats.draws,
                             black_wins: stats.black_wins,
+                            first_year: None,
+                            first_month: None,
                             last_year,
                             last_month,
+                            first_played: None,
                             last_played,
                         });
                     }
@@ -1243,8 +1252,11 @@ impl<'a> BoostSearchEvaluator<'a> {
                         white_wins: stats.white_wins,
                         draws: stats.draws,
                         black_wins: stats.black_wins,
+                        first_year: None,
+                        first_month: None,
                         last_year,
                         last_month,
+                        first_played: None,
                         last_played,
                     });
                 }

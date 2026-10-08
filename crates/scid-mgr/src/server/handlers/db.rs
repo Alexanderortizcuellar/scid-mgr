@@ -1,5 +1,5 @@
 use crate::continuation_index::codec::MmapHotGraph;
-use crate::db::{GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
+use crate::db::{GameFilter, GameSummary, LoadMode, ScidDatabaseWrapper, ScidFormat};
 use crate::endgame_index::serializer::MmapFeatureIndex;
 use crate::pgn_db::PgnDatabaseWrapper;
 use crate::position_index::{IndexStatus, PositionIndex};
@@ -33,9 +33,22 @@ pub fn handle_open_db(
         }
     };
 
+    let load_mode: LoadMode = req
+        .params
+        .get("load_mode")
+        .or_else(|| req.params.get("mode"))
+        .or_else(|| {
+            req.params
+                .get("params")
+                .and_then(|p| p.get("load_mode").or_else(|| p.get("mode")))
+        })
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(LoadMode::Mmap);
+
     let path = Path::new(path_str);
     if path_str.to_lowercase().ends_with(".pgn") {
-        match PgnDatabaseWrapper::open(path) {
+        match PgnDatabaseWrapper::open_with_mode(path, load_mode) {
             Ok(pgn) => {
                 let total_games = pgn.game_count();
                 let pgn_path_str = pgn.pgn_path.to_string_lossy().to_string();
@@ -146,7 +159,7 @@ pub fn handle_open_db(
             },
         }
     } else {
-        match ScidDatabaseWrapper::open(path) {
+        match ScidDatabaseWrapper::open_with_mode(path, load_mode) {
             Ok(db) => {
                 let total_games = db.game_count();
                 let mut stats = serde_json::to_value(db.stats()).unwrap_or_default();

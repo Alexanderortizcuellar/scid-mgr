@@ -493,8 +493,11 @@ fn build_final_result(
                     white_wins: stats.white_wins,
                     draws: stats.draws,
                     black_wins: stats.black_wins,
+                    first_year: None,
+                    first_month: None,
                     last_year: None,
                     last_month: None,
+                    first_played: None,
                     last_played: None,
                 });
             }

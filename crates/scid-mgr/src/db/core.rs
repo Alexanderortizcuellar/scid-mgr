@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::types::{DbStats, GameFilter, ScidFormat};
+use super::types::{preload_memory, DbStats, GameFilter, LoadMode, ScidFormat};
 
 pub struct ScidDatabaseWrapper {
     pub(crate) format: ScidFormat,
@@ -18,6 +18,7 @@ pub struct ScidDatabaseWrapper {
     pub(crate) namebase_path: PathBuf,
     pub(crate) games_path: PathBuf,
     pub(crate) games_mmap: Option<Mmap>,
+    pub(crate) load_mode: LoadMode,
     pub(crate) pending_games: Vec<u8>,
     pub(crate) dirty: bool,
     pub(crate) player_ranks: std::sync::OnceLock<Vec<u32>>,
@@ -46,7 +47,13 @@ pub fn detect_format_from_path(path: &Path) -> (ScidFormat, PathBuf) {
 }
 
 impl ScidDatabaseWrapper {
+    /// Opens database with default memory-mapped mode (`LoadMode::Mmap`)
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_mode(path, LoadMode::Mmap)
+    }
+
+    /// Opens database with specified `LoadMode` (Mmap, Preload, or Ram)
+    pub fn open_with_mode(path: &Path, load_mode: LoadMode) -> Result<Self> {
         let (format, index_path) = detect_format_from_path(path);
         let (namebase_path, games_path) = match format {
             ScidFormat::Si4 => {
@@ -67,6 +74,11 @@ impl ScidDatabaseWrapper {
             fs::read(&index_path).with_context(|| format!("Reading {}", index_path.display()))?;
         let names_bytes = fs::read(&namebase_path)
             .with_context(|| format!("Reading {}", namebase_path.display()))?;
+
+        if load_mode == LoadMode::Preload {
+            preload_memory(&index_bytes);
+            preload_memory(&names_bytes);
+        }
 
         let (entries, names) = match format {
             ScidFormat::Si4 => {
@@ -89,7 +101,11 @@ impl ScidDatabaseWrapper {
 
         let games_mmap = if games_path.exists() && games_path.metadata()?.len() > 0 {
             let file = File::open(&games_path)?;
-            Some(unsafe { Mmap::map(&file)? })
+            let mapped = unsafe { Mmap::map(&file)? };
+            if load_mode == LoadMode::Preload {
+                preload_memory(&mapped[..]);
+            }
+            Some(mapped)
         } else {
             None
         };
@@ -102,6 +118,7 @@ impl ScidDatabaseWrapper {
             namebase_path,
             games_path,
             games_mmap,
+            load_mode,
             pending_games: Vec::new(),
             dirty: false,
             player_ranks: std::sync::OnceLock::new(),
@@ -137,6 +154,7 @@ impl ScidDatabaseWrapper {
             namebase_path,
             games_path,
             games_mmap: None,
+            load_mode: LoadMode::Mmap,
             pending_games: Vec::new(),
             dirty: true,
             player_ranks: std::sync::OnceLock::new(),
@@ -146,6 +164,10 @@ impl ScidDatabaseWrapper {
             query_cache: std::sync::Mutex::new(None),
             column_sort_cache: std::sync::Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn load_mode(&self) -> LoadMode {
+        self.load_mode
     }
 
     pub fn format(&self) -> ScidFormat {

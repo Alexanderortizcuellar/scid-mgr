@@ -124,6 +124,7 @@ pub fn generate_tree_report(
                 first_month: None,
                 last_year: None,
                 last_month: None,
+                first_played: None,
                 last_played: None,
                 sample_game_ids: Vec::new(),
             }

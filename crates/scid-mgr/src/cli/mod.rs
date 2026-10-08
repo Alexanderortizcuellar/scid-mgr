@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod formatters;
 
+use crate::db::LoadMode;
 use crate::server;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -17,6 +18,10 @@ pub struct Cli {
     /// Max CPU worker threads for search and indexing
     #[arg(short, long)]
     pub threads: Option<usize>,
+
+    /// Database load mode: mmap (instant zero-copy), preload (warm OS page cache), or ram (heap allocated)
+    #[arg(long, default_value = "mmap", global = true)]
+    pub load_mode: LoadMode,
 
     /// Optional database path to auto-open in interactive mode
     #[arg(value_name = "DB_PATH")]
@@ -519,12 +524,12 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.interactive {
-        return server::run_interactive_server(cli.db_path, cli.threads);
+        return server::run_interactive_server(cli.db_path, cli.threads, cli.load_mode);
     }
 
     match cli.command {
         Some(Commands::Interactive { db_path, threads }) => {
-            server::run_interactive_server(db_path, threads.or(cli.threads))?;
+            server::run_interactive_server(db_path, threads.or(cli.threads), cli.load_mode)?;
         }
         Some(Commands::Check {
             db_path,
@@ -735,7 +740,7 @@ pub fn run() -> Result<()> {
         }
         None => {
             if let Some(path) = cli.db_path {
-                server::run_interactive_server(Some(path), cli.threads)?;
+                server::run_interactive_server(Some(path), cli.threads, cli.load_mode)?;
             } else {
                 println!("Run 'scid-mgr --help' for CLI options or 'scid-mgr check <DB_PATH>' to verify a database.");
             }

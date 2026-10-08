@@ -43,6 +43,13 @@ impl PositionIndexHeader {
         }
 
         let version = u32::from_le_bytes(bytes[8..12].try_into()?);
+        if version != POS_INDEX_VERSION {
+            anyhow::bail!(
+                "Unsupported position search index version: {} (expected {})",
+                version,
+                POS_INDEX_VERSION
+            );
+        }
         let flags = u32::from_le_bytes(bytes[12..16].try_into()?);
         let db_mtime_secs = u64::from_le_bytes(bytes[16..24].try_into()?);
         let db_size_bytes = u64::from_le_bytes(bytes[24..32].try_into()?);

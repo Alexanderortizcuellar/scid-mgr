@@ -184,8 +184,11 @@ pub trait HotGraphQueryable {
                     white_wins: line.white_wins,
                     draws: line.draws,
                     black_wins: line.black_wins,
+                    first_year: None,
+                    first_month: None,
                     last_year,
                     last_month,
+                    first_played: None,
                     last_played,
                 });
             }
@@ -276,6 +279,7 @@ pub trait HotGraphQueryable {
             };
             let (first_year, first_month) = edge.first_year_month_tuple();
             let (last_year, last_month) = edge.last_year_month_tuple();
+            let first_played = edge.first_played_str();
             let last_played = edge.last_played_str();
 
             move_views.push(crate::tree_index::OpeningTreeMoveView {
@@ -294,6 +298,7 @@ pub trait HotGraphQueryable {
                 first_month,
                 last_year,
                 last_month,
+                first_played,
                 last_played,
                 sample_game_ids: Vec::new(),
             });
@@ -384,13 +389,15 @@ pub trait HotGraphQueryable {
             let mut branched = false;
 
             for e in next_edges {
-                if (e.total_games as u64) >= min_games {
+                let edge_games = e.total_games as u64;
+                let path_games = path.games.min(edge_games);
+                if path_games >= min_games {
                     let mut new_moves = path.moves.clone();
                     new_moves.push(e.packed_move());
                     heap.push(SearchPath {
                         node_id: e.target_node,
                         moves: new_moves,
-                        games: e.total_games as u64,
+                        games: path_games,
                         white_wins: e.white_wins as u64,
                         draws: e.draws() as u64,
                         black_wins: e.black_wins as u64,
@@ -405,14 +412,21 @@ pub trait HotGraphQueryable {
             }
         }
 
+        while let Some(path) = heap.pop() {
+            completed_lines.push(path);
+        }
+
         completed_lines.sort_by(|a, b| {
             b.games
                 .cmp(&a.games)
                 .then_with(|| b.moves.len().cmp(&a.moves.len()))
+                .then_with(|| a.moves.cmp(&b.moves))
         });
 
         completed_lines.dedup_by(|a, b| a.moves == b.moves);
-        completed_lines.truncate(max_lines * 2);
+        if completed_lines.len() > max_lines {
+            completed_lines.truncate(max_lines);
+        }
         completed_lines
     }
 }

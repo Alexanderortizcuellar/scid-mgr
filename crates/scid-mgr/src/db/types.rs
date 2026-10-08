@@ -1,5 +1,56 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoadMode {
+    /// Memory-map files on demand (fastest startup < 1ms, zero memory overhead, pages faulted by OS as needed)
+    #[default]
+    Mmap,
+    /// Memory-map files and immediately pre-warm / pre-fault OS page cache into physical RAM
+    Preload,
+    /// Read entire database and index fully into heap-allocated RAM memory
+    Ram,
+}
+
+impl std::str::FromStr for LoadMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "mmap" | "map" => Ok(LoadMode::Mmap),
+            "preload" | "prewarm" | "warm" => Ok(LoadMode::Preload),
+            "ram" | "memory" | "mem" => Ok(LoadMode::Ram),
+            other => Err(format!(
+                "Unknown load mode '{}'. Valid options: mmap, preload, ram",
+                other
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for LoadMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadMode::Mmap => write!(f, "mmap"),
+            LoadMode::Preload => write!(f, "preload"),
+            LoadMode::Ram => write!(f, "ram"),
+        }
+    }
+}
+
+/// Pre-faults / warms a memory slice into physical RAM by sequentially reading 1 byte per 4KB page.
+#[inline]
+pub fn preload_memory(slice: &[u8]) {
+    if slice.is_empty() {
+        return;
+    }
+    const PAGE_SIZE: usize = 4096;
+    let mut sum: u64 = 0;
+    for chunk in slice.chunks(PAGE_SIZE) {
+        sum = sum.wrapping_add(chunk[0] as u64);
+    }
+    std::hint::black_box(sum);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScidFormat {

@@ -667,3 +667,106 @@ fn test_scid_search_comprehensive_matrix() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_load_mode_options_scid_and_pgn() -> Result<()> {
+    use scid_mgr::LoadMode;
+
+    let dir = tempdir()?;
+    let si5_path = dir.path().join("load_mode_test.si5");
+    let pgn_path = dir.path().join("load_mode_test.pgn");
+
+    let pgn_data = format!("{}\n\n{}", SAMPLE_GAME_1, SAMPLE_GAME_2);
+    std::fs::write(&pgn_path, &pgn_data)?;
+
+    let mut scid_db = ScidDatabaseWrapper::create(&si5_path, ScidFormat::Si5)?;
+    scid_db.add_game(SAMPLE_GAME_1)?;
+    scid_db.add_game(SAMPLE_GAME_2)?;
+    scid_db.save()?;
+
+    // 1. Test SCID with all three LoadMode variants
+    let scid_mmap = ScidDatabaseWrapper::open_with_mode(&si5_path, LoadMode::Mmap)?;
+    assert_eq!(scid_mmap.load_mode(), LoadMode::Mmap);
+    assert_eq!(scid_mmap.game_count(), 2);
+
+    let scid_preload = ScidDatabaseWrapper::open_with_mode(&si5_path, LoadMode::Preload)?;
+    assert_eq!(scid_preload.load_mode(), LoadMode::Preload);
+    assert_eq!(scid_preload.game_count(), 2);
+
+    let scid_ram = ScidDatabaseWrapper::open_with_mode(&si5_path, LoadMode::Ram)?;
+    assert_eq!(scid_ram.load_mode(), LoadMode::Ram);
+    assert_eq!(scid_ram.game_count(), 2);
+
+    // 2. Test PGN with all three LoadMode variants
+    let pgn_mmap = PgnDatabaseWrapper::open_with_mode(&pgn_path, LoadMode::Mmap)?;
+    assert_eq!(pgn_mmap.load_mode(), LoadMode::Mmap);
+    assert_eq!(pgn_mmap.game_count(), 2);
+
+    let pgn_preload = PgnDatabaseWrapper::open_with_mode(&pgn_path, LoadMode::Preload)?;
+    assert_eq!(pgn_preload.load_mode(), LoadMode::Preload);
+    assert_eq!(pgn_preload.game_count(), 2);
+
+    let pgn_ram = PgnDatabaseWrapper::open_with_mode(&pgn_path, LoadMode::Ram)?;
+    assert_eq!(pgn_ram.load_mode(), LoadMode::Ram);
+    assert_eq!(pgn_ram.game_count(), 2);
+
+    // 3. String parsing & display roundtrip
+    assert_eq!("mmap".parse::<LoadMode>().unwrap(), LoadMode::Mmap);
+    assert_eq!("preload".parse::<LoadMode>().unwrap(), LoadMode::Preload);
+    assert_eq!("ram".parse::<LoadMode>().unwrap(), LoadMode::Ram);
+    assert_eq!(LoadMode::Mmap.to_string(), "mmap");
+    assert_eq!(LoadMode::Preload.to_string(), "preload");
+    assert_eq!(LoadMode::Ram.to_string(), "ram");
+
+    Ok(())
+}
+
+#[test]
+fn test_opening_tree_date_formatting() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("dates_test.pgn");
+    let pgn_data = format!("{}\n\n{}", SAMPLE_GAME_1, SAMPLE_GAME_2);
+    std::fs::write(&pgn_path, &pgn_data)?;
+
+    let booster_path = scid_mgr::resolve_companion_booster_path(&pgn_path);
+    scid_mgr::BoostIndexBuilder::build_for_pgn(&pgn_path, Some(booster_path.clone()), None)?;
+
+    let boost_idx = scid_mgr::MmapBoostIndex::open(&booster_path)?;
+    let evaluator = scid_mgr::BoostSearchEvaluator::new(&boost_idx);
+
+    let pgn_db = PgnDatabaseWrapper::open(&pgn_path)?;
+    let meta_lookup = |gid: usize| -> Option<scid_mgr::BoostGameMeta> {
+        pgn_db.entries.get(gid).map(|e| {
+            let year = {
+                let y = (e.date >> 9) as u16;
+                if y > 0 { Some(y) } else { None }
+            };
+            let month = {
+                let m = ((e.date >> 5) & 0x0F) as u8;
+                if (1..=12).contains(&m) { Some(m) } else { None }
+            };
+            scid_mgr::BoostGameMeta::new(e.result, e.white_elo, e.black_elo, year, month)
+        })
+    };
+
+    let rep = evaluator
+        .calculate_opening_tree(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            None,
+            Some(500),
+            Some(meta_lookup),
+            None,
+        )?
+        .expect("Tree should exist");
+
+    assert!(!rep.moves.is_empty());
+    let e4_move = rep.moves.iter().find(|m| m.san == "e4").expect("e4 move found");
+    assert_eq!(e4_move.first_played, Some("1851-06".to_string()));
+    assert_eq!(e4_move.last_played, Some("1858-11".to_string()));
+    assert_eq!(e4_move.first_year, Some(1851));
+    assert_eq!(e4_move.first_month, Some(6));
+    assert_eq!(e4_move.last_year, Some(1858));
+    assert_eq!(e4_move.last_month, Some(11));
+
+    Ok(())
+}

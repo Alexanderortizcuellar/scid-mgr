@@ -39,6 +39,7 @@ pub struct ResponseMessage {
 pub fn run_interactive_server(
     initial_db_path: Option<PathBuf>,
     initial_threads: Option<usize>,
+    load_mode: crate::db::LoadMode,
 ) -> Result<()> {
     let max_system_threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -57,7 +58,7 @@ pub fn run_interactive_server(
         if path.exists() {
             let path_str = path.to_string_lossy().to_lowercase();
             if path_str.ends_with(".pgn") {
-                match PgnDatabaseWrapper::open(&path) {
+                match PgnDatabaseWrapper::open_with_mode(&path, load_mode) {
                     Ok(pgn) => {
                         eprintln!("[Server] Auto-opened PGN database: {}", path.display());
                         current_db = Some(DatabaseBackend::Pgn(pgn));
@@ -67,7 +68,7 @@ pub fn run_interactive_server(
                     }
                 }
             } else {
-                match ScidDatabaseWrapper::open(&path) {
+                match ScidDatabaseWrapper::open_with_mode(&path, load_mode) {
                     Ok(db) => {
                         eprintln!("[Server] Auto-opened SCID database: {}", path.display());
                         current_db = Some(DatabaseBackend::Scid(db));

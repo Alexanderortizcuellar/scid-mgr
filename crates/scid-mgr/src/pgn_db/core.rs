@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use memmap2::Mmap;
 use rayon::prelude::*;
 
-use crate::db::{GameFilter, GameSummary};
+use crate::db::{preload_memory, GameFilter, GameSummary, LoadMode};
 
 use super::builder::{save_index_file, scan_pgn_parallel};
 use super::types::{
@@ -22,6 +22,7 @@ pub struct PgnDatabaseWrapper {
     pub entries: Vec<CompactPgnRecord>,
     pub names: PgnNameTables,
     pub(crate) mmap: Arc<Mmap>,
+    pub(crate) load_mode: LoadMode,
     pub(crate) player_ranks: OnceLock<Vec<u32>>,
     pub(crate) event_ranks: OnceLock<Vec<u32>>,
     pub(crate) site_ranks: OnceLock<Vec<u32>>,
@@ -83,9 +84,15 @@ impl PgnDatabaseWrapper {
         Ok((names, records))
     }
 
-    /// Opens a .pgn file directly. If a companion single-file `<file>.pgn.idx` exists and matches,
-    /// it loads in a few milliseconds; otherwise it runs a parallel 1-pass index scan and caches.
+    /// Opens a .pgn file directly with default `LoadMode::Mmap`.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::open_with_mode(path, LoadMode::Mmap)
+    }
+
+    /// Opens a .pgn file directly with a specific `LoadMode` (Mmap, Preload, or Ram).
+    /// If a companion single-file `<file>.pgn.idx` exists and matches,
+    /// it loads in a few milliseconds; otherwise it runs a parallel 1-pass index scan and caches.
+    pub fn open_with_mode<P: AsRef<Path>>(path: P, load_mode: LoadMode) -> Result<Self> {
         let pgn_path = path.as_ref().to_path_buf();
         let file = File::open(&pgn_path)
             .with_context(|| format!("Failed to open PGN file: {}", pgn_path.display()))?;
@@ -98,6 +105,9 @@ impl PgnDatabaseWrapper {
             .as_secs();
 
         let mmap = unsafe { Mmap::map(&file)? };
+        if load_mode == LoadMode::Preload {
+            preload_memory(&mmap[..]);
+        }
         let mmap_arc = Arc::new(mmap);
 
         let idx_path = Self::companion_path(&pgn_path);
@@ -134,17 +144,32 @@ impl PgnDatabaseWrapper {
             }
         };
 
+        if load_mode == LoadMode::Preload && !entries.is_empty() {
+            let records_slice = unsafe {
+                std::slice::from_raw_parts(
+                    entries.as_ptr() as *const u8,
+                    entries.len() * std::mem::size_of::<CompactPgnRecord>(),
+                )
+            };
+            preload_memory(records_slice);
+        }
+
         Ok(Self {
             pgn_path,
             entries,
             names,
             mmap: mmap_arc,
+            load_mode,
             player_ranks: OnceLock::new(),
             event_ranks: OnceLock::new(),
             site_ranks: OnceLock::new(),
             query_cache: Mutex::new(None),
             column_sort_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn load_mode(&self) -> LoadMode {
+        self.load_mode
     }
 
     pub fn game_count(&self) -> usize {

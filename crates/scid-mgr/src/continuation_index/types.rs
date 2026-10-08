@@ -6,7 +6,7 @@ use shakmaty::{CastlingMode, Chess};
 pub use crate::tree_index::types::PackedMove;
 
 pub const HOT_GRAPH_MAGIC: &[u8; 8] = b"CHSHOTG1";
-pub const HOT_GRAPH_VERSION: u32 = 1;
+pub const HOT_GRAPH_VERSION: u32 = 2;
 pub const HEADER_SIZE: usize = 96;
 pub const NO_NODE: NodeId = u32::MAX;
 pub const NUM_BUILDER_STRIPES: usize = 256;
@@ -139,6 +139,16 @@ impl HotEdge {
     }
 
     #[inline]
+    pub fn first_played_str(&self) -> Option<String> {
+        let (y_opt, m_opt) = Self::unpack_year_month(self.first_year_month);
+        match (y_opt, m_opt) {
+            (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+            (Some(y), None) => Some(format!("{}", y)),
+            _ => None,
+        }
+    }
+
+    #[inline]
     pub fn last_year(&self) -> Option<u16> {
         Self::unpack_year_month(self.last_year_month).0
     }
@@ -222,6 +232,13 @@ impl HotGraphHeader {
         }
 
         let version = u32::from_le_bytes(bytes[8..12].try_into()?);
+        if version != HOT_GRAPH_VERSION {
+            bail!(
+                "Unsupported hot graph version: {} (expected {})",
+                version,
+                HOT_GRAPH_VERSION
+            );
+        }
         let flags = u32::from_le_bytes(bytes[12..16].try_into()?);
         let db_mtime_secs = u64::from_le_bytes(bytes[16..24].try_into()?);
         let db_file_size = u64::from_le_bytes(bytes[24..32].try_into()?);
@@ -291,9 +308,15 @@ pub struct ContinuationLine {
     #[serde(default)]
     pub black_wins: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_year: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_month: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_year: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_month: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_played: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_played: Option<String>,
 }

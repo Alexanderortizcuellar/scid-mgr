@@ -110,6 +110,9 @@ impl FeatureIndexHeader {
         }
 
         let version = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+        if version != FEATURE_INDEX_VERSION {
+            return None;
+        }
         let catalog_version = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
         let game_count = u32::from_le_bytes(bytes[16..20].try_into().ok()?);
         let endgame_bit_count = u16::from_le_bytes(bytes[20..22].try_into().ok()?);

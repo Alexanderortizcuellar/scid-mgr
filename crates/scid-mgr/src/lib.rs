@@ -107,7 +107,9 @@ pub use continuation_index::{
     ContinuationLine, ContinuationNode, ContinuationQuery, ContinuationResult, HotGraph,
     HotGraphBuildConfig, HotGraphHeader, HotGraphMetadata, HotGraphQueryable, MmapHotGraph,
 };
-pub use db::{DbStats, GameFilter, GameSummary, ScidDatabaseWrapper, ScidFormat};
+pub use db::{
+    preload_memory, DbStats, GameFilter, GameSummary, LoadMode, ScidDatabaseWrapper, ScidFormat,
+};
 pub use endgame_index::{
     resolve_companion_feat_path, CategoryPopularity, EndgameCatalog, EndgameDetector,
     EndgameFeatureDef, EndgameIndexBuilder, EndgamePopularityReport, EndgameQueryEngine,

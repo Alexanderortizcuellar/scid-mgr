@@ -247,3 +247,225 @@ fn test_booster_accelerated_hot_graph_build() {
     assert_eq!(tree_rep.total_games, 5);
     assert_eq!(tree_rep.moves.len(), 2);
 }
+
+#[test]
+fn test_booster_and_hot_graph_opening_tree_exact_match() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let pgn_path = tmp_dir.path().join("match_test.pgn");
+
+    let pgn_content = r#"
+[Event "Game 1"]
+[Date "2020.01.15"]
+[White "W1"]
+[Black "B1"]
+[Result "1-0"]
+
+1. e4 c5 2. c3 Nf6 3. e5 Nd5 4. d4 cxd4 5. cxd4 d6 6. Nf3 Nc6 1-0
+
+[Event "Game 2"]
+[Date "2021.05.20"]
+[White "W2"]
+[Black "B2"]
+[Result "0-1"]
+
+1. e4 c5 2. c3 Nf6 3. e5 Nd5 4. d4 cxd4 5. cxd4 d6 6. Nf3 e6 0-1
+
+[Event "Game 3"]
+[Date "2022.08.10"]
+[White "W3"]
+[Black "B3"]
+[Result "1/2-1/2"]
+
+1. e4 c5 2. c3 Nf6 3. e5 Nd5 4. Nf3 Nc6 5. Bc4 Nb6 6. Bb3 c4 1/2-1/2
+
+[Event "Game 4"]
+[Date "2023.11.05"]
+[White "W4"]
+[Black "B4"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 1-0
+
+[Event "Game 5"]
+[Date "2024.03.12"]
+[White "W5"]
+[Black "B5"]
+[Result "0-1"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 0-1
+"#;
+    std::fs::write(&pgn_path, pgn_content).unwrap();
+
+    // 1. Build booster index
+    let booster_path = tmp_dir.path().join("match_test.boost.idx");
+    let (_, game_count, _, _) = scid_mgr::search_booster::BoostIndexBuilder::build_for_pgn(
+        &pgn_path,
+        Some(booster_path.clone()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(game_count, 5);
+
+    // 2. Build hot graph index
+    let hot_path = tmp_dir.path().join("match_test.hot.idx");
+    let config = HotGraphBuildConfig {
+        max_ply: 20,
+        min_games: 1,
+    };
+    let meta = build_for_pgn(&pgn_path, &hot_path, config).unwrap();
+    assert_eq!(meta.db_game_count, 5);
+
+    let mmap_hot = MmapHotGraph::open(&hot_path).unwrap();
+    let boost_idx = scid_mgr::search_booster::MmapBoostIndex::open(&booster_path).unwrap();
+    let evaluator = scid_mgr::search_booster::BoostSearchEvaluator::new(&boost_idx);
+
+    let pgn_db = scid_mgr::pgn_db::PgnDatabaseWrapper::open(&pgn_path).unwrap();
+    let meta_lookup = |gid: usize| -> Option<scid_mgr::search_booster::BoostGameMeta> {
+        pgn_db.entries.get(gid).map(|e| {
+            let res = match e.result {
+                1 => 1,
+                2 => 2,
+                3 => 3,
+                _ => 0,
+            };
+            let year = {
+                let y = (e.date >> 9) as u16;
+                if y > 0 { Some(y) } else { None }
+            };
+            let month = {
+                let m = ((e.date >> 5) & 0x0F) as u8;
+                if (1..=12).contains(&m) { Some(m) } else { None }
+            };
+            scid_mgr::search_booster::BoostGameMeta::new(res, e.white_elo, e.black_elo, year, month)
+        })
+    };
+
+    // Test positions to compare
+    let test_positions = [
+        // Starting position
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        // After 1. e4
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+        // Alapin Sicilian after 1. e4 c5 2. c3 Nf6
+        "rnbqkb1r/pp1ppppp/5n2/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR w KQkq - 1 3",
+        // After 3. e5
+        "rnbqkb1r/pp1ppppp/5n2/2p1P3/8/2P5/PP1P1PPP/RNBQKBNR b KQkq - 0 3",
+        // After 3... Nd5
+        "rnbqkb1r/pp1ppppp/8/2pnP3/8/2P5/PP1P1PPP/RNBQKBNR w KQkq - 1 4",
+    ];
+
+    for fen in test_positions {
+        let target_pos = shakmaty::fen::Fen::from_ascii(fen.as_bytes())
+            .unwrap()
+            .into_position(shakmaty::CastlingMode::Standard)
+            .unwrap();
+
+        let hot_tree = mmap_hot.query_opening_tree(&target_pos, fen, None);
+        let boost_tree = evaluator.calculate_opening_tree(fen, None, Some(10), Some(meta_lookup), None).unwrap();
+
+        match (hot_tree, boost_tree) {
+            (Some(ht), Some(bt)) => {
+                assert_eq!(ht.total_games, bt.total_games, "total_games mismatch at FEN: {}", fen);
+                assert_eq!(ht.white_wins, bt.white_wins, "white_wins mismatch at FEN: {}", fen);
+                assert_eq!(ht.draws, bt.draws, "draws mismatch at FEN: {}", fen);
+                assert_eq!(ht.black_wins, bt.black_wins, "black_wins mismatch at FEN: {}", fen);
+                assert_eq!(ht.moves.len(), bt.moves.len(), "moves count mismatch at FEN: {}", fen);
+
+                for (hm, bm) in ht.moves.iter().zip(bt.moves.iter()) {
+                    assert_eq!(hm.san, bm.san, "Move san mismatch");
+                    assert_eq!(hm.uci, bm.uci, "Move uci mismatch");
+                    assert_eq!(hm.total_games, bm.total_games, "Move total_games mismatch for {}", hm.san);
+                    assert_eq!(hm.white_wins, bm.white_wins, "Move white_wins mismatch for {}", hm.san);
+                    assert_eq!(hm.draws, bm.draws, "Move draws mismatch for {}", hm.san);
+                    assert_eq!(hm.black_wins, bm.black_wins, "Move black_wins mismatch for {}", hm.san);
+                    assert_eq!(hm.first_year, bm.first_year, "Move first_year mismatch for {}", hm.san);
+                    assert_eq!(hm.first_month, bm.first_month, "Move first_month mismatch for {}", hm.san);
+                    assert_eq!(hm.last_year, bm.last_year, "Move last_year mismatch for {}", hm.san);
+                    assert_eq!(hm.last_month, bm.last_month, "Move last_month mismatch for {}", hm.san);
+                    assert_eq!(hm.last_played, bm.last_played, "Move last_played mismatch for {}", hm.san);
+                }
+            }
+            (None, None) => {}
+            _ => panic!("One index found position while other did not for FEN: {}", fen),
+        }
+    }
+}
+
+#[test]
+fn test_master_pgn_booster_and_hot_graph_comparison() {
+    let master_path = std::path::Path::new(r#"C:\Users\ASUS\programming\qt_programs\chess\twchess\data\master.pgn"#);
+    if !master_path.exists() {
+        return;
+    }
+
+    let booster_path = master_path.with_extension("pgn.boost.idx");
+    if !booster_path.exists() {
+        return;
+    }
+
+    // Rebuild hot graph to ensure latest v2 layout with packed dates
+    let hot_path = master_path.with_extension("pgn.hot.idx");
+    let config = HotGraphBuildConfig {
+        max_ply: 24,
+        min_games: 1,
+    };
+    let meta = build_for_pgn(master_path, &hot_path, config).expect("Should build hot graph for master.pgn");
+    assert!(meta.db_game_count > 0);
+
+    let mmap_hot = MmapHotGraph::open(&hot_path).expect("Should open hot graph v2");
+    let boost_idx = scid_mgr::search_booster::MmapBoostIndex::open(&booster_path).expect("Should open booster index");
+    let evaluator = scid_mgr::search_booster::BoostSearchEvaluator::new(&boost_idx);
+
+    let pgn_db = scid_mgr::pgn_db::PgnDatabaseWrapper::open(master_path).expect("Should open pgn db");
+    let meta_lookup = |gid: usize| -> Option<scid_mgr::search_booster::BoostGameMeta> {
+        pgn_db.entries.get(gid).map(|e| {
+            let res = match e.result {
+                1 => 1,
+                2 => 2,
+                3 => 3,
+                _ => 0,
+            };
+            let year = {
+                let y = (e.date >> 9) as u16;
+                if y > 0 { Some(y) } else { None }
+            };
+            let month = {
+                let m = ((e.date >> 5) & 0x0F) as u8;
+                if (1..=12).contains(&m) { Some(m) } else { None }
+            };
+            scid_mgr::search_booster::BoostGameMeta::new(res, e.white_elo, e.black_elo, year, month)
+        })
+    };
+
+    let target_fen = "rnbqkb1r/pp1ppppp/5n2/2p5/4P3/2P5/PP1P1PPP/RNBQKBNR w KQkq - 1 3";
+    let target_pos = shakmaty::fen::Fen::from_ascii(target_fen.as_bytes())
+        .unwrap()
+        .into_position(shakmaty::CastlingMode::Standard)
+        .unwrap();
+
+    let hot_tree = mmap_hot.query_opening_tree(&target_pos, target_fen, None).expect("Hot graph tree should exist");
+    let boost_tree = evaluator
+        .calculate_opening_tree(target_fen, None, Some(10), Some(meta_lookup), None)
+        .expect("Booster tree evaluation ok")
+        .expect("Booster tree should exist");
+
+    assert_eq!(hot_tree.total_games, boost_tree.total_games);
+    assert_eq!(hot_tree.white_wins, boost_tree.white_wins);
+    assert_eq!(hot_tree.draws, boost_tree.draws);
+    assert_eq!(hot_tree.black_wins, boost_tree.black_wins);
+    assert_eq!(hot_tree.moves.len(), boost_tree.moves.len());
+
+    for (hm, bm) in hot_tree.moves.iter().zip(boost_tree.moves.iter()) {
+        assert_eq!(hm.san, bm.san);
+        assert_eq!(hm.uci, bm.uci);
+        assert_eq!(hm.total_games, bm.total_games, "Game count mismatch for move {}", hm.san);
+        assert_eq!(hm.white_wins, bm.white_wins, "White wins mismatch for move {}", hm.san);
+        assert_eq!(hm.draws, bm.draws, "Draws mismatch for move {}", hm.san);
+        assert_eq!(hm.black_wins, bm.black_wins, "Black wins mismatch for move {}", hm.san);
+        assert_eq!(hm.first_year, bm.first_year, "First year mismatch for move {}", hm.san);
+        assert_eq!(hm.first_month, bm.first_month, "First month mismatch for move {}", hm.san);
+        assert_eq!(hm.last_year, bm.last_year, "Last year mismatch for move {}", hm.san);
+        assert_eq!(hm.last_month, bm.last_month, "Last month mismatch for move {}", hm.san);
+        assert_eq!(hm.last_played, bm.last_played, "Last played mismatch for move {}", hm.san);
+    }
+}

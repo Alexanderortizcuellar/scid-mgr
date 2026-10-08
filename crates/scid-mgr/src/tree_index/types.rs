@@ -33,7 +33,7 @@ pub struct TreeIndexDiagnostics {
 /// - Bits 0..5: From Square (0..63)
 /// - Bits 6..11: To Square (0..63)
 /// - Bits 12..14: Promotion Piece (0=None, 1=Knight, 2=Bishop, 3=Rook, 4=Queen)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub struct PackedMove(pub u16);
 
 impl PackedMove {
@@ -132,6 +132,13 @@ impl TreeIndexHeader {
         }
 
         let version = u32::from_le_bytes(bytes[8..12].try_into()?);
+        if version != TREE_INDEX_VERSION {
+            anyhow::bail!(
+                "Unsupported tree index version: {} (expected {})",
+                version,
+                TREE_INDEX_VERSION
+            );
+        }
         let flags = u32::from_le_bytes(bytes[12..16].try_into()?);
         let db_mtime_secs = u64::from_le_bytes(bytes[16..24].try_into()?);
         let db_size_bytes = u64::from_le_bytes(bytes[24..32].try_into()?);
@@ -321,6 +328,8 @@ pub struct OpeningTreeMoveView {
     pub last_year: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_month: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_played: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_played: Option<String>,
     pub sample_game_ids: Vec<u32>,
