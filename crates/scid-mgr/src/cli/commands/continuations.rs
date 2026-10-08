@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::continuation_index::{
     build_for_pgn, build_for_scid, calculate_continuations_for_pgn,
     calculate_continuations_for_scid, resolve_companion_hot_path, ContinuationQuery,
-    ContinuationResult, HotGraphBuildConfig, HotGraphQueryable, MmapHotGraph,
+    ContinuationResult, HotGraphBuildConfig,
 };
 use crate::db::ScidDatabaseWrapper;
 use crate::position_index::PositionIndex;

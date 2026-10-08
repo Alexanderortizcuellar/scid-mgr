@@ -4,7 +4,6 @@ use std::time::Instant;
 use crate::continuation_index::{
     calculate_continuations_for_pgn_with_progress, calculate_continuations_for_scid_with_progress,
     resolve_companion_hot_path, ContinuationQuery, ContinuationResult, HotGraphBuildConfig,
-    HotGraphQueryable, MmapHotGraph,
 };
 use crate::position_index::PositionIndex;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
@@ -91,18 +90,6 @@ pub fn handle_continuations(
         DatabaseBackend::Scid(s) => s.index_path(),
         DatabaseBackend::Pgn(p) => p.pgn_path.as_path(),
     };
-
-    // 1. Instant Precalculated Continuations Graph Index (.hot.idx) - Sub-millisecond (< 1 ms) lookup
-    // NOTE: .hot.idx represents the unfiltered full database graph. If the user requests filtered
-    // search results or custom player/rating filters, .hot.idx is bypassed to dynamically evaluate
-    // the filtered candidate subset via .boost.idx.
-    let has_filter = req
-        .params
-        .get("use_search_results")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        || req.params.get("filter").is_some()
-        || req.params.get("game_ids").is_some();
 
     // 1. Search Booster (.boost.idx) Calculation (Ultra-fast exact cohort evaluation)
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);

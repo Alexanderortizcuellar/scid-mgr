@@ -1,4 +1,4 @@
-use crate::continuation_index::{ContinuationQuery, HotGraphQueryable};
+use crate::continuation_index::ContinuationQuery;
 use crate::db::GameFilter;
 use crate::endgame_index::{
     resolve_companion_feat_path, EndgameCatalog, EndgameQueryEngine, MmapFeatureIndex,
@@ -504,7 +504,7 @@ fn evaluate_position_matches(
 #[allow(clippy::too_many_arguments)]
 fn calculate_tree_and_continuations(
     fen_str: &str,
-    target_pos: &Chess,
+    _target_pos: &Chess,
     db: &DatabaseBackend,
     db_path: &std::path::Path,
     current_tree_index: &mut Option<TreeIndex>,

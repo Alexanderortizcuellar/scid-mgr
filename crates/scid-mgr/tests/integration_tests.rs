@@ -739,11 +739,19 @@ fn test_opening_tree_date_formatting() -> Result<()> {
         pgn_db.entries.get(gid).map(|e| {
             let year = {
                 let y = (e.date >> 9) as u16;
-                if y > 0 { Some(y) } else { None }
+                if y > 0 {
+                    Some(y)
+                } else {
+                    None
+                }
             };
             let month = {
                 let m = ((e.date >> 5) & 0x0F) as u8;
-                if (1..=12).contains(&m) { Some(m) } else { None }
+                if (1..=12).contains(&m) {
+                    Some(m)
+                } else {
+                    None
+                }
             };
             scid_mgr::BoostGameMeta::new(e.result, e.white_elo, e.black_elo, year, month)
         })
@@ -760,7 +768,11 @@ fn test_opening_tree_date_formatting() -> Result<()> {
         .expect("Tree should exist");
 
     assert!(!rep.moves.is_empty());
-    let e4_move = rep.moves.iter().find(|m| m.san == "e4").expect("e4 move found");
+    let e4_move = rep
+        .moves
+        .iter()
+        .find(|m| m.san == "e4")
+        .expect("e4 move found");
     assert_eq!(e4_move.first_played, Some("1851-06".to_string()));
     assert_eq!(e4_move.last_played, Some("1858-11".to_string()));
     assert_eq!(e4_move.first_year, Some(1851));

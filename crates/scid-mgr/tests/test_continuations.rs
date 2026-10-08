@@ -330,11 +330,19 @@ fn test_booster_and_hot_graph_opening_tree_exact_match() {
             };
             let year = {
                 let y = (e.date >> 9) as u16;
-                if y > 0 { Some(y) } else { None }
+                if y > 0 {
+                    Some(y)
+                } else {
+                    None
+                }
             };
             let month = {
                 let m = ((e.date >> 5) & 0x0F) as u8;
-                if (1..=12).contains(&m) { Some(m) } else { None }
+                if (1..=12).contains(&m) {
+                    Some(m)
+                } else {
+                    None
+                }
             };
             scid_mgr::search_booster::BoostGameMeta::new(res, e.white_elo, e.black_elo, year, month)
         })
@@ -361,39 +369,95 @@ fn test_booster_and_hot_graph_opening_tree_exact_match() {
             .unwrap();
 
         let hot_tree = mmap_hot.query_opening_tree(&target_pos, fen, None);
-        let boost_tree = evaluator.calculate_opening_tree(fen, None, Some(10), Some(meta_lookup), None).unwrap();
+        let boost_tree = evaluator
+            .calculate_opening_tree(fen, None, Some(10), Some(meta_lookup), None)
+            .unwrap();
 
         match (hot_tree, boost_tree) {
             (Some(ht), Some(bt)) => {
-                assert_eq!(ht.total_games, bt.total_games, "total_games mismatch at FEN: {}", fen);
-                assert_eq!(ht.white_wins, bt.white_wins, "white_wins mismatch at FEN: {}", fen);
+                assert_eq!(
+                    ht.total_games, bt.total_games,
+                    "total_games mismatch at FEN: {}",
+                    fen
+                );
+                assert_eq!(
+                    ht.white_wins, bt.white_wins,
+                    "white_wins mismatch at FEN: {}",
+                    fen
+                );
                 assert_eq!(ht.draws, bt.draws, "draws mismatch at FEN: {}", fen);
-                assert_eq!(ht.black_wins, bt.black_wins, "black_wins mismatch at FEN: {}", fen);
-                assert_eq!(ht.moves.len(), bt.moves.len(), "moves count mismatch at FEN: {}", fen);
+                assert_eq!(
+                    ht.black_wins, bt.black_wins,
+                    "black_wins mismatch at FEN: {}",
+                    fen
+                );
+                assert_eq!(
+                    ht.moves.len(),
+                    bt.moves.len(),
+                    "moves count mismatch at FEN: {}",
+                    fen
+                );
 
                 for (hm, bm) in ht.moves.iter().zip(bt.moves.iter()) {
                     assert_eq!(hm.san, bm.san, "Move san mismatch");
                     assert_eq!(hm.uci, bm.uci, "Move uci mismatch");
-                    assert_eq!(hm.total_games, bm.total_games, "Move total_games mismatch for {}", hm.san);
-                    assert_eq!(hm.white_wins, bm.white_wins, "Move white_wins mismatch for {}", hm.san);
+                    assert_eq!(
+                        hm.total_games, bm.total_games,
+                        "Move total_games mismatch for {}",
+                        hm.san
+                    );
+                    assert_eq!(
+                        hm.white_wins, bm.white_wins,
+                        "Move white_wins mismatch for {}",
+                        hm.san
+                    );
                     assert_eq!(hm.draws, bm.draws, "Move draws mismatch for {}", hm.san);
-                    assert_eq!(hm.black_wins, bm.black_wins, "Move black_wins mismatch for {}", hm.san);
-                    assert_eq!(hm.first_year, bm.first_year, "Move first_year mismatch for {}", hm.san);
-                    assert_eq!(hm.first_month, bm.first_month, "Move first_month mismatch for {}", hm.san);
-                    assert_eq!(hm.last_year, bm.last_year, "Move last_year mismatch for {}", hm.san);
-                    assert_eq!(hm.last_month, bm.last_month, "Move last_month mismatch for {}", hm.san);
-                    assert_eq!(hm.last_played, bm.last_played, "Move last_played mismatch for {}", hm.san);
+                    assert_eq!(
+                        hm.black_wins, bm.black_wins,
+                        "Move black_wins mismatch for {}",
+                        hm.san
+                    );
+                    assert_eq!(
+                        hm.first_year, bm.first_year,
+                        "Move first_year mismatch for {}",
+                        hm.san
+                    );
+                    assert_eq!(
+                        hm.first_month, bm.first_month,
+                        "Move first_month mismatch for {}",
+                        hm.san
+                    );
+                    assert_eq!(
+                        hm.last_year, bm.last_year,
+                        "Move last_year mismatch for {}",
+                        hm.san
+                    );
+                    assert_eq!(
+                        hm.last_month, bm.last_month,
+                        "Move last_month mismatch for {}",
+                        hm.san
+                    );
+                    assert_eq!(
+                        hm.last_played, bm.last_played,
+                        "Move last_played mismatch for {}",
+                        hm.san
+                    );
                 }
             }
             (None, None) => {}
-            _ => panic!("One index found position while other did not for FEN: {}", fen),
+            _ => panic!(
+                "One index found position while other did not for FEN: {}",
+                fen
+            ),
         }
     }
 }
 
 #[test]
 fn test_master_pgn_booster_and_hot_graph_comparison() {
-    let master_path = std::path::Path::new(r#"C:\Users\ASUS\programming\qt_programs\chess\twchess\data\master.pgn"#);
+    let master_path = std::path::Path::new(
+        r#"C:\Users\ASUS\programming\qt_programs\chess\twchess\data\master.pgn"#,
+    );
     if !master_path.exists() {
         return;
     }
@@ -408,14 +472,17 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
         max_ply: 24,
         min_games: 1,
     };
-    let meta = build_for_pgn(master_path, &hot_path, config).expect("Should build hot graph for master.pgn");
+    let meta = build_for_pgn(master_path, &hot_path, config)
+        .expect("Should build hot graph for master.pgn");
     assert!(meta.db_game_count > 0);
 
     let mmap_hot = MmapHotGraph::open(&hot_path).expect("Should open hot graph v2");
-    let boost_idx = scid_mgr::search_booster::MmapBoostIndex::open(&booster_path).expect("Should open booster index");
+    let boost_idx = scid_mgr::search_booster::MmapBoostIndex::open(&booster_path)
+        .expect("Should open booster index");
     let evaluator = scid_mgr::search_booster::BoostSearchEvaluator::new(&boost_idx);
 
-    let pgn_db = scid_mgr::pgn_db::PgnDatabaseWrapper::open(master_path).expect("Should open pgn db");
+    let pgn_db =
+        scid_mgr::pgn_db::PgnDatabaseWrapper::open(master_path).expect("Should open pgn db");
     let meta_lookup = |gid: usize| -> Option<scid_mgr::search_booster::BoostGameMeta> {
         pgn_db.entries.get(gid).map(|e| {
             let res = match e.result {
@@ -426,11 +493,19 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
             };
             let year = {
                 let y = (e.date >> 9) as u16;
-                if y > 0 { Some(y) } else { None }
+                if y > 0 {
+                    Some(y)
+                } else {
+                    None
+                }
             };
             let month = {
                 let m = ((e.date >> 5) & 0x0F) as u8;
-                if (1..=12).contains(&m) { Some(m) } else { None }
+                if (1..=12).contains(&m) {
+                    Some(m)
+                } else {
+                    None
+                }
             };
             scid_mgr::search_booster::BoostGameMeta::new(res, e.white_elo, e.black_elo, year, month)
         })
@@ -442,7 +517,9 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
         .into_position(shakmaty::CastlingMode::Standard)
         .unwrap();
 
-    let hot_tree = mmap_hot.query_opening_tree(&target_pos, target_fen, None).expect("Hot graph tree should exist");
+    let hot_tree = mmap_hot
+        .query_opening_tree(&target_pos, target_fen, None)
+        .expect("Hot graph tree should exist");
     let boost_tree = evaluator
         .calculate_opening_tree(target_fen, None, Some(10), Some(meta_lookup), None)
         .expect("Booster tree evaluation ok")
@@ -452,11 +529,31 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
     println!("BOOSTER TOTAL GAMES: {}", boost_tree.total_games);
     println!("HOT GRAPH MOVES ({} moves):", hot_tree.moves.len());
     for (i, m) in hot_tree.moves.iter().enumerate() {
-        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{}, first:{:?}, last:{:?})", i+1, m.san, m.total_games, m.white_wins, m.draws, m.black_wins, m.first_played, m.last_played);
+        println!(
+            "  #{}: {} (games: {}, w:{}, d:{}, b:{}, first:{:?}, last:{:?})",
+            i + 1,
+            m.san,
+            m.total_games,
+            m.white_wins,
+            m.draws,
+            m.black_wins,
+            m.first_played,
+            m.last_played
+        );
     }
     println!("BOOSTER MOVES ({} moves):", boost_tree.moves.len());
     for (i, m) in boost_tree.moves.iter().enumerate() {
-        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{}, first:{:?}, last:{:?})", i+1, m.san, m.total_games, m.white_wins, m.draws, m.black_wins, m.first_played, m.last_played);
+        println!(
+            "  #{}: {} (games: {}, w:{}, d:{}, b:{}, first:{:?}, last:{:?})",
+            i + 1,
+            m.san,
+            m.total_games,
+            m.white_wins,
+            m.draws,
+            m.black_wins,
+            m.first_played,
+            m.last_played
+        );
     }
 
     // 1. Hot Graph Node Index
@@ -470,7 +567,7 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
         hot_idx: None,
         pos_idx: None,
     };
-    
+
     // 2. Booster Index
     let boost_cont = evaluator
         .calculate_continuations(&boost_query, None, Some(meta_lookup))
@@ -479,11 +576,27 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
 
     println!("HOT GRAPH LINES ({} lines):", hot_cont.lines.len());
     for (i, l) in hot_cont.lines.iter().enumerate() {
-        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{})", i+1, l.formatted, l.games, l.white_wins, l.draws, l.black_wins);
+        println!(
+            "  #{}: {} (games: {}, w:{}, d:{}, b:{})",
+            i + 1,
+            l.formatted,
+            l.games,
+            l.white_wins,
+            l.draws,
+            l.black_wins
+        );
     }
     println!("BOOSTER LINES ({} lines):", boost_cont.lines.len());
     for (i, l) in boost_cont.lines.iter().enumerate() {
-        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{})", i+1, l.formatted, l.games, l.white_wins, l.draws, l.black_wins);
+        println!(
+            "  #{}: {} (games: {}, w:{}, d:{}, b:{})",
+            i + 1,
+            l.formatted,
+            l.games,
+            l.white_wins,
+            l.draws,
+            l.black_wins
+        );
     }
 
     // 3. Ground Truth Dynamic Engine (uses full Shakmaty Position + Zobrist hash with all castling/en-passant flags)
@@ -491,22 +604,61 @@ fn test_master_pgn_booster_and_hot_graph_comparison() {
         master_path,
         &boost_query,
         None,
-    ).expect("Dynamic continuations should succeed");
+    )
+    .expect("Dynamic continuations should succeed");
 
-    println!("DYNAMIC ENGINE (GROUND TRUTH ZOBRIST) LINES ({} lines):", dyn_res.lines.len());
+    println!(
+        "DYNAMIC ENGINE (GROUND TRUTH ZOBRIST) LINES ({} lines):",
+        dyn_res.lines.len()
+    );
     for (i, l) in dyn_res.lines.iter().enumerate() {
-        println!("  #{}: {} (games: {}, w:{}, d:{}, b:{})", i+1, l.formatted, l.games, l.white_wins, l.draws, l.black_wins);
+        println!(
+            "  #{}: {} (games: {}, w:{}, d:{}, b:{})",
+            i + 1,
+            l.formatted,
+            l.games,
+            l.white_wins,
+            l.draws,
+            l.black_wins
+        );
     }
-
 
     // Verify that Search Booster and Ground Truth Dynamic Engine match 100%
-    assert_eq!(boost_cont.lines.len(), dyn_res.lines.len(), "Line count mismatch between Booster and Dynamic engine");
-    for (i, (bl, dl)) in boost_cont.lines.iter().zip(dyn_res.lines.iter()).enumerate() {
-        assert_eq!(bl.formatted, dl.formatted, "Line #{} formatted mismatch between Booster and Ground truth", i+1);
-        assert_eq!(bl.games, dl.games, "Line #{} games mismatch between Booster and Ground truth", i+1);
-        assert_eq!(bl.white_wins, dl.white_wins, "Line #{} white_wins mismatch", i+1);
-        assert_eq!(bl.draws, dl.draws, "Line #{} draws mismatch", i+1);
-        assert_eq!(bl.black_wins, dl.black_wins, "Line #{} black_wins mismatch", i+1);
+    assert_eq!(
+        boost_cont.lines.len(),
+        dyn_res.lines.len(),
+        "Line count mismatch between Booster and Dynamic engine"
+    );
+    for (i, (bl, dl)) in boost_cont
+        .lines
+        .iter()
+        .zip(dyn_res.lines.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            bl.formatted,
+            dl.formatted,
+            "Line #{} formatted mismatch between Booster and Ground truth",
+            i + 1
+        );
+        assert_eq!(
+            bl.games,
+            dl.games,
+            "Line #{} games mismatch between Booster and Ground truth",
+            i + 1
+        );
+        assert_eq!(
+            bl.white_wins,
+            dl.white_wins,
+            "Line #{} white_wins mismatch",
+            i + 1
+        );
+        assert_eq!(bl.draws, dl.draws, "Line #{} draws mismatch", i + 1);
+        assert_eq!(
+            bl.black_wins,
+            dl.black_wins,
+            "Line #{} black_wins mismatch",
+            i + 1
+        );
     }
 }
-

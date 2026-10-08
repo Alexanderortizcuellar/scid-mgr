@@ -33,7 +33,9 @@ pub struct TreeIndexDiagnostics {
 /// - Bits 0..5: From Square (0..63)
 /// - Bits 6..11: To Square (0..63)
 /// - Bits 12..14: Promotion Piece (0=None, 1=Knight, 2=Bishop, 3=Rook, 4=Queen)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub struct PackedMove(pub u16);
 
 impl PackedMove {

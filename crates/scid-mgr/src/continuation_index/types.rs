@@ -52,14 +52,14 @@ impl HotNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[repr(C)]
 pub struct HotEdge {
-    pub packed_move: u16,        // 2 bytes
-    pub first_year_month: u16,   // 2 bytes: (year << 4) | (month & 0x0F)
-    pub last_year_month: u16,    // 2 bytes: (year << 4) | (month & 0x0F)
-    pub _padding: u16,           // 2 bytes (alignment)
-    pub target_node: u32,        // 4 bytes: NodeId or NO_NODE if beyond hot cutoff
-    pub total_games: u32,        // 4 bytes
-    pub white_wins: u32,         // 4 bytes
-    pub black_wins: u32,         // 4 bytes
+    pub packed_move: u16,      // 2 bytes
+    pub first_year_month: u16, // 2 bytes: (year << 4) | (month & 0x0F)
+    pub last_year_month: u16,  // 2 bytes: (year << 4) | (month & 0x0F)
+    pub _padding: u16,         // 2 bytes (alignment)
+    pub target_node: u32,      // 4 bytes: NodeId or NO_NODE if beyond hot cutoff
+    pub total_games: u32,      // 4 bytes
+    pub white_wins: u32,       // 4 bytes
+    pub black_wins: u32,       // 4 bytes
 }
 
 impl HotEdge {
@@ -87,7 +87,8 @@ impl HotEdge {
 
     #[inline]
     pub fn draws(&self) -> u32 {
-        self.total_games.saturating_sub(self.white_wins + self.black_wins)
+        self.total_games
+            .saturating_sub(self.white_wins + self.black_wins)
     }
 
     #[inline]
