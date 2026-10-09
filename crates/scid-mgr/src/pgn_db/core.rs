@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
@@ -8,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use memmap2::Mmap;
 use rayon::prelude::*;
 
-use crate::db::{preload_memory, GameFilter, GameSummary, IndexStorage, LoadMode};
+use crate::db::{preload_memory, GameFilter, GameSummary, LoadMode};
 
 use super::builder::{save_index_file, scan_pgn_parallel};
 use super::types::{
@@ -18,7 +19,7 @@ use super::types::{
 /// In-memory wrapper and query engine for directly opened .pgn files
 pub struct PgnDatabaseWrapper {
     pub pgn_path: PathBuf,
-    pub entries: IndexStorage<CompactPgnRecord>,
+    pub entries: Vec<CompactPgnRecord>,
     pub names: PgnNameTables,
     pub(crate) mmap: Arc<Mmap>,
     pub(crate) load_mode: LoadMode,
@@ -44,21 +45,18 @@ impl PgnDatabaseWrapper {
         res
     }
 
-    /// Loads binary `.pgn.idx` index file with specific `LoadMode` (Zero-copy Mmap, Preload, or Ram)
-    pub fn load_index_file_with_mode(
+    /// Loads binary `.pgn.idx` index file if valid and fresh
+    pub fn load_index_file(
         idx_path: &Path,
         expected_mtime: u64,
         expected_len: u64,
-        load_mode: LoadMode,
-    ) -> Result<(PgnNameTables, IndexStorage<CompactPgnRecord>)> {
-        let file = File::open(idx_path)?;
-        let idx_mmap = Arc::new(unsafe { Mmap::map(&file)? });
+    ) -> Result<(PgnNameTables, Vec<CompactPgnRecord>)> {
+        let mut file = File::open(idx_path)?;
         let header_size = std::mem::size_of::<PgnIndexHeader>();
-        if idx_mmap.len() < header_size {
-            return Err(anyhow!("Index file smaller than header"));
-        }
+        let mut header_buf = vec![0u8; header_size];
+        file.read_exact(&mut header_buf)?;
 
-        let header: PgnIndexHeader = unsafe { std::ptr::read(idx_mmap.as_ptr() as *const _) };
+        let header: PgnIndexHeader = unsafe { std::ptr::read(header_buf.as_ptr() as *const _) };
 
         if &header.magic != PGN_INDEX_MAGIC || header.version != PGN_INDEX_VERSION {
             return Err(anyhow!("Invalid PGN index header or unsupported version"));
@@ -68,61 +66,22 @@ impl PgnDatabaseWrapper {
         }
 
         // Read Namebase
-        let nb_start = header.namebase_offset as usize;
-        let nb_end = nb_start + header.namebase_len as usize;
-        if nb_end > idx_mmap.len() {
-            return Err(anyhow!("Index corrupted: namebase extends past file end"));
-        }
-        let names: PgnNameTables = bincode::deserialize(&idx_mmap[nb_start..nb_end])?;
+        file.seek(SeekFrom::Start(header.namebase_offset))?;
+        let mut namebase_buf = vec![0u8; header.namebase_len as usize];
+        file.read_exact(&mut namebase_buf)?;
+        let names: PgnNameTables = bincode::deserialize(&namebase_buf)?;
 
         // Read Records
-        let rec_start = header.records_offset as usize;
+        file.seek(SeekFrom::Start(header.records_offset))?;
         let game_count = header.game_count as usize;
-        let rec_bytes = game_count * std::mem::size_of::<CompactPgnRecord>();
-        if rec_start + rec_bytes > idx_mmap.len() {
-            return Err(anyhow!("Index corrupted: records extend past file end"));
-        }
-
-        if load_mode == LoadMode::Preload {
-            preload_memory(&idx_mmap[..]);
-        }
-
-        let entries = match load_mode {
-            LoadMode::Ram => {
-                let mut records = vec![CompactPgnRecord::default(); game_count];
-                let records_slice = unsafe {
-                    std::slice::from_raw_parts_mut(records.as_mut_ptr() as *mut u8, rec_bytes)
-                };
-                records_slice.copy_from_slice(&idx_mmap[rec_start..rec_start + rec_bytes]);
-                IndexStorage::from_vec(records)
-            }
-            LoadMode::Mmap | LoadMode::Preload => {
-                let ptr = unsafe { idx_mmap.as_ptr().add(rec_start) };
-                if (ptr as usize) % std::mem::align_of::<CompactPgnRecord>() == 0 {
-                    unsafe { IndexStorage::from_mmap(idx_mmap, rec_start, game_count) }
-                } else {
-                    let mut records = vec![CompactPgnRecord::default(); game_count];
-                    let records_slice = unsafe {
-                        std::slice::from_raw_parts_mut(records.as_mut_ptr() as *mut u8, rec_bytes)
-                    };
-                    records_slice.copy_from_slice(&idx_mmap[rec_start..rec_start + rec_bytes]);
-                    IndexStorage::from_vec(records)
-                }
-            }
+        let mut records = vec![CompactPgnRecord::default(); game_count];
+        let records_byte_len = game_count * std::mem::size_of::<CompactPgnRecord>();
+        let records_slice = unsafe {
+            std::slice::from_raw_parts_mut(records.as_mut_ptr() as *mut u8, records_byte_len)
         };
+        file.read_exact(records_slice)?;
 
-        Ok((names, entries))
-    }
-
-    /// Loads binary `.pgn.idx` index file if valid and fresh (Ram mode fallback)
-    pub fn load_index_file(
-        idx_path: &Path,
-        expected_mtime: u64,
-        expected_len: u64,
-    ) -> Result<(PgnNameTables, Vec<CompactPgnRecord>)> {
-        let (names, storage) =
-            Self::load_index_file_with_mode(idx_path, expected_mtime, expected_len, LoadMode::Ram)?;
-        Ok((names, storage.to_vec()))
+        Ok((names, records))
     }
 
     /// Opens a .pgn file directly with default `LoadMode::Mmap`.
@@ -132,7 +91,7 @@ impl PgnDatabaseWrapper {
 
     /// Opens a .pgn file directly with a specific `LoadMode` (Mmap, Preload, or Ram).
     /// If a companion single-file `<file>.pgn.idx` exists and matches,
-    /// it loads in <1ms without heap allocations; otherwise it runs a parallel 1-pass index scan and caches.
+    /// it loads in a few milliseconds; otherwise it runs a parallel 1-pass index scan and caches.
     pub fn open_with_mode<P: AsRef<Path>>(path: P, load_mode: LoadMode) -> Result<Self> {
         let pgn_path = path.as_ref().to_path_buf();
         let file = File::open(&pgn_path)
@@ -155,9 +114,7 @@ impl PgnDatabaseWrapper {
         let mut loaded_data = None;
 
         if idx_path.exists() {
-            if let Ok(loaded) =
-                Self::load_index_file_with_mode(&idx_path, pgn_mtime_secs, pgn_len, load_mode)
-            {
+            if let Ok(loaded) = Self::load_index_file(&idx_path, pgn_mtime_secs, pgn_len) {
                 loaded_data = Some(loaded);
             }
         }
@@ -183,16 +140,19 @@ impl PgnDatabaseWrapper {
                     scanned_names.sites.len(),
                     elapsed.as_secs_f64()
                 );
-                if let Ok(loaded) =
-                    Self::load_index_file_with_mode(&idx_path, pgn_mtime_secs, pgn_len, load_mode)
-                {
-                    loaded
-                } else {
-                    let storage = IndexStorage::from_vec(scanned_entries);
-                    (scanned_names, storage)
-                }
+                (scanned_names, scanned_entries)
             }
         };
+
+        if load_mode == LoadMode::Preload && !entries.is_empty() {
+            let records_slice = unsafe {
+                std::slice::from_raw_parts(
+                    entries.as_ptr() as *const u8,
+                    entries.len() * std::mem::size_of::<CompactPgnRecord>(),
+                )
+            };
+            preload_memory(records_slice);
+        }
 
         Ok(Self {
             pgn_path,

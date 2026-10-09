@@ -127,9 +127,9 @@ impl FastReplayState {
         let mut w = 0u8;
         let mut b = 0u8;
         for &sq in board.iter() {
-            if sq >= 1 && sq <= 6 {
+            if (1..=6).contains(&sq) {
                 w += 1;
-            } else if sq >= 9 && sq <= 14 {
+            } else if (9..=14).contains(&sq) {
                 b += 1;
             }
         }
@@ -151,9 +151,9 @@ impl FastReplayState {
         } else if flags == 0x4 {
             // Normal capture
             let captured = self.board[to];
-            if captured >= 1 && captured <= 6 {
+            if (1..=6).contains(&captured) {
                 self.white_pieces = self.white_pieces.saturating_sub(1);
-            } else if captured >= 9 && captured <= 14 {
+            } else if (9..=14).contains(&captured) {
                 self.black_pieces = self.black_pieces.saturating_sub(1);
             }
             self.board[to] = piece;
@@ -196,9 +196,9 @@ impl FastReplayState {
         } else if flags >= 0x8 {
             // Promotion
             let captured = self.board[to];
-            if captured >= 1 && captured <= 6 {
+            if (1..=6).contains(&captured) {
                 self.white_pieces = self.white_pieces.saturating_sub(1);
-            } else if captured >= 9 && captured <= 14 {
+            } else if (9..=14).contains(&captured) {
                 self.black_pieces = self.black_pieces.saturating_sub(1);
             }
             let color_offset = if piece >= 8 { 8 } else { 0 };
@@ -301,7 +301,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                 if entry.is_deleted() || entry.is_custom_fen() {
                     let done =
                         progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    if done % step == 0 || done == total_games {
+                    if done.is_multiple_of(step) || done == total_games {
                         let cur_matches = match_counter.load(std::sync::atomic::Ordering::Relaxed);
                         progress(done, total_games, cur_matches);
                     }
@@ -316,10 +316,8 @@ impl<'a> BoostSearchEvaluator<'a> {
                 let mut replay = FastReplayState::new();
                 let mut matching_plies = Vec::new();
 
-                if replay.board == target_board {
-                    if turn_req.is_none() || turn_req == Some(0) {
-                        matching_plies.push(0);
-                    }
+                if replay.board == target_board && (turn_req.is_none() || turn_req == Some(0)) {
+                    matching_plies.push(0);
                 }
 
                 for (ply_idx, &m) in moves[..limit].iter().enumerate() {
@@ -350,7 +348,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     None
                 };
 
-                if done % step == 0 || done == total_games {
+                if done.is_multiple_of(step) || done == total_games {
                     let cur_matches = match_counter.load(std::sync::atomic::Ordering::Relaxed);
                     progress(done, total_games, cur_matches);
                 }

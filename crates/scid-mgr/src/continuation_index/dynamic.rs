@@ -164,7 +164,7 @@ pub fn calculate_continuations_for_scid_with_progress<
             .filter_map(|&gid| {
                 let res = process_game(gid);
                 let s = scanned.fetch_add(1, Ordering::Relaxed) + 1;
-                if s % 5000 == 0 || s >= total {
+                if s.is_multiple_of(5000) || s >= total {
                     progress(s.min(total), total);
                 }
                 res
@@ -207,7 +207,7 @@ pub fn calculate_continuations_for_scid_with_progress<
             .filter_map(|gid| {
                 let res = process_game(gid);
                 let s = scanned.fetch_add(1, Ordering::Relaxed) + 1;
-                if s % 5000 == 0 || s >= total {
+                if s.is_multiple_of(5000) || s >= total {
                     progress(s.min(total), total);
                 }
                 res

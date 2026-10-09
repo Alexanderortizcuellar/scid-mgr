@@ -70,30 +70,15 @@ impl ScidDatabaseWrapper {
             return Err(anyhow!("Index file not found: {}", index_path.display()));
         }
 
-        let (index_mmap, names_mmap);
-        let (index_buf, names_buf);
-        let (index_bytes, names_bytes): (&[u8], &[u8]) = match load_mode {
-            LoadMode::Ram => {
-                index_buf = fs::read(&index_path)
-                    .with_context(|| format!("Reading {}", index_path.display()))?;
-                names_buf = fs::read(&namebase_path)
-                    .with_context(|| format!("Reading {}", namebase_path.display()))?;
-                (&index_buf[..], &names_buf[..])
-            }
-            LoadMode::Mmap | LoadMode::Preload => {
-                let ifile = File::open(&index_path)
-                    .with_context(|| format!("Opening {}", index_path.display()))?;
-                let nfile = File::open(&namebase_path)
-                    .with_context(|| format!("Opening {}", namebase_path.display()))?;
-                index_mmap = unsafe { Mmap::map(&ifile)? };
-                names_mmap = unsafe { Mmap::map(&nfile)? };
-                if load_mode == LoadMode::Preload {
-                    preload_memory(&index_mmap[..]);
-                    preload_memory(&names_mmap[..]);
-                }
-                (&index_mmap[..], &names_mmap[..])
-            }
-        };
+        let index_bytes =
+            fs::read(&index_path).with_context(|| format!("Reading {}", index_path.display()))?;
+        let names_bytes = fs::read(&namebase_path)
+            .with_context(|| format!("Reading {}", namebase_path.display()))?;
+
+        if load_mode == LoadMode::Preload {
+            preload_memory(&index_bytes);
+            preload_memory(&names_bytes);
+        }
 
         let (entries, names) = match format {
             ScidFormat::Si4 => {

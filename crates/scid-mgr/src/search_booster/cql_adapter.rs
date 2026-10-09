@@ -28,17 +28,16 @@ impl BoosterLanguageSearchAdapter {
     pub fn can_booster_evaluate(query: &SearchQuery) -> bool {
         match query {
             SearchQuery::Header(_) => true,
-            SearchQuery::Position(pattern) => match pattern {
+            SearchQuery::Position(pattern) => !matches!(
+                pattern,
                 PositionPattern::BoardState {
                     is_checkmate: Some(true),
                     ..
-                }
-                | PositionPattern::BoardState {
+                } | PositionPattern::BoardState {
                     is_stalemate: Some(true),
                     ..
-                } => false,
-                _ => true,
-            },
+                }
+            ),
             SearchQuery::Material(_)
             | SearchQuery::Power(_)
             | SearchQuery::Pawn(_)
@@ -70,6 +69,7 @@ impl BoosterLanguageSearchAdapter {
 
     /// Evaluates a query across a SCID database utilizing the booster index where applicable,
     /// transparently falling back to blob parsing only for non-standard `is_custom_fen` games.
+    #[allow(clippy::too_many_arguments)]
     pub fn search_scid_with_booster<F, B, BRef>(
         query: &SearchQuery,
         boost_idx: &MmapBoostIndex,
@@ -170,6 +170,7 @@ impl BoosterLanguageSearchAdapter {
 
     /// Evaluates a query across a PGN database utilizing the booster index where applicable,
     /// transparently falling back to raw PGN parsing only for non-standard `is_custom_fen` games.
+    #[allow(clippy::too_many_arguments)]
     pub fn search_pgn_with_booster<F, G>(
         query: &SearchQuery,
         boost_idx: &MmapBoostIndex,
@@ -356,7 +357,7 @@ pub fn board_array_to_shakmaty_board(board: &[u8; 64]) -> shakmaty::Board {
 /// Helper converting `[u8; 64]` scratchpad array into standard `shakmaty::Chess`
 pub fn board_array_to_shakmaty_chess(board: &[u8; 64], ply: usize) -> Option<Chess> {
     let b = board_array_to_shakmaty_board(board);
-    let turn = if ply % 2 == 0 {
+    let turn = if ply.is_multiple_of(2) {
         Color::White
     } else {
         Color::Black

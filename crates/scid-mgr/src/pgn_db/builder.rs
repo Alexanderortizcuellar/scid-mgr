@@ -34,16 +34,8 @@ pub(crate) fn save_index_file(
         let namebase_len = serialized_names.len() as u64;
         writer.write_all(&serialized_names)?;
 
-        // Pad to 64-byte boundary for cache-line aligned zero-copy mmap
-        let raw_offset = namebase_offset + namebase_len;
-        let pad_len = ((raw_offset + 63) & !63) - raw_offset;
-        if pad_len > 0 {
-            let pad = vec![0u8; pad_len as usize];
-            writer.write_all(&pad)?;
-        }
-
         // Write Records
-        let records_offset = raw_offset + pad_len;
+        let records_offset = namebase_offset + namebase_len;
         let records_bytes = unsafe {
             std::slice::from_raw_parts(
                 entries.as_ptr() as *const u8,

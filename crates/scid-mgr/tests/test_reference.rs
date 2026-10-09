@@ -199,14 +199,14 @@ fn test_unified_reference_pgn_database() {
         let first_move = &moves[0];
         if let Some(fy) = first_move.get("first_year").and_then(|v| v.as_u64()) {
             assert!(
-                fy >= 1800 && fy <= 2030,
+                (1800..=2030).contains(&fy),
                 "first_year should be 4-digit calendar year, got {}",
                 fy
             );
         }
         if let Some(ly) = first_move.get("last_year").and_then(|v| v.as_u64()) {
             assert!(
-                ly >= 1800 && ly <= 2030,
+                (1800..=2030).contains(&ly),
                 "last_year should be 4-digit calendar year, got {}",
                 ly
             );

@@ -86,6 +86,7 @@ impl StripedHotGraphBuilder {
         self.unique_counter.load(Ordering::Relaxed)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_game_transition(
         &self,
         from_hash: u64,

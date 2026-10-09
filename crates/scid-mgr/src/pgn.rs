@@ -40,10 +40,11 @@ pub fn scan_pgn_game_offsets(data: &[u8]) -> Vec<(usize, usize)> {
         let mut in_tags = false;
 
         // Check if game starts with tags
-        if (cursor == 0 || data[cursor - 1] == b'\n') && data[cursor] == b'[' {
-            if is_pgn_tag_line(&data[cursor..]) {
-                in_tags = true;
-            }
+        if (cursor == 0 || data[cursor - 1] == b'\n')
+            && data[cursor] == b'['
+            && is_pgn_tag_line(&data[cursor..])
+        {
+            in_tags = true;
         }
 
         if in_tags {
@@ -51,28 +52,30 @@ pub fn scan_pgn_game_offsets(data: &[u8]) -> Vec<(usize, usize)> {
 
             // 1. Consume all consecutive tag lines
             while cursor < len {
-                if (cursor == 0 || data[cursor - 1] == b'\n') && data[cursor] == b'[' {
-                    if is_pgn_tag_line(&data[cursor..]) {
-                        // Advance to end of this tag line
-                        while cursor < len && data[cursor] != b'\n' {
-                            cursor += 1;
-                        }
-                        if cursor < len && data[cursor] == b'\n' {
-                            cursor += 1;
-                        }
-                        continue;
+                if (cursor == 0 || data[cursor - 1] == b'\n')
+                    && data[cursor] == b'['
+                    && is_pgn_tag_line(&data[cursor..])
+                {
+                    // Advance to end of this tag line
+                    while cursor < len && data[cursor] != b'\n' {
+                        cursor += 1;
                     }
+                    if cursor < len && data[cursor] == b'\n' {
+                        cursor += 1;
+                    }
+                    continue;
                 }
                 break;
             }
 
             // 2. Consume move text until next tag line or EOF
             while cursor < len {
-                if (cursor == 0 || data[cursor - 1] == b'\n') && data[cursor] == b'[' {
-                    if is_pgn_tag_line(&data[cursor..]) {
-                        // Found start of next game!
-                        break;
-                    }
+                if (cursor == 0 || data[cursor - 1] == b'\n')
+                    && data[cursor] == b'['
+                    && is_pgn_tag_line(&data[cursor..])
+                {
+                    // Found start of next game!
+                    break;
                 }
                 cursor += 1;
             }
@@ -80,10 +83,11 @@ pub fn scan_pgn_game_offsets(data: &[u8]) -> Vec<(usize, usize)> {
             // Headerless game or move text: advance until next tag line or EOF
             starts.push(game_start);
             while cursor < len {
-                if (cursor == 0 || data[cursor - 1] == b'\n') && data[cursor] == b'[' {
-                    if is_pgn_tag_line(&data[cursor..]) {
-                        break;
-                    }
+                if (cursor == 0 || data[cursor - 1] == b'\n')
+                    && data[cursor] == b'['
+                    && is_pgn_tag_line(&data[cursor..])
+                {
+                    break;
                 }
                 cursor += 1;
             }

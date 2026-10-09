@@ -552,6 +552,7 @@ impl SearchSessionManager {
     }
 
     /// Stores a new search session with full metadata (owner, structured query) and enforces LRU rules
+    #[allow(clippy::too_many_arguments)]
     pub fn create_session_with_metadata(
         &mut self,
         db_key: &str,
