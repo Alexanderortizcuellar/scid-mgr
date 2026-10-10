@@ -94,8 +94,18 @@ pub(crate) fn scan_pgn_parallel(
         if rough_start >= mmap.len() {
             break;
         }
-        // Advance to next tag line at start of line
+
         let mut pos = rough_start;
+        // Step 1: If rough_start lands within a tag block, advance past it to non-tag text (moves/whitespace)
+        // so that we never split a game's tag block across chunks.
+        while pos < mmap.len() {
+            if (pos == 0 || mmap[pos - 1] == b'\n') && !crate::pgn::is_pgn_tag_line(&mmap[pos..]) {
+                break;
+            }
+            pos += 1;
+        }
+
+        // Step 2: Advance to the true start of the next game (the first tag line).
         let mut found = false;
         while pos < mmap.len() {
             if (pos == 0 || mmap[pos - 1] == b'\n') && crate::pgn::is_pgn_tag_line(&mmap[pos..]) {
@@ -185,9 +195,11 @@ fn scan_chunk<'a>(
     let mut cursor = chunk_start;
 
     while cursor < chunk_end {
-        // Find start of next game: line starting with '['
+        // Find start of next game: line starting with a valid tag
         while cursor < chunk_end {
-            if (cursor == 0 || mmap[cursor - 1] == b'\n') && mmap[cursor] == b'[' {
+            if (cursor == 0 || mmap[cursor - 1] == b'\n')
+                && crate::pgn::is_pgn_tag_line(&mmap[cursor..])
+            {
                 break;
             }
             cursor += 1;
@@ -244,16 +256,10 @@ fn scan_chunk<'a>(
 
         // Skip move text until next game start or end of file
         while cursor < mmap.len() {
-            if (cursor == 0 || mmap[cursor - 1] == b'\n') && mmap[cursor] == b'[' {
-                // Check if this is a tag line (start of next game)
-                let mut tag_check = cursor;
-                while tag_check < mmap.len() && mmap[tag_check] != b'\n' && mmap[tag_check] != b']'
-                {
-                    tag_check += 1;
-                }
-                if tag_check < mmap.len() && mmap[tag_check] == b']' {
-                    break;
-                }
+            if (cursor == 0 || mmap[cursor - 1] == b'\n')
+                && crate::pgn::is_pgn_tag_line(&mmap[cursor..])
+            {
+                break;
             }
             cursor += 1;
         }

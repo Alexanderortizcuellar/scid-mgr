@@ -782,3 +782,172 @@ fn test_opening_tree_date_formatting() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_pgn_chunk_boundary_tag_split_and_null_date_sorting() -> Result<()> {
+    let dir = tempdir()?;
+    let pgn_path = dir.path().join("tag_split_and_dates.pgn");
+
+    // Construct games with large header blocks (multiple FIDE / metadata tags),
+    // missing tags, comments with brackets, and varying dates (including undated).
+    let mut pgn_content = String::new();
+
+    // Game 0: Undated game (missing Date tag)
+    pgn_content.push_str(
+        r#"[Event "Undated Championship"]
+[Site "Unknown"]
+[White "Player Undated"]
+[Black "Player Unknown"]
+[Result "1-0"]
+[WhiteTitle "GM"]
+[BlackTitle "IM"]
+[WhiteElo "2500"]
+[BlackElo "2400"]
+[Opening "King's Indian Attack"]
+[WhiteFideId "1000001"]
+[BlackFideId "1000002"]
+
+1. Nf3 d5 2. g3 Nf6 3. Bg2 1-0
+
+"#,
+    );
+
+    // Game 1: 1851 game with brackets in comment
+    pgn_content.push_str(
+        r#"[Event "London 1851"]
+[Site "London ENG"]
+[Date "1851.06.21"]
+[White "Anderssen, Adolf"]
+[Black "Kieseritzky, Lionel"]
+[Result "1-0"]
+[WhiteTitle "GM"]
+[BlackTitle "GM"]
+[Opening "King's Gambit"]
+[Variation "Bishop's Gambit"]
+[WhiteFideId "1000003"]
+[BlackFideId "1000004"]
+[EventDate "1851.06.21"]
+
+1. e4 { [Historical] immortal game } e5 2. f4 exf4 1-0
+
+"#,
+    );
+
+    // Game 2: 1990 game missing Event header
+    pgn_content.push_str(
+        r#"[Site "Lyon FRA"]
+[Date "1990.11.24"]
+[White "Kasparov, Garry"]
+[Black "Karpov, Anatoly"]
+[Result "1/2-1/2"]
+[WhiteElo "2800"]
+[BlackElo "2730"]
+[ECO "E92"]
+[WhiteFideId "1000005"]
+[BlackFideId "1000006"]
+
+1. d4 Nf6 2. c4 g6 1/2-1/2
+
+"#,
+    );
+
+    // Game 3: 2024 game with extensive tag roster
+    pgn_content.push_str(
+        r#"[Event "Candidates 2024"]
+[Site "Toronto CAN"]
+[Date "2024.04.14"]
+[Round "9"]
+[White "Gukesh, D"]
+[Black "Nakamura, Hikaru"]
+[Result "1/2-1/2"]
+[WhiteElo "2743"]
+[BlackElo "2789"]
+[ECO "C54"]
+[WhiteFideId "46616543"]
+[BlackFideId "2016192"]
+[EventDate "2024.04.04"]
+
+1. e4 e5 2. Nf3 Nc6 1/2-1/2
+
+"#,
+    );
+
+    // Game 4: Another game with "????.??.??" date string
+    pgn_content.push_str(
+        r#"[Event "Coffeehouse Game"]
+[Site "Paris"]
+[Date "????.??.??"]
+[White "Amateur A"]
+[Black "Amateur B"]
+[Result "*"]
+[Opening "Grob Attack"]
+[WhiteFideId "9999991"]
+[BlackFideId "9999992"]
+
+1. g4 e5 *
+"#,
+    );
+
+    std::fs::write(&pgn_path, &pgn_content)?;
+
+    // Open and index the database
+    let pgn_db = PgnDatabaseWrapper::open(&pgn_path)?;
+
+    // Exactly 5 games must be indexed - no phantom split records
+    assert_eq!(pgn_db.game_count(), 5);
+
+    // Verify all 5 games retain their actual player names and metadata (no phantom question mark records)
+    for g in &pgn_db.entries {
+        assert_ne!(pgn_db.names.player(g.white_id), "?");
+    }
+
+    // 1. Sort by Date Descending (Newest First)
+    let filter_desc = scid_mgr::db::GameFilter {
+        sort_by: Some("date".to_string()),
+        sort_asc: Some(false),
+        ..Default::default()
+    };
+    let (games_desc, total_desc) = pgn_db.query_games(&filter_desc, 0, 10);
+    assert_eq!(total_desc, 5);
+
+    // Newest first: 2024 -> 1990 -> 1851 -> undated (0)
+    assert_eq!(games_desc[0].date, "2024.04.14");
+    assert_eq!(games_desc[0].white, "Gukesh, D");
+
+    assert_eq!(games_desc[1].date, "1990.11.24");
+    assert_eq!(games_desc[1].white, "Kasparov, Garry");
+
+    assert_eq!(games_desc[2].date, "1851.06.21");
+    assert_eq!(games_desc[2].white, "Anderssen, Adolf");
+
+    assert_eq!(games_desc[3].date, "????.??.??");
+    assert_eq!(games_desc[4].date, "????.??.??");
+
+    // 2. Sort by Date Ascending (Oldest First)
+    let filter_asc = scid_mgr::db::GameFilter {
+        sort_by: Some("date".to_string()),
+        sort_asc: Some(true),
+        ..Default::default()
+    };
+    let (games_asc, total_asc) = pgn_db.query_games(&filter_asc, 0, 10);
+    assert_eq!(total_asc, 5);
+
+    // Both undated games have valid player names (never phantom '?')
+    assert!(
+        games_asc[0].white.contains("Player Undated") || games_asc[0].white.contains("Amateur A")
+    );
+    assert!(
+        games_asc[1].white.contains("Player Undated") || games_asc[1].white.contains("Amateur A")
+    );
+
+    assert_eq!(games_asc[2].date, "1851.06.21");
+    assert_eq!(games_asc[2].white, "Anderssen, Adolf");
+
+    assert_eq!(games_asc[3].date, "1990.11.24");
+    assert_eq!(games_asc[3].white, "Kasparov, Garry");
+
+    assert_eq!(games_asc[4].date, "2024.04.14");
+    assert_eq!(games_asc[4].white, "Gukesh, D");
+
+    Ok(())
+}
