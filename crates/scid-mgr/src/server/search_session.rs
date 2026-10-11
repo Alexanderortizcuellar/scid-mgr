@@ -468,7 +468,7 @@ impl Default for SearchSessionManager {
 }
 
 impl SearchSessionManager {
-    pub const DEFAULT_MAX_REFERENCE_SESSIONS: usize = 3;
+    pub const DEFAULT_MAX_REFERENCE_SESSIONS: usize = 2;
 
     pub fn new() -> Self {
         Self::with_capacity(Self::DEFAULT_MAX_REFERENCE_SESSIONS)
