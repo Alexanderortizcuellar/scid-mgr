@@ -826,7 +826,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     }
                     acc
                 })
-                .reduce(TreeAcc::default, |mut a, b| {
+                .reduce(TreeAcc::default, |mut a, mut b| {
                     a.total_games += b.total_games;
                     a.white_wins += b.white_wins;
                     a.draws += b.draws;
@@ -868,6 +868,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                                 ma.sample_game_ids.push(id);
                             }
                         }
+                    }
+                    if a.paths.len() < b.paths.len() {
+                        std::mem::swap(&mut a.paths, &mut b.paths);
                     }
                     for (k, v) in b.paths {
                         let st = a.paths.entry(k).or_default();
@@ -894,7 +897,7 @@ impl<'a> BoostSearchEvaluator<'a> {
                     process_game(gid, &mut acc);
                     acc
                 })
-                .reduce(TreeAcc::default, |mut a, b| {
+                .reduce(TreeAcc::default, |mut a, mut b| {
                     a.total_games += b.total_games;
                     a.white_wins += b.white_wins;
                     a.draws += b.draws;
@@ -936,6 +939,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                                 ma.sample_game_ids.push(id);
                             }
                         }
+                    }
+                    if a.paths.len() < b.paths.len() {
+                        std::mem::swap(&mut a.paths, &mut b.paths);
                     }
                     for (k, v) in b.paths {
                         let st = a.paths.entry(k).or_default();
@@ -1038,51 +1044,75 @@ impl<'a> BoostSearchEvaluator<'a> {
         let continuations_res = if let Some(cq) = continuation_config {
             if merged_acc.total_games > 0 {
                 let start_fullmove = parse_fen_fullmove(fen_to_parse);
-                let mut lines = Vec::new();
-                for (path, stats) in merged_acc.paths {
-                    let percentage = (stats.games as f64 / merged_acc.total_games as f64) * 100.0;
-                    if stats.games >= cq.min_games && percentage >= cq.min_percentage {
-                        let mut sim_pos = target_pos.clone();
-                        let mut san_moves = Vec::with_capacity(path.len as usize);
+                let total_games_f64 = merged_acc.total_games as f64;
 
-                        for bm in path.iter() {
-                            if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
-                                let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
-                                    &mut sim_pos,
-                                    &m,
-                                );
-                                san_moves.push(san_plus.to_string());
-                            } else {
-                                san_moves.push(bm.to_uci_string());
-                            }
+                let mut candidates: Vec<(PackedPath256, PathStats)> = merged_acc
+                    .paths
+                    .into_iter()
+                    .filter(|(_, stats)| {
+                        let pct = (stats.games as f64 / total_games_f64) * 100.0;
+                        stats.games >= cq.min_games && pct >= cq.min_percentage
+                    })
+                    .collect();
+
+                if candidates.len() > cq.max_lines {
+                    candidates.select_nth_unstable_by(cq.max_lines, |a, b| {
+                        b.1.games
+                            .cmp(&a.1.games)
+                            .then_with(|| b.0.len.cmp(&a.0.len))
+                    });
+                    candidates.truncate(cq.max_lines);
+                }
+
+                candidates.sort_by(|a, b| {
+                    b.1.games
+                        .cmp(&a.1.games)
+                        .then_with(|| b.0.len.cmp(&a.0.len))
+                });
+
+                let mut lines = Vec::with_capacity(candidates.len());
+                for (path, stats) in candidates {
+                    let percentage = (stats.games as f64 / total_games_f64) * 100.0;
+                    let mut sim_pos = target_pos.clone();
+                    let mut san_moves = Vec::with_capacity(path.len as usize);
+
+                    for bm in path.iter() {
+                        if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
+                            let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
+                                &mut sim_pos,
+                                &m,
+                            );
+                            san_moves.push(san_plus.to_string());
+                        } else {
+                            san_moves.push(bm.to_uci_string());
                         }
-
-                        let formatted =
-                            format_continuation_moves(&target_pos, start_fullmove, &san_moves);
-                        let (last_year, last_month) = stats
-                            .last_year_month
-                            .map_or((None, None), HotEdge::unpack_year_month);
-                        let last_played = match (last_year, last_month) {
-                            (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
-                            (Some(y), None) => Some(format!("{}", y)),
-                            _ => None,
-                        };
-                        lines.push(ContinuationLine {
-                            moves: san_moves,
-                            formatted,
-                            games: stats.games,
-                            percentage,
-                            white_wins: stats.white_wins,
-                            draws: stats.draws,
-                            black_wins: stats.black_wins,
-                            first_year: None,
-                            first_month: None,
-                            last_year,
-                            last_month,
-                            first_played: None,
-                            last_played,
-                        });
                     }
+
+                    let formatted =
+                        format_continuation_moves(&target_pos, start_fullmove, &san_moves);
+                    let (last_year, last_month) = stats
+                        .last_year_month
+                        .map_or((None, None), HotEdge::unpack_year_month);
+                    let last_played = match (last_year, last_month) {
+                        (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                        (Some(y), None) => Some(format!("{}", y)),
+                        _ => None,
+                    };
+                    lines.push(ContinuationLine {
+                        moves: san_moves,
+                        formatted,
+                        games: stats.games,
+                        percentage,
+                        white_wins: stats.white_wins,
+                        draws: stats.draws,
+                        black_wins: stats.black_wins,
+                        first_year: None,
+                        first_month: None,
+                        last_year,
+                        last_month,
+                        first_played: None,
+                        last_played,
+                    });
                 }
 
                 lines.sort_by(|a, b| {
@@ -1091,10 +1121,6 @@ impl<'a> BoostSearchEvaluator<'a> {
                         .then_with(|| b.moves.len().cmp(&a.moves.len()))
                         .then_with(|| a.moves.cmp(&b.moves))
                 });
-
-                if lines.len() > cq.max_lines {
-                    lines.truncate(cq.max_lines);
-                }
 
                 Some(lines)
             } else {
@@ -1255,9 +1281,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                     }
                     acc
                 })
-                .reduce(ContAcc::default, |mut a, b| {
+                .reduce(ContAcc::default, |mut a, mut b| {
                     a.total_processed += b.total_processed;
                     a.games_reaching += b.games_reaching;
+                    if a.paths.len() < b.paths.len() {
+                        std::mem::swap(&mut a.paths, &mut b.paths);
+                    }
                     for (k, v) in b.paths {
                         let st = a.paths.entry(k).or_default();
                         st.games += v.games;
@@ -1280,9 +1309,12 @@ impl<'a> BoostSearchEvaluator<'a> {
                     process_game(gid, &mut acc);
                     acc
                 })
-                .reduce(ContAcc::default, |mut a, b| {
+                .reduce(ContAcc::default, |mut a, mut b| {
                     a.total_processed += b.total_processed;
                     a.games_reaching += b.games_reaching;
+                    if a.paths.len() < b.paths.len() {
+                        std::mem::swap(&mut a.paths, &mut b.paths);
+                    }
                     for (k, v) in b.paths {
                         let st = a.paths.entry(k).or_default();
                         st.games += v.games;
@@ -1302,50 +1334,72 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let mut lines = Vec::new();
         if merged_acc.games_reaching > 0 {
-            for (path, stats) in merged_acc.paths {
-                let percentage = (stats.games as f64 / merged_acc.games_reaching as f64) * 100.0;
-                if stats.games >= query.min_games && percentage >= query.min_percentage {
-                    let mut sim_pos = start_pos.clone();
-                    let mut san_moves = Vec::with_capacity(path.len as usize);
+            let total_reaching_f64 = merged_acc.games_reaching as f64;
 
-                    for bm in path.iter() {
-                        if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
-                            let san_plus = shakmaty::san::SanPlus::from_move_and_play_unchecked(
-                                &mut sim_pos,
-                                &m,
-                            );
-                            san_moves.push(san_plus.to_string());
-                        } else {
-                            san_moves.push(bm.to_uci_string());
-                        }
+            let mut candidates: Vec<(PackedPath256, PathStats)> = merged_acc
+                .paths
+                .into_iter()
+                .filter(|(_, stats)| {
+                    let pct = (stats.games as f64 / total_reaching_f64) * 100.0;
+                    stats.games >= query.min_games && pct >= query.min_percentage
+                })
+                .collect();
+
+            if candidates.len() > query.max_lines {
+                candidates.select_nth_unstable_by(query.max_lines, |a, b| {
+                    b.1.games
+                        .cmp(&a.1.games)
+                        .then_with(|| b.0.len.cmp(&a.0.len))
+                });
+                candidates.truncate(query.max_lines);
+            }
+
+            candidates.sort_by(|a, b| {
+                b.1.games
+                    .cmp(&a.1.games)
+                    .then_with(|| b.0.len.cmp(&a.0.len))
+            });
+
+            lines.reserve(candidates.len());
+            for (path, stats) in candidates {
+                let percentage = (stats.games as f64 / total_reaching_f64) * 100.0;
+                let mut sim_pos = start_pos.clone();
+                let mut san_moves = Vec::with_capacity(path.len as usize);
+
+                for bm in path.iter() {
+                    if let Some(m) = bm.to_shakmaty_move(&sim_pos) {
+                        let san_plus =
+                            shakmaty::san::SanPlus::from_move_and_play_unchecked(&mut sim_pos, &m);
+                        san_moves.push(san_plus.to_string());
+                    } else {
+                        san_moves.push(bm.to_uci_string());
                     }
-
-                    let formatted =
-                        format_continuation_moves(&start_pos, start_fullmove, &san_moves);
-                    let (last_year, last_month) = stats
-                        .last_year_month
-                        .map_or((None, None), HotEdge::unpack_year_month);
-                    let last_played = match (last_year, last_month) {
-                        (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
-                        (Some(y), None) => Some(format!("{}", y)),
-                        _ => None,
-                    };
-                    lines.push(ContinuationLine {
-                        moves: san_moves,
-                        formatted,
-                        games: stats.games,
-                        percentage,
-                        white_wins: stats.white_wins,
-                        draws: stats.draws,
-                        black_wins: stats.black_wins,
-                        first_year: None,
-                        first_month: None,
-                        last_year,
-                        last_month,
-                        first_played: None,
-                        last_played,
-                    });
                 }
+
+                let formatted = format_continuation_moves(&start_pos, start_fullmove, &san_moves);
+                let (last_year, last_month) = stats
+                    .last_year_month
+                    .map_or((None, None), HotEdge::unpack_year_month);
+                let last_played = match (last_year, last_month) {
+                    (Some(y), Some(m)) => Some(format!("{}-{:02}", y, m)),
+                    (Some(y), None) => Some(format!("{}", y)),
+                    _ => None,
+                };
+                lines.push(ContinuationLine {
+                    moves: san_moves,
+                    formatted,
+                    games: stats.games,
+                    percentage,
+                    white_wins: stats.white_wins,
+                    draws: stats.draws,
+                    black_wins: stats.black_wins,
+                    first_year: None,
+                    first_month: None,
+                    last_year,
+                    last_month,
+                    first_played: None,
+                    last_played,
+                });
             }
 
             lines.sort_by(|a, b| {
@@ -1354,10 +1408,6 @@ impl<'a> BoostSearchEvaluator<'a> {
                     .then_with(|| b.moves.len().cmp(&a.moves.len()))
                     .then_with(|| a.moves.cmp(&b.moves))
             });
-
-            if lines.len() > query.max_lines {
-                lines.truncate(query.max_lines);
-            }
         }
 
         Ok(Some(ContinuationResult {
