@@ -294,6 +294,45 @@ impl<'a> BoostSearchEvaluator<'a> {
         let match_counter = std::sync::atomic::AtomicUsize::new(0);
         let step = (total_games / 100).clamp(5_000, 50_000);
 
+        let is_root_initial = target_board == FastReplayState::new().board
+            && (turn_req.is_none() || turn_req == Some(0));
+
+        // ⚡ Ultra-fast bypass for standard root initial position:
+        // Every standard non-deleted game matches at ply 0 without simulating any moves
+        if is_root_initial {
+            let matches: Vec<BoostMatch> = (0..total_games)
+                .into_par_iter()
+                .filter_map(|gid| {
+                    let entry = self.index.get_game_entry(gid)?;
+                    if entry.is_deleted() || entry.is_custom_fen() {
+                        let done =
+                            progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if done.is_multiple_of(step) || done == total_games {
+                            let cur_matches =
+                                match_counter.load(std::sync::atomic::Ordering::Relaxed);
+                            progress(done, total_games, cur_matches);
+                        }
+                        return None;
+                    }
+
+                    let done =
+                        progress_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    match_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if done.is_multiple_of(step) || done == total_games {
+                        let cur_matches = match_counter.load(std::sync::atomic::Ordering::Relaxed);
+                        progress(done, total_games, cur_matches);
+                    }
+
+                    Some(BoostMatch {
+                        game_id: gid,
+                        matching_plies: vec![0],
+                    })
+                })
+                .collect();
+
+            return Ok(matches);
+        }
+
         let matches: Vec<BoostMatch> = (0..total_games)
             .into_par_iter()
             .filter_map(|gid| {
@@ -604,15 +643,16 @@ impl<'a> BoostSearchEvaluator<'a> {
     }
 
     /// Calculates a complete, dynamic opening tree report from the booster stream with rich W/D/L stats, ELO averages, and sample games
-    /// Optionally calculates multi-ply continuation lines simultaneously in the exact same single parallel pass.
-    pub fn calculate_opening_tree<F>(
+    /// Optionally calculates multi-ply continuation lines and/or collects all matching game IDs in the exact same single parallel pass.
+    pub fn calculate_opening_tree_with_matches<F>(
         &self,
         target_fen: &str,
         target_game_ids: Option<&[usize]>,
         max_sample_ids: Option<usize>,
+        collect_all_matching_game_ids: bool,
         meta_lookup: Option<F>,
         continuation_config: Option<&ContinuationQuery>,
-    ) -> Result<Option<OpeningTreeReport>>
+    ) -> Result<Option<(OpeningTreeReport, Vec<u32>)>>
     where
         F: Fn(usize) -> Option<BoostGameMeta> + Sync + Send,
     {
@@ -668,9 +708,12 @@ impl<'a> BoostSearchEvaluator<'a> {
             moves: HashMap<u16, MoveStatsAcc>,
             sample_game_ids: Vec<u32>,
             paths: HashMap<PackedPath256, PathStats>,
+            all_matching_gids: Vec<u32>,
         }
 
         let total_games_in_index = self.index.game_count();
+        let is_root_initial = target_board == FastReplayState::new().board
+            && target_pos.turn() == shakmaty::Color::White;
 
         let process_game = |gid: usize, acc: &mut TreeAcc| {
             let _entry = match self.index.get_game_entry(gid) {
@@ -682,25 +725,33 @@ impl<'a> BoostSearchEvaluator<'a> {
                 None => return,
             };
 
-            let mut replay = FastReplayState::new();
-            let mut hit_ply: Option<usize> = None;
-
-            if replay.board == target_board {
-                hit_ply = Some(0);
+            let hit_ply: Option<usize> = if is_root_initial {
+                Some(0)
             } else {
-                for (ply_idx, &m) in moves.iter().enumerate() {
-                    replay.apply_move(m);
-                    if replay.white_pieces < target_w || replay.black_pieces < target_b {
-                        break;
+                let mut replay = FastReplayState::new();
+                if replay.board == target_board {
+                    Some(0)
+                } else {
+                    let mut hit = None;
+                    for (ply_idx, &m) in moves.iter().enumerate() {
+                        replay.apply_move(m);
+                        if replay.white_pieces < target_w || replay.black_pieces < target_b {
+                            break;
+                        }
+                        if replay.board == target_board {
+                            hit = Some(ply_idx + 1);
+                            break;
+                        }
                     }
-                    if replay.board == target_board {
-                        hit_ply = Some(ply_idx + 1);
-                        break;
-                    }
+                    hit
                 }
-            }
+            };
 
             if let Some(ply) = hit_ply {
+                if collect_all_matching_game_ids {
+                    acc.all_matching_gids.push(gid as u32);
+                }
+
                 let meta = meta_lookup
                     .as_ref()
                     .and_then(|f| f(gid))
@@ -831,6 +882,9 @@ impl<'a> BoostSearchEvaluator<'a> {
                             (None, None) => None,
                         };
                     }
+                    if collect_all_matching_game_ids {
+                        a.all_matching_gids.extend(b.all_matching_gids);
+                    }
                     a
                 })
         } else {
@@ -896,9 +950,17 @@ impl<'a> BoostSearchEvaluator<'a> {
                             (None, None) => None,
                         };
                     }
+                    if collect_all_matching_game_ids {
+                        a.all_matching_gids.extend(b.all_matching_gids);
+                    }
                     a
                 })
         };
+
+        let mut matching_ids = merged_acc.all_matching_gids;
+        if collect_all_matching_game_ids {
+            matching_ids.par_sort_unstable();
+        }
 
         if merged_acc.total_games == 0 {
             return Ok(None);
@@ -1042,21 +1104,47 @@ impl<'a> BoostSearchEvaluator<'a> {
             None
         };
 
-        Ok(Some(OpeningTreeReport {
-            fen: fen_to_parse.to_string(),
-            zobrist_hash: target_hash,
-            total_games: merged_acc.total_games,
-            white_wins: merged_acc.white_wins,
-            draws: merged_acc.draws,
-            black_wins: merged_acc.black_wins,
-            white_pct,
-            draw_pct,
-            black_pct,
-            moves: move_views,
-            sample_game_ids: merged_acc.sample_game_ids,
-            sample_games: Vec::new(),
-            continuations: continuations_res,
-        }))
+        Ok(Some((
+            OpeningTreeReport {
+                fen: fen_to_parse.to_string(),
+                zobrist_hash: target_hash,
+                total_games: merged_acc.total_games,
+                white_wins: merged_acc.white_wins,
+                draws: merged_acc.draws,
+                black_wins: merged_acc.black_wins,
+                white_pct,
+                draw_pct,
+                black_pct,
+                moves: move_views,
+                sample_game_ids: merged_acc.sample_game_ids,
+                sample_games: Vec::new(),
+                continuations: continuations_res,
+            },
+            matching_ids,
+        )))
+    }
+
+    /// Backwards-compatible convenience wrapper that calculates opening tree without keeping all matching game IDs
+    pub fn calculate_opening_tree<F>(
+        &self,
+        target_fen: &str,
+        target_game_ids: Option<&[usize]>,
+        max_sample_ids: Option<usize>,
+        meta_lookup: Option<F>,
+        continuation_config: Option<&ContinuationQuery>,
+    ) -> Result<Option<OpeningTreeReport>>
+    where
+        F: Fn(usize) -> Option<BoostGameMeta> + Sync + Send,
+    {
+        let res = self.calculate_opening_tree_with_matches(
+            target_fen,
+            target_game_ids,
+            max_sample_ids,
+            false,
+            meta_lookup,
+            continuation_config,
+        )?;
+        Ok(res.map(|(rep, _)| rep))
     }
 
     /// Calculates rich continuation lines and branch tree directly from the booster stream

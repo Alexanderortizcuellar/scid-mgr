@@ -387,6 +387,14 @@ impl pgn_reader::Visitor for PositionFinder {
         self.check_current_pos();
     }
 
+    fn end_headers(&mut self) -> pgn_reader::Skip {
+        if self.found_ply.is_some() {
+            pgn_reader::Skip(true)
+        } else {
+            pgn_reader::Skip(false)
+        }
+    }
+
     fn begin_variation(&mut self) -> pgn_reader::Skip {
         pgn_reader::Skip(true)
     }

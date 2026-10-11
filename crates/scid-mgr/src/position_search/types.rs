@@ -8,6 +8,32 @@ pub struct PositionMatch {
     pub ply: usize,
 }
 
+/// Fast detection of the standard chess initial starting position
+#[inline]
+pub fn is_initial_fen(fen_str: &str) -> bool {
+    let s = fen_str.trim();
+    if s.is_empty() {
+        return true;
+    }
+    if s.starts_with("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR") {
+        let rest = s["rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR".len()..].trim();
+        if rest.is_empty()
+            || rest.starts_with("w KQkq -")
+            || rest.starts_with("w - -")
+            || rest.starts_with("w KQkq")
+            || rest.starts_with("w")
+        {
+            return true;
+        }
+    }
+    if let Ok(fen) = s.parse::<shakmaty::fen::Fen>() {
+        if let Ok(pos) = fen.into_position::<Chess>(shakmaty::CastlingMode::Standard) {
+            return pos == Chess::default();
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionSearchResult {
     pub target_fen: String,

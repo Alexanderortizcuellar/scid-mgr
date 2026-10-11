@@ -21,4 +21,6 @@ pub use scid_search::{
 };
 
 // Re-export types
-pub use types::{MaterialFilter, PositionMatch, PositionSearchResult, PositionTargetMatcher};
+pub use types::{
+    is_initial_fen, MaterialFilter, PositionMatch, PositionSearchResult, PositionTargetMatcher,
+};

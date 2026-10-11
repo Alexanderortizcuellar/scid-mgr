@@ -262,107 +262,126 @@ pub fn handle_reference(
 
     let query_key = format!("ref_pos:{}:{:?}", fen_str, filter_opt);
 
-    // 1. Position Search Session Resolution (Reference LRU Pool)
-    let search_id = if let Some(cached) = session_mgr.find_cached(&db_key, &query_key) {
-        cached.search_id.clone()
-    } else {
-        let pos_matches = evaluate_position_matches(fen_str, db, &db_path, filter_opt.as_ref());
+    // 1. Position Search Session Resolution & Tree/Continuations Single-Pass
+    let (search_id, matched_total, candidate_game_ids, tree_data, continuations_data) =
+        if let Some(cached) = session_mgr.find_cached(&db_key, &query_key) {
+            let s_id = cached.search_id.clone();
+            let (candidate_ids, total) = {
+                let session = session_mgr.get_session(&s_id).unwrap();
+                let ids: Vec<usize> = session.matches.iter().map(|&gid| gid as usize).collect();
+                let count = session.matches.len();
+                (ids, count)
+            };
 
-        let duration = start_time.elapsed().as_millis() as u64;
-        let session_query = match filter_opt.clone() {
-            Some(f) => SessionQuery::FilteredPosition {
-                fen: fen_str.to_string(),
-                match_mode: PositionMatchMode::Exact,
-                max_ply: None,
-                filter: Box::new(f),
-            },
-            None => SessionQuery::PurePosition {
-                fen: fen_str.to_string(),
-                match_mode: PositionMatchMode::Exact,
-                max_ply: None,
-            },
-        };
-
-        session_mgr.create_session_with_metadata(
-            &db_key,
-            &query_key,
-            total_db_games,
-            pos_matches,
-            duration,
-            SessionOwner::Reference,
-            session_query,
-        )
-    };
-
-    // Extract candidate game IDs for downstream computations
-    let (candidate_game_ids, matched_total) = {
-        let session = session_mgr.get_session(&search_id).unwrap();
-        let ids: Vec<usize> = session.matches.iter().map(|&gid| gid as usize).collect();
-        let count = session.matches.len();
-        (ids, count)
-    };
-
-    // 2. Opening Tree & Continuations Computation (Single-Pass Combined)
-    let (tree_data, continuations_data) = if include_tree || include_continuations {
-        let report = calculate_tree_and_continuations(
-            fen_str,
-            &target_pos,
-            db,
-            &db_path,
-            current_tree_index,
-            current_pos_index,
-            if filter_opt.is_some() {
-                Some(&candidate_game_ids[..])
+            let (t_data, c_data) = if include_tree || include_continuations {
+                let (report, _) = calculate_tree_and_continuations_with_matches(
+                    fen_str,
+                    &target_pos,
+                    db,
+                    &db_path,
+                    current_tree_index,
+                    current_pos_index,
+                    if filter_opt.is_some() {
+                        Some(&candidate_ids[..])
+                    } else {
+                        None
+                    },
+                    max_sample_ids,
+                    continuation_config.as_ref(),
+                    false, // already cached, don't need all matching game IDs
+                    cancel_token,
+                );
+                format_tree_and_continuations(report, include_tree, include_continuations)
             } else {
-                None
-            },
-            max_sample_ids,
-            continuation_config.as_ref(),
-            cancel_token,
-        );
+                (None, None)
+            };
 
-        match report {
-            Some(rep) => {
-                let tree_val = if include_tree {
-                    Some(json!({
-                        "moves": rep.moves,
-                        "total_games": rep.total_games,
-                        "white_wins": rep.white_wins,
-                        "draws": rep.draws,
-                        "black_wins": rep.black_wins,
-                        "white_pct": rep.white_pct,
-                        "draw_pct": rep.draw_pct,
-                        "black_pct": rep.black_pct,
-                        "sample_game_ids": rep.sample_game_ids,
-                    }))
+            (s_id, total, candidate_ids, t_data, c_data)
+        } else {
+            // Cache miss: single unified parallel pass across the database
+            let (tree_report, pos_matches) = if include_tree || include_continuations {
+                let filter_target_ids: Option<Vec<usize>> = if let Some(filt) = filter_opt.as_ref()
+                {
+                    if !filt.is_empty() {
+                        match db {
+                            DatabaseBackend::Scid(s) => {
+                                let _ = s.query_games(filt, 0, 0);
+                                s.get_cached_query_indices()
+                            }
+                            DatabaseBackend::Pgn(p) => {
+                                let _ = p.query_games(filt, 0, 0);
+                                p.get_cached_query_indices()
+                            }
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
-                let cont_val = if include_continuations {
-                    Some(json!(rep.continuations.unwrap_or_default()))
-                } else {
-                    None
+
+                let (report, maybe_matches) = calculate_tree_and_continuations_with_matches(
+                    fen_str,
+                    &target_pos,
+                    db,
+                    &db_path,
+                    current_tree_index,
+                    current_pos_index,
+                    filter_target_ids.as_deref(),
+                    max_sample_ids,
+                    continuation_config.as_ref(),
+                    true, // collect all matching game IDs in the exact same pass!
+                    cancel_token,
+                );
+
+                let matches = match maybe_matches {
+                    Some(ids) => ids,
+                    None => evaluate_position_matches(fen_str, db, &db_path, filter_opt.as_ref()),
                 };
-                (tree_val, cont_val)
-            }
-            None => (
-                if include_tree {
-                    Some(
-                        json!({ "moves": [], "total_games": 0, "white_pct": 0.0, "draw_pct": 0.0, "black_pct": 0.0 }),
-                    )
-                } else {
-                    None
+
+                (report, matches)
+            } else {
+                let matches = evaluate_position_matches(fen_str, db, &db_path, filter_opt.as_ref());
+                (None, matches)
+            };
+
+            let duration = start_time.elapsed().as_millis() as u64;
+            let session_query = match filter_opt.clone() {
+                Some(f) => SessionQuery::FilteredPosition {
+                    fen: fen_str.to_string(),
+                    match_mode: PositionMatchMode::Exact,
+                    max_ply: None,
+                    filter: Box::new(f),
                 },
-                if include_continuations {
-                    Some(json!([]))
-                } else {
-                    None
+                None => SessionQuery::PurePosition {
+                    fen: fen_str.to_string(),
+                    match_mode: PositionMatchMode::Exact,
+                    max_ply: None,
                 },
-            ),
-        }
-    } else {
-        (None, None)
-    };
+            };
+
+            let total = pos_matches.len();
+            let candidate_ids: Vec<usize> = if include_endgames {
+                pos_matches.iter().map(|&gid| gid as usize).collect()
+            } else {
+                Vec::new()
+            };
+
+            let s_id = session_mgr.create_session_with_metadata(
+                &db_key,
+                &query_key,
+                total_db_games,
+                pos_matches,
+                duration,
+                SessionOwner::Reference,
+                session_query,
+            );
+
+            let (t_data, c_data) =
+                format_tree_and_continuations(tree_report, include_tree, include_continuations);
+
+            (s_id, total, candidate_ids, t_data, c_data)
+        };
 
     // 3. Endgames Popularity Computation
     let endgames_data = if include_endgames {
@@ -437,6 +456,64 @@ fn evaluate_position_matches(
     db_path: &std::path::Path,
     filter_opt: Option<&GameFilter>,
 ) -> Vec<u32> {
+    // ⚡ Fast path for initial position: every standard game starts at ply 0
+    if crate::position_search::is_initial_fen(fen_str) {
+        if let Some(filt) = filter_opt {
+            if !filt.is_empty() {
+                let matches: Vec<u32> = match db {
+                    DatabaseBackend::Scid(s) => {
+                        let _ = s.query_games(filt, 0, 0);
+                        s.get_cached_query_indices()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|gid| gid as u32)
+                            .collect()
+                    }
+                    DatabaseBackend::Pgn(p) => {
+                        let _ = p.query_games(filt, 0, 0);
+                        p.get_cached_query_indices()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|gid| gid as u32)
+                            .collect()
+                    }
+                };
+                return matches;
+            }
+        }
+
+        let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
+        if booster_path.exists() {
+            if let Ok(boost_idx) = crate::search_booster::MmapBoostIndex::open(&booster_path) {
+                let total_games = boost_idx.game_count();
+                use rayon::prelude::*;
+                let matches: Vec<u32> = (0..total_games)
+                    .into_par_iter()
+                    .filter_map(|gid| {
+                        let entry = boost_idx.get_game_entry(gid)?;
+                        if !entry.is_deleted() && !entry.is_custom_fen() {
+                            Some(gid as u32)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                return matches;
+            }
+        }
+
+        let matches: Vec<u32> = match db {
+            DatabaseBackend::Scid(s) => s
+                .entries()
+                .iter()
+                .enumerate()
+                .filter_map(|(gid, e)| if !e.deleted { Some(gid as u32) } else { None })
+                .collect(),
+            DatabaseBackend::Pgn(p) => (0..p.entries.len() as u32).collect(),
+        };
+        return matches;
+    }
+
     let mut matching_ids = Vec::new();
 
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
@@ -450,12 +527,21 @@ fn evaluate_position_matches(
     } else {
         match db {
             DatabaseBackend::Scid(s) => {
-                if let Ok(res) = s.search_position(fen_str, None, None, None) {
+                if crate::position_search::is_initial_fen(fen_str) {
+                    matching_ids = s
+                        .entries()
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(gid, e)| if !e.deleted { Some(gid) } else { None })
+                        .collect();
+                } else if let Ok(res) = s.search_position(fen_str, None, None, None) {
                     matching_ids = res.matches.into_iter().map(|m| m.game_id).collect();
                 }
             }
             DatabaseBackend::Pgn(p) => {
-                if let Ok(res) = p.search_position(fen_str, None, None, None, |_, _, _| {}) {
+                if crate::position_search::is_initial_fen(fen_str) {
+                    matching_ids = (0..p.entries.len()).collect();
+                } else if let Ok(res) = p.search_position(fen_str, None, None, None, |_, _, _| {}) {
                     matching_ids = res.matches.into_iter().map(|m| m.game_id).collect();
                 }
             }
@@ -488,9 +574,59 @@ fn evaluate_position_matches(
     matching_ids.into_iter().map(|gid| gid as u32).collect()
 }
 
-/// Calculates opening tree move stats and continuation lines in a single pass
+/// Helper to format OpeningTreeReport into tree and continuation json values
+fn format_tree_and_continuations(
+    report: Option<OpeningTreeReport>,
+    include_tree: bool,
+    include_continuations: bool,
+) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+    if !include_tree && !include_continuations {
+        return (None, None);
+    }
+    match report {
+        Some(rep) => {
+            let tree_val = if include_tree {
+                Some(json!({
+                    "moves": rep.moves,
+                    "total_games": rep.total_games,
+                    "white_wins": rep.white_wins,
+                    "draws": rep.draws,
+                    "black_wins": rep.black_wins,
+                    "white_pct": rep.white_pct,
+                    "draw_pct": rep.draw_pct,
+                    "black_pct": rep.black_pct,
+                    "sample_game_ids": rep.sample_game_ids,
+                }))
+            } else {
+                None
+            };
+            let cont_val = if include_continuations {
+                Some(json!(rep.continuations.unwrap_or_default()))
+            } else {
+                None
+            };
+            (tree_val, cont_val)
+        }
+        None => (
+            if include_tree {
+                Some(
+                    json!({ "moves": [], "total_games": 0, "white_pct": 0.0, "draw_pct": 0.0, "black_pct": 0.0 }),
+                )
+            } else {
+                None
+            },
+            if include_continuations {
+                Some(json!([]))
+            } else {
+                None
+            },
+        ),
+    }
+}
+
+/// Calculates opening tree move stats, continuation lines, and optionally all matching game IDs in a single unified pass
 #[allow(clippy::too_many_arguments)]
-fn calculate_tree_and_continuations(
+fn calculate_tree_and_continuations_with_matches(
     fen_str: &str,
     _target_pos: &Chess,
     db: &DatabaseBackend,
@@ -500,8 +636,9 @@ fn calculate_tree_and_continuations(
     target_game_ids: Option<&[usize]>,
     max_sample_ids: Option<usize>,
     continuation_config: Option<&ContinuationQuery>,
+    collect_all_matching_game_ids: bool,
     _cancel_token: &Arc<AtomicBool>,
-) -> Option<OpeningTreeReport> {
+) -> (Option<OpeningTreeReport>, Option<Vec<u32>>) {
     // 1. Ultra-fast dynamic calculation from .boost.idx (Search Booster)
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
     if booster_path.exists() {
@@ -537,14 +674,31 @@ fn calculate_tree_and_continuations(
                             )
                         })
                     };
-                    if let Ok(Some(rep)) = evaluator.calculate_opening_tree(
+                    match evaluator.calculate_opening_tree_with_matches(
                         fen_str,
                         target_game_ids,
                         max_sample_ids,
+                        collect_all_matching_game_ids,
                         Some(meta_lookup),
                         continuation_config,
                     ) {
-                        return Some(rep);
+                        Ok(Some((rep, ids))) => {
+                            let ids_opt = if collect_all_matching_game_ids {
+                                Some(ids)
+                            } else {
+                                None
+                            };
+                            return (Some(rep), ids_opt);
+                        }
+                        Ok(None) => {
+                            let ids_opt = if collect_all_matching_game_ids {
+                                Some(Vec::new())
+                            } else {
+                                None
+                            };
+                            return (None, ids_opt);
+                        }
+                        Err(_) => {}
                     }
                 }
                 DatabaseBackend::Pgn(p) => {
@@ -582,21 +736,38 @@ fn calculate_tree_and_continuations(
                             )
                         })
                     };
-                    if let Ok(Some(rep)) = evaluator.calculate_opening_tree(
+                    match evaluator.calculate_opening_tree_with_matches(
                         fen_str,
                         target_game_ids,
                         max_sample_ids,
+                        collect_all_matching_game_ids,
                         Some(meta_lookup),
                         continuation_config,
                     ) {
-                        return Some(rep);
+                        Ok(Some((rep, ids))) => {
+                            let ids_opt = if collect_all_matching_game_ids {
+                                Some(ids)
+                            } else {
+                                None
+                            };
+                            return (Some(rep), ids_opt);
+                        }
+                        Ok(None) => {
+                            let ids_opt = if collect_all_matching_game_ids {
+                                Some(Vec::new())
+                            } else {
+                                None
+                            };
+                            return (None, ids_opt);
+                        }
+                        Err(_) => {}
                     }
                 }
             }
         }
     }
 
-    // 3. Pre-calculated .tree.idx lookup if unfiltered
+    // 2. Pre-calculated .tree.idx lookup if unfiltered
     if current_tree_index.is_none() {
         *current_tree_index = TreeIndex::load(db_path).ok();
     }
@@ -604,11 +775,11 @@ fn calculate_tree_and_continuations(
         if let Some(rep) =
             tree_idx.query_tree_with_options(fen_str, target_game_ids, max_sample_ids)
         {
-            return Some(rep);
+            return (Some(rep), None);
         }
     }
 
-    None
+    (None, None)
 }
 
 /// Calculates endgame distribution for a position using .feat.idx
