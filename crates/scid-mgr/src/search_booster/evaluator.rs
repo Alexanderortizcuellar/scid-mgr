@@ -237,6 +237,113 @@ pub fn chess_to_board_array(pos: &Chess) -> [u8; 64] {
     board
 }
 
+/// Bitmask representation of castling rights:
+/// bit 0: White Kingside (O-O)
+/// bit 1: White Queenside (O-O-O)
+/// bit 2: Black Kingside (o-o)
+/// bit 3: Black Queenside (o-o-o)
+#[inline]
+pub fn target_castling_rights_bits(pos: &Chess) -> u8 {
+    let castles = pos.castles();
+    let mut bits = 0u8;
+    if castles.has(shakmaty::Color::White, shakmaty::CastlingSide::KingSide) {
+        bits |= 1 << 0;
+    }
+    if castles.has(shakmaty::Color::White, shakmaty::CastlingSide::QueenSide) {
+        bits |= 1 << 1;
+    }
+    if castles.has(shakmaty::Color::Black, shakmaty::CastlingSide::KingSide) {
+        bits |= 1 << 2;
+    }
+    if castles.has(shakmaty::Color::Black, shakmaty::CastlingSide::QueenSide) {
+        bits |= 1 << 3;
+    }
+    bits
+}
+
+/// Returns the legal en passant target square index (0..63) if any, or 0xFF if none.
+#[inline]
+pub fn target_ep_square_val(pos: &Chess) -> u8 {
+    match pos.ep_square(EnPassantMode::Legal) {
+        Some(sq) => sq as u8,
+        None => 0xFF,
+    }
+}
+
+/// Phase 2 verification: verifies castling rights and en passant square match the target position
+/// by replaying move history up to `ply`.
+/// Runs only on games where piece placement and turn parity already matched.
+#[inline]
+pub fn verify_fide_rights(
+    moves: &[BoostMove],
+    target_castling_bits: u8,
+    target_ep_square: u8,
+) -> bool {
+    // 1. En Passant Check:
+    // If target expects an en passant target square, the immediate previous move (at ply - 1)
+    // MUST be a double pawn push landing adjacent to the en passant square.
+    if target_ep_square != 0xFF {
+        if moves.is_empty() {
+            return false;
+        }
+        let last_move = moves[moves.len() - 1];
+        if !last_move.is_double_pawn_push() {
+            return false;
+        }
+        let ep_sq = match (last_move.from(), last_move.to()) {
+            (from, to) if from + 16 == to => from + 8, // White pawn push e2 -> e4 has ep e3
+            (from, to) if from >= 16 && from - 16 == to => from - 8, // Black pawn push e7 -> e5 has ep e6
+            _ => 0xFF,
+        };
+        if ep_sq as u8 != target_ep_square {
+            return false;
+        }
+    }
+
+    // 2. Castling Rights Check:
+    // Track standard starting castling rights (0b1111 = all 4 rights intact at start).
+    let mut castling_rights = 0b1111u8;
+
+    for &m in moves.iter() {
+        if castling_rights == 0 {
+            break;
+        }
+        let from = m.from();
+        let to = m.to();
+
+        // King moves or King captures (though legal chess doesn't capture kings, king move loses rights)
+        if from == 4 {
+            castling_rights &= !(0b0011); // White king moved: loses K and Q rights
+        } else if from == 60 {
+            castling_rights &= !(0b1100); // Black king moved: loses k and q rights
+        }
+
+        // Rook moves from original corners
+        if from == 7 {
+            castling_rights &= !(1 << 0); // White Rh1 moved
+        } else if from == 0 {
+            castling_rights &= !(1 << 1); // White Ra1 moved
+        } else if from == 63 {
+            castling_rights &= !(1 << 2); // Black Rh8 moved
+        } else if from == 56 {
+            castling_rights &= !(1 << 3); // Black Ra8 moved
+        }
+
+        // Rooks captured on original corners
+        if to == 7 {
+            castling_rights &= !(1 << 0); // White Rh1 captured
+        } else if to == 0 {
+            castling_rights &= !(1 << 1); // White Ra1 captured
+        } else if to == 63 {
+            castling_rights &= !(1 << 2); // Black Rh8 captured
+        } else if to == 56 {
+            castling_rights &= !(1 << 3); // Black Ra8 captured
+        }
+    }
+
+    castling_rights == target_castling_bits
+}
+
 /// Result match containing matching game ID and ply numbers
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoostMatch {
@@ -290,12 +397,17 @@ impl<'a> BoostSearchEvaluator<'a> {
             None => None,
         };
 
+        let target_castling_bits = target_castling_rights_bits(&target_pos);
+        let target_ep_square = target_ep_square_val(&target_pos);
+
         let progress_counter = std::sync::atomic::AtomicUsize::new(0);
         let match_counter = std::sync::atomic::AtomicUsize::new(0);
         let step = (total_games / 100).clamp(5_000, 50_000);
 
         let is_root_initial = target_board == FastReplayState::new().board
-            && (turn_req.is_none() || turn_req == Some(0));
+            && (turn_req.is_none() || turn_req == Some(0))
+            && target_castling_bits == 0b1111
+            && target_ep_square == 0xFF;
 
         // ⚡ Ultra-fast bypass for standard root initial position:
         // Every standard non-deleted game matches at ply 0 without simulating any moves
@@ -355,7 +467,10 @@ impl<'a> BoostSearchEvaluator<'a> {
                 let mut replay = FastReplayState::new();
                 let mut matching_plies = Vec::new();
 
-                if replay.board == target_board && (turn_req.is_none() || turn_req == Some(0)) {
+                if (turn_req.is_none() || turn_req == Some(0))
+                    && replay.board == target_board
+                    && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+                {
                     matching_plies.push(0);
                 }
 
@@ -365,14 +480,15 @@ impl<'a> BoostSearchEvaluator<'a> {
                         break;
                     }
                     let ply = ply_idx + 1;
-                    if replay.board == target_board {
-                        let matches_turn = match turn_req {
-                            Some(rem) => (ply % 2) as u8 == rem,
-                            None => true,
-                        };
-                        if matches_turn {
-                            matching_plies.push(ply);
-                        }
+                    let matches_turn = match turn_req {
+                        Some(rem) => (ply as u8 & 1) == rem,
+                        None => true,
+                    };
+                    if matches_turn
+                        && replay.board == target_board
+                        && verify_fide_rights(&moves[..ply], target_castling_bits, target_ep_square)
+                    {
+                        matching_plies.push(ply);
                     }
                 }
 
@@ -433,6 +549,13 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let target_board = chess_to_board_array(&target_pos);
         let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
+        let target_castling_bits = target_castling_rights_bits(&target_pos);
+        let target_ep_square = target_ep_square_val(&target_pos);
+        let expected_parity: usize = if target_pos.turn() == shakmaty::Color::White {
+            0
+        } else {
+            1
+        };
         let total_games = self.index.game_count();
 
         let move_counts = (0..total_games)
@@ -452,7 +575,11 @@ impl<'a> BoostSearchEvaluator<'a> {
                 };
 
                 let mut replay = FastReplayState::new();
-                if replay.board == target_board && !moves.is_empty() {
+                if expected_parity == 0
+                    && replay.board == target_board
+                    && !moves.is_empty()
+                    && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+                {
                     *acc.entry(moves[0].0).or_insert(0) += 1;
                 }
 
@@ -461,8 +588,13 @@ impl<'a> BoostSearchEvaluator<'a> {
                     if replay.white_pieces < target_w || replay.black_pieces < target_b {
                         break;
                     }
-                    if replay.board == target_board && ply_idx + 1 < moves.len() {
-                        *acc.entry(moves[ply_idx + 1].0).or_insert(0) += 1;
+                    let ply = ply_idx + 1;
+                    if (ply & 1) == expected_parity
+                        && replay.board == target_board
+                        && ply < moves.len()
+                        && verify_fide_rights(&moves[..ply], target_castling_bits, target_ep_square)
+                    {
+                        *acc.entry(moves[ply].0).or_insert(0) += 1;
                     }
                 }
 
@@ -500,6 +632,13 @@ impl<'a> BoostSearchEvaluator<'a> {
 
         let target_board = chess_to_board_array(&target_pos);
         let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
+        let target_castling_bits = target_castling_rights_bits(&target_pos);
+        let target_ep_square = target_ep_square_val(&target_pos);
+        let expected_parity: usize = if target_pos.turn() == shakmaty::Color::White {
+            0
+        } else {
+            1
+        };
         let total_games = self.index.game_count();
 
         let line_counts = (0..total_games)
@@ -519,7 +658,11 @@ impl<'a> BoostSearchEvaluator<'a> {
                 };
 
                 let mut replay = FastReplayState::new();
-                if replay.board == target_board && !moves.is_empty() {
+                if expected_parity == 0
+                    && replay.board == target_board
+                    && !moves.is_empty()
+                    && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+                {
                     let end = depth.min(moves.len());
                     let path = PackedPath256::from_slice(&moves[0..end]);
                     *acc.entry(path).or_insert(0) += 1;
@@ -530,8 +673,13 @@ impl<'a> BoostSearchEvaluator<'a> {
                     if replay.white_pieces < target_w || replay.black_pieces < target_b {
                         break;
                     }
-                    if replay.board == target_board && ply_idx + 1 < moves.len() {
-                        let start = ply_idx + 1;
+                    let ply = ply_idx + 1;
+                    if (ply & 1) == expected_parity
+                        && replay.board == target_board
+                        && ply < moves.len()
+                        && verify_fide_rights(&moves[..ply], target_castling_bits, target_ep_square)
+                    {
+                        let start = ply;
                         let end = (start + depth).min(moves.len());
                         let path = PackedPath256::from_slice(&moves[start..end]);
                         *acc.entry(path).or_insert(0) += 1;
@@ -560,6 +708,13 @@ impl<'a> BoostSearchEvaluator<'a> {
     pub fn sample_position_game_ids(&self, target_pos: &Chess, max_samples: usize) -> Vec<u32> {
         let target_board = chess_to_board_array(target_pos);
         let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
+        let target_castling_bits = target_castling_rights_bits(target_pos);
+        let target_ep_square = target_ep_square_val(target_pos);
+        let expected_parity: usize = if target_pos.turn() == shakmaty::Color::White {
+            0
+        } else {
+            1
+        };
         let total_games = self.index.header.db_game_count as usize;
         let mut samples = Vec::with_capacity(max_samples);
 
@@ -569,16 +724,23 @@ impl<'a> BoostSearchEvaluator<'a> {
             }
             if let Some(moves) = self.index.get_game_moves(gid) {
                 let mut replay = FastReplayState::new();
-                if replay.board == target_board {
+                if expected_parity == 0
+                    && replay.board == target_board
+                    && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+                {
                     samples.push(gid as u32);
                     continue;
                 }
-                for &m in moves.iter() {
+                for (ply_idx, &m) in moves.iter().enumerate() {
                     replay.apply_move(m);
                     if replay.white_pieces < target_w || replay.black_pieces < target_b {
                         break;
                     }
-                    if replay.board == target_board {
+                    let ply = ply_idx + 1;
+                    if (ply & 1) == expected_parity
+                        && replay.board == target_board
+                        && verify_fide_rights(&moves[..ply], target_castling_bits, target_ep_square)
+                    {
                         samples.push(gid as u32);
                         break;
                     }
@@ -597,6 +759,13 @@ impl<'a> BoostSearchEvaluator<'a> {
     ) -> HashMap<u16, Vec<u32>> {
         let target_board = chess_to_board_array(target_pos);
         let (target_w, target_b) = FastReplayState::count_pieces(&target_board);
+        let target_castling_bits = target_castling_rights_bits(target_pos);
+        let target_ep_square = target_ep_square_val(target_pos);
+        let expected_parity: usize = if target_pos.turn() == shakmaty::Color::White {
+            0
+        } else {
+            1
+        };
         let total_games = self.index.header.db_game_count as usize;
         let move_set: HashSet<u16> = child_moves.iter().map(|m| m.0).collect();
         let mut samples_map: HashMap<u16, Vec<u32>> = HashMap::new();
@@ -612,7 +781,10 @@ impl<'a> BoostSearchEvaluator<'a> {
             if let Some(moves) = self.index.get_game_moves(gid) {
                 let mut replay = FastReplayState::new();
                 let mut hit_ply: Option<usize> = None;
-                if replay.board == target_board {
+                if expected_parity == 0
+                    && replay.board == target_board
+                    && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+                {
                     hit_ply = Some(0);
                 } else {
                     for (ply_idx, &m) in moves.iter().enumerate() {
@@ -620,8 +792,16 @@ impl<'a> BoostSearchEvaluator<'a> {
                         if replay.white_pieces < target_w || replay.black_pieces < target_b {
                             break;
                         }
-                        if replay.board == target_board {
-                            hit_ply = Some(ply_idx + 1);
+                        let ply = ply_idx + 1;
+                        if (ply & 1) == expected_parity
+                            && replay.board == target_board
+                            && verify_fide_rights(
+                                &moves[..ply],
+                                target_castling_bits,
+                                target_ep_square,
+                            )
+                        {
+                            hit_ply = Some(ply);
                             break;
                         }
                     }
@@ -712,8 +892,18 @@ impl<'a> BoostSearchEvaluator<'a> {
         }
 
         let total_games_in_index = self.index.game_count();
+        let expected_parity: usize = if target_pos.turn() == shakmaty::Color::White {
+            0
+        } else {
+            1
+        };
+        let target_castling_bits = target_castling_rights_bits(&target_pos);
+        let target_ep_square = target_ep_square_val(&target_pos);
+
         let is_root_initial = target_board == FastReplayState::new().board
-            && target_pos.turn() == shakmaty::Color::White;
+            && target_pos.turn() == shakmaty::Color::White
+            && target_castling_bits == 0b1111
+            && target_ep_square == 0xFF;
 
         let process_game = |gid: usize, acc: &mut TreeAcc| {
             let _entry = match self.index.get_game_entry(gid) {
@@ -729,7 +919,10 @@ impl<'a> BoostSearchEvaluator<'a> {
                 Some(0)
             } else {
                 let mut replay = FastReplayState::new();
-                if replay.board == target_board {
+                if expected_parity == 0
+                    && replay.board == target_board
+                    && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+                {
                     Some(0)
                 } else {
                     let mut hit = None;
@@ -738,8 +931,16 @@ impl<'a> BoostSearchEvaluator<'a> {
                         if replay.white_pieces < target_w || replay.black_pieces < target_b {
                             break;
                         }
-                        if replay.board == target_board {
-                            hit = Some(ply_idx + 1);
+                        let ply = ply_idx + 1;
+                        if (ply & 1) == expected_parity
+                            && replay.board == target_board
+                            && verify_fide_rights(
+                                &moves[..ply],
+                                target_castling_bits,
+                                target_ep_square,
+                            )
+                        {
+                            hit = Some(ply);
                             break;
                         }
                     }
