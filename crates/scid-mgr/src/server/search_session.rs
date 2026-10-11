@@ -1,4 +1,3 @@
-use crate::search::ScidMatchResult;
 use crate::server::DatabaseBackend;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -63,15 +62,15 @@ pub struct SearchSession {
     pub query: SessionQuery,
     pub query_str: String,
     pub total_searched: usize,
-    pub matches: Vec<ScidMatchResult>,
-    pub sorted_cache: HashMap<(Option<String>, bool), Vec<ScidMatchResult>>,
+    pub matches: Vec<u32>,
+    pub sorted_cache: HashMap<(Option<String>, bool), Vec<u32>>,
     pub created_at: Instant,
     pub last_accessed: Instant,
     pub duration_ms: u64,
 }
 
 impl SearchSession {
-    /// Returns a paginated slice of matched games sorted according to the requested column
+    /// Returns a paginated slice of matched game IDs sorted according to the requested column
     pub fn get_sorted_slice(
         &mut self,
         sort_by: Option<&str>,
@@ -79,7 +78,7 @@ impl SearchSession {
         page: usize,
         page_size: usize,
         db: &DatabaseBackend,
-    ) -> (&[ScidMatchResult], usize) {
+    ) -> (&[u32], usize) {
         let total = self.matches.len();
         let start = page * page_size;
         if start >= total {
@@ -110,56 +109,56 @@ impl SearchSession {
             (DatabaseBackend::Scid(s), Some("date")) => {
                 let entries = &s.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].date);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].date);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id].date.cmp(&entries[a.game_id].date)
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize].date.cmp(&entries[a as usize].date)
                     });
                 }
             }
             (DatabaseBackend::Scid(s), Some("white_elo")) => {
                 let entries = &s.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].white_elo);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].white_elo);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id]
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize]
                             .white_elo
-                            .cmp(&entries[a.game_id].white_elo)
+                            .cmp(&entries[a as usize].white_elo)
                     });
                 }
             }
             (DatabaseBackend::Scid(s), Some("black_elo")) => {
                 let entries = &s.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].black_elo);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].black_elo);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id]
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize]
                             .black_elo
-                            .cmp(&entries[a.game_id].black_elo)
+                            .cmp(&entries[a as usize].black_elo)
                     });
                 }
             }
             (DatabaseBackend::Scid(s), Some("eco")) => {
                 let entries = &s.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].eco_code);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].eco_code);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id]
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize]
                             .eco_code
-                            .cmp(&entries[a.game_id].eco_code)
+                            .cmp(&entries[a as usize].eco_code)
                     });
                 }
             }
             (DatabaseBackend::Scid(s), Some("result")) => {
                 let entries = &s.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].result);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].result);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id].result.cmp(&entries[a.game_id].result)
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize].result.cmp(&entries[a as usize].result)
                     });
                 }
             }
@@ -167,20 +166,20 @@ impl SearchSession {
                 let entries = &s.entries;
                 let ranks = s.get_player_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].white_id as usize)
+                            .get(entries[gid as usize].white_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].white_id as usize)
+                            .get(entries[a as usize].white_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].white_id as usize)
+                            .get(entries[b as usize].white_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -191,20 +190,20 @@ impl SearchSession {
                 let entries = &s.entries;
                 let ranks = s.get_player_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].black_id as usize)
+                            .get(entries[gid as usize].black_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].black_id as usize)
+                            .get(entries[a as usize].black_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].black_id as usize)
+                            .get(entries[b as usize].black_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -215,20 +214,20 @@ impl SearchSession {
                 let entries = &s.entries;
                 let ranks = s.get_event_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].event_id as usize)
+                            .get(entries[gid as usize].event_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].event_id as usize)
+                            .get(entries[a as usize].event_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].event_id as usize)
+                            .get(entries[b as usize].event_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -239,20 +238,20 @@ impl SearchSession {
                 let entries = &s.entries;
                 let ranks = s.get_site_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].site_id as usize)
+                            .get(entries[gid as usize].site_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].site_id as usize)
+                            .get(entries[a as usize].site_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].site_id as usize)
+                            .get(entries[b as usize].site_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -263,20 +262,20 @@ impl SearchSession {
                 let entries = &s.entries;
                 let ranks = s.get_round_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].round_id as usize)
+                            .get(entries[gid as usize].round_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].round_id as usize)
+                            .get(entries[a as usize].round_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].round_id as usize)
+                            .get(entries[b as usize].round_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -288,54 +287,54 @@ impl SearchSession {
             (DatabaseBackend::Pgn(p), Some("date")) => {
                 let entries = &p.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].date);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].date);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id].date.cmp(&entries[a.game_id].date)
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize].date.cmp(&entries[a as usize].date)
                     });
                 }
             }
             (DatabaseBackend::Pgn(p), Some("white_elo")) => {
                 let entries = &p.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].white_elo);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].white_elo);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id]
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize]
                             .white_elo
-                            .cmp(&entries[a.game_id].white_elo)
+                            .cmp(&entries[a as usize].white_elo)
                     });
                 }
             }
             (DatabaseBackend::Pgn(p), Some("black_elo")) => {
                 let entries = &p.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].black_elo);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].black_elo);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id]
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize]
                             .black_elo
-                            .cmp(&entries[a.game_id].black_elo)
+                            .cmp(&entries[a as usize].black_elo)
                     });
                 }
             }
             (DatabaseBackend::Pgn(p), Some("eco")) => {
                 let entries = &p.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].eco);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].eco);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id].eco.cmp(&entries[a.game_id].eco)
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize].eco.cmp(&entries[a as usize].eco)
                     });
                 }
             }
             (DatabaseBackend::Pgn(p), Some("result")) => {
                 let entries = &p.entries;
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| entries[m.game_id].result);
+                    sorted.par_sort_unstable_by_key(|&gid| entries[gid as usize].result);
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        entries[b.game_id].result.cmp(&entries[a.game_id].result)
+                    sorted.par_sort_unstable_by(|&a, &b| {
+                        entries[b as usize].result.cmp(&entries[a as usize].result)
                     });
                 }
             }
@@ -343,20 +342,20 @@ impl SearchSession {
                 let entries = &p.entries;
                 let ranks = p.get_player_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].white_id as usize)
+                            .get(entries[gid as usize].white_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].white_id as usize)
+                            .get(entries[a as usize].white_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].white_id as usize)
+                            .get(entries[b as usize].white_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -367,20 +366,20 @@ impl SearchSession {
                 let entries = &p.entries;
                 let ranks = p.get_player_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].black_id as usize)
+                            .get(entries[gid as usize].black_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].black_id as usize)
+                            .get(entries[a as usize].black_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].black_id as usize)
+                            .get(entries[b as usize].black_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -391,20 +390,20 @@ impl SearchSession {
                 let entries = &p.entries;
                 let ranks = p.get_event_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].event_id as usize)
+                            .get(entries[gid as usize].event_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].event_id as usize)
+                            .get(entries[a as usize].event_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].event_id as usize)
+                            .get(entries[b as usize].event_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -415,20 +414,20 @@ impl SearchSession {
                 let entries = &p.entries;
                 let ranks = p.get_site_ranks();
                 if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
+                    sorted.par_sort_unstable_by_key(|&gid| {
                         ranks
-                            .get(entries[m.game_id].site_id as usize)
+                            .get(entries[gid as usize].site_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX)
                     });
                 } else {
-                    sorted.par_sort_unstable_by(|a, b| {
+                    sorted.par_sort_unstable_by(|&a, &b| {
                         let r_a = ranks
-                            .get(entries[a.game_id].site_id as usize)
+                            .get(entries[a as usize].site_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         let r_b = ranks
-                            .get(entries[b.game_id].site_id as usize)
+                            .get(entries[b as usize].site_id as usize)
                             .copied()
                             .unwrap_or(u32::MAX);
                         r_b.cmp(&r_a)
@@ -436,40 +435,11 @@ impl SearchSession {
                 }
             }
 
-            // Universal Match Details Sorting
-            (_, Some("matches") | Some("match_count")) => {
-                if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| m.match_details.match_count);
-                } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        b.match_details
-                            .match_count
-                            .cmp(&a.match_details.match_count)
-                    });
-                }
-            }
-            (_, Some("first_ply") | Some("ply")) => {
-                if sort_asc {
-                    sorted.par_sort_unstable_by_key(|m| {
-                        m.match_details
-                            .matching_plies
-                            .first()
-                            .copied()
-                            .unwrap_or(usize::MAX)
-                    });
-                } else {
-                    sorted.par_sort_unstable_by(|a, b| {
-                        let p_a = a.match_details.matching_plies.first().copied().unwrap_or(0);
-                        let p_b = b.match_details.matching_plies.first().copied().unwrap_or(0);
-                        p_b.cmp(&p_a)
-                    });
-                }
-            }
             (_, Some("id") | Some("index")) => {
                 if !sort_asc {
-                    sorted.par_sort_unstable_by(|a, b| b.game_id.cmp(&a.game_id));
+                    sorted.par_sort_unstable_by(|a, b| b.cmp(a));
                 } else {
-                    sorted.par_sort_unstable_by_key(|m| m.game_id);
+                    sorted.par_sort_unstable();
                 }
             }
             _ => {}
@@ -535,7 +505,7 @@ impl SearchSessionManager {
         db_key: &str,
         query_str: &str,
         total_searched: usize,
-        matches: Vec<ScidMatchResult>,
+        matches: Vec<u32>,
         duration_ms: u64,
     ) -> String {
         self.create_session_with_metadata(
@@ -558,7 +528,7 @@ impl SearchSessionManager {
         db_key: &str,
         query_str: &str,
         total_searched: usize,
-        matches: Vec<ScidMatchResult>,
+        matches: Vec<u32>,
         duration_ms: u64,
         owner: SessionOwner,
         query: SessionQuery,

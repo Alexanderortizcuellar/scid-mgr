@@ -4,8 +4,6 @@ use crate::endgame_index::{
     resolve_companion_feat_path, EndgameCatalog, EndgameQueryEngine, MmapFeatureIndex,
 };
 use crate::position_index::PositionIndex;
-use crate::search::evaluator::QueryMatchResult;
-use crate::search::ScidMatchResult;
 use crate::server::search_session::{
     PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
 };
@@ -299,7 +297,7 @@ pub fn handle_reference(
     // Extract candidate game IDs for downstream computations
     let (candidate_game_ids, matched_total) = {
         let session = session_mgr.get_session(&search_id).unwrap();
-        let ids: Vec<usize> = session.matches.iter().map(|m| m.game_id).collect();
+        let ids: Vec<usize> = session.matches.iter().map(|&gid| gid as usize).collect();
         let count = session.matches.len();
         (ids, count)
     };
@@ -389,19 +387,19 @@ pub fn handle_reference(
         let summaries: Vec<serde_json::Value> = match db {
             DatabaseBackend::Scid(s) => slice
                 .iter()
-                .filter_map(|m| {
-                    let mut summ = s.get_game_summary(m.game_id)?;
-                    summ.matching_plies = Some(m.match_details.matching_plies.clone());
-                    summ.match_count = Some(m.match_details.match_count);
+                .filter_map(|&gid| {
+                    let mut summ = s.get_game_summary(gid as usize)?;
+                    summ.matching_plies = Some(vec![]);
+                    summ.match_count = Some(1);
                     serde_json::to_value(&summ).ok()
                 })
                 .collect(),
             DatabaseBackend::Pgn(p) => slice
                 .iter()
-                .map(|m| {
-                    let mut summ = p.get_summary(m.game_id);
-                    summ.matching_plies = Some(m.match_details.matching_plies.clone());
-                    summ.match_count = Some(m.match_details.match_count);
+                .map(|&gid| {
+                    let mut summ = p.get_summary(gid as usize);
+                    summ.matching_plies = Some(vec![]);
+                    summ.match_count = Some(1);
                     serde_json::to_value(&summ).unwrap_or_default()
                 })
                 .collect(),
@@ -438,7 +436,7 @@ fn evaluate_position_matches(
     db: &DatabaseBackend,
     db_path: &std::path::Path,
     filter_opt: Option<&GameFilter>,
-) -> Vec<ScidMatchResult> {
+) -> Vec<u32> {
     let mut matching_ids = Vec::new();
 
     let booster_path = crate::search_booster::resolve_companion_booster_path(db_path);
@@ -487,17 +485,7 @@ fn evaluate_position_matches(
         }
     }
 
-    matching_ids
-        .into_iter()
-        .map(|gid| ScidMatchResult {
-            game_id: gid,
-            match_details: QueryMatchResult {
-                is_match: true,
-                matching_plies: vec![],
-                match_count: 1,
-            },
-        })
-        .collect()
+    matching_ids.into_iter().map(|gid| gid as u32).collect()
 }
 
 /// Calculates opening tree move stats and continuation lines in a single pass

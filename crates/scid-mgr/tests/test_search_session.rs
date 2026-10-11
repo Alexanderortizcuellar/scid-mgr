@@ -355,8 +355,6 @@ fn test_search_session_scid_and_pgn_pagination() {
 
 #[test]
 fn test_search_session_manager_lru_and_ownership() {
-    use scid_mgr::search::evaluator::QueryMatchResult;
-    use scid_mgr::search::ScidMatchResult;
     use scid_mgr::server::search_session::{
         PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
     };
@@ -368,14 +366,7 @@ fn test_search_session_manager_lru_and_ownership() {
         "db1",
         "player:Carlsen",
         1000,
-        vec![ScidMatchResult {
-            game_id: 1,
-            match_details: QueryMatchResult {
-                is_match: true,
-                matching_plies: vec![],
-                match_count: 1,
-            },
-        }],
+        vec![1u32],
         10,
         SessionOwner::Main,
         SessionQuery::HeaderSearch {
@@ -588,8 +579,6 @@ fn test_search_session_lru_touch_mru_promotion() {
 
 #[test]
 fn test_search_session_main_session_retention_under_flood() {
-    use scid_mgr::search::evaluator::QueryMatchResult;
-    use scid_mgr::search::ScidMatchResult;
     use scid_mgr::server::search_session::{
         PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
     };
@@ -601,14 +590,7 @@ fn test_search_session_main_session_retention_under_flood() {
         "db_main",
         "player:Kasparov",
         50000,
-        vec![ScidMatchResult {
-            game_id: 42,
-            match_details: QueryMatchResult {
-                is_match: true,
-                matching_plies: vec![10],
-                match_count: 1,
-            },
-        }],
+        vec![42u32],
         15,
         SessionOwner::Main,
         SessionQuery::HeaderSearch {
@@ -648,13 +630,11 @@ fn test_search_session_main_session_retention_under_flood() {
         .expect("Main session must survive reference flood");
     assert_eq!(main_session.owner, SessionOwner::Main);
     assert_eq!(main_session.matches.len(), 1);
-    assert_eq!(main_session.matches[0].game_id, 42);
+    assert_eq!(main_session.matches[0], 42);
 }
 
 #[test]
 fn test_search_session_main_session_replacement_and_query_cache() {
-    use scid_mgr::search::evaluator::QueryMatchResult;
-    use scid_mgr::search::ScidMatchResult;
     use scid_mgr::server::search_session::{SearchSessionManager, SessionOwner, SessionQuery};
 
     let mut mgr = SearchSessionManager::new();
@@ -663,10 +643,7 @@ fn test_search_session_main_session_replacement_and_query_cache() {
         "db1",
         "eco:C50",
         1000,
-        vec![ScidMatchResult {
-            game_id: 1,
-            match_details: QueryMatchResult::default(),
-        }],
+        vec![1u32],
         10,
         SessionOwner::Main,
         SessionQuery::General {
@@ -685,10 +662,7 @@ fn test_search_session_main_session_replacement_and_query_cache() {
         "db1",
         "eco:B90",
         1000,
-        vec![ScidMatchResult {
-            game_id: 2,
-            match_details: QueryMatchResult::default(),
-        }],
+        vec![2u32],
         12,
         SessionOwner::Main,
         SessionQuery::General {
@@ -710,8 +684,6 @@ fn test_search_session_main_session_replacement_and_query_cache() {
 
 #[test]
 fn test_handle_query_games_ownership_and_error_handling() {
-    use scid_mgr::search::evaluator::QueryMatchResult;
-    use scid_mgr::search::ScidMatchResult;
     use scid_mgr::server::search_session::{
         PositionMatchMode, SearchSessionManager, SessionOwner, SessionQuery,
     };
@@ -732,14 +704,7 @@ fn test_handle_query_games_ownership_and_error_handling() {
         "sample",
         "main_query",
         100,
-        vec![ScidMatchResult {
-            game_id: 0,
-            match_details: QueryMatchResult {
-                is_match: true,
-                matching_plies: vec![1, 2],
-                match_count: 2,
-            },
-        }],
+        vec![0u32],
         5,
         SessionOwner::Main,
         SessionQuery::General {
@@ -751,14 +716,7 @@ fn test_handle_query_games_ownership_and_error_handling() {
         "sample",
         "ref_query_1",
         100,
-        vec![ScidMatchResult {
-            game_id: 0,
-            match_details: QueryMatchResult {
-                is_match: true,
-                matching_plies: vec![3],
-                match_count: 1,
-            },
-        }],
+        vec![0u32],
         5,
         SessionOwner::Reference,
         SessionQuery::PurePosition {

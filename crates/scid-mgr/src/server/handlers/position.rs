@@ -1,6 +1,4 @@
 use crate::position_index::PositionIndex;
-use crate::search::evaluator::QueryMatchResult;
-use crate::search::ScidMatchResult;
 use crate::server::search_session::SearchSessionManager;
 use crate::server::{DatabaseBackend, RequestMessage, ResponseMessage};
 use std::io::{self, Write};
@@ -139,16 +137,9 @@ pub fn handle_search_position(
                     },
                 );
                 if let Ok(boost_matches) = boost_matches_res {
-                    let matches: Vec<ScidMatchResult> = boost_matches
+                    let matches: Vec<u32> = boost_matches
                         .into_iter()
-                        .map(|bm| ScidMatchResult {
-                            game_id: bm.game_id,
-                            match_details: QueryMatchResult {
-                                is_match: true,
-                                matching_plies: bm.matching_plies.clone(),
-                                match_count: bm.matching_plies.len(),
-                            },
-                        })
+                        .map(|bm| bm.game_id as u32)
                         .collect();
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let matched_count = matches.len();
@@ -207,17 +198,10 @@ pub fn handle_search_position(
                 Ok(pos_res) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let matched_count = pos_res.matches.len();
-                    let matches: Vec<ScidMatchResult> = pos_res
+                    let matches: Vec<u32> = pos_res
                         .matches
                         .into_iter()
-                        .map(|m| ScidMatchResult {
-                            game_id: m.game_id,
-                            match_details: QueryMatchResult {
-                                is_match: true,
-                                matching_plies: vec![m.ply],
-                                match_count: 1,
-                            },
-                        })
+                        .map(|m| m.game_id as u32)
                         .collect();
                     let search_id = session_mgr.create_session(
                         &db_key,
@@ -276,17 +260,10 @@ pub fn handle_search_position(
                 Ok(pos_res) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let matched_count = pos_res.matches.len();
-                    let matches: Vec<ScidMatchResult> = pos_res
+                    let matches: Vec<u32> = pos_res
                         .matches
                         .into_iter()
-                        .map(|m| ScidMatchResult {
-                            game_id: m.game_id,
-                            match_details: QueryMatchResult {
-                                is_match: true,
-                                matching_plies: vec![m.ply],
-                                match_count: 1,
-                            },
-                        })
+                        .map(|m| m.game_id as u32)
                         .collect();
                     let search_id = session_mgr.create_session(
                         &db_key,
@@ -402,17 +379,7 @@ pub fn handle_search_material(
                 Ok(game_ids) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let matched_count = game_ids.len();
-                    let matches: Vec<ScidMatchResult> = game_ids
-                        .into_iter()
-                        .map(|gid| ScidMatchResult {
-                            game_id: gid,
-                            match_details: QueryMatchResult {
-                                is_match: true,
-                                matching_plies: vec![0],
-                                match_count: 1,
-                            },
-                        })
-                        .collect();
+                    let matches: Vec<u32> = game_ids.into_iter().map(|gid| gid as u32).collect();
                     let search_id = session_mgr.create_session(
                         &db_key,
                         &query_key,
@@ -464,17 +431,7 @@ pub fn handle_search_material(
                 Ok(game_ids) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let matched_count = game_ids.len();
-                    let matches: Vec<ScidMatchResult> = game_ids
-                        .into_iter()
-                        .map(|gid| ScidMatchResult {
-                            game_id: gid,
-                            match_details: QueryMatchResult {
-                                is_match: true,
-                                matching_plies: vec![0],
-                                match_count: 1,
-                            },
-                        })
-                        .collect();
+                    let matches: Vec<u32> = game_ids.into_iter().map(|gid| gid as u32).collect();
                     let search_id = session_mgr.create_session(
                         &db_key,
                         &query_key,

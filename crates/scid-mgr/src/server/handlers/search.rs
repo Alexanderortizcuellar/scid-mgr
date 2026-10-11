@@ -222,8 +222,12 @@ pub fn handle_search(
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
     let matched_count = match_results.len();
+    let matches: Vec<u32> = match_results
+        .into_iter()
+        .map(|m| m.game_id as u32)
+        .collect();
     let search_id =
-        session_mgr.create_session(&db_key, &query_key, total_games, match_results, duration_ms);
+        session_mgr.create_session(&db_key, &query_key, total_games, matches, duration_ms);
 
     ResponseMessage {
         id,
@@ -354,11 +358,15 @@ pub fn handle_cql_search(
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
+                let matches: Vec<u32> = match_results
+                    .into_iter()
+                    .map(|m| m.game_id as u32)
+                    .collect();
                 let search_id = session_mgr.create_session(
                     &db_key,
                     query_str,
                     total_games,
-                    match_results,
+                    matches,
                     duration_ms,
                 );
 
@@ -451,11 +459,15 @@ pub fn handle_cql_search(
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
+                let matches: Vec<u32> = match_results
+                    .into_iter()
+                    .map(|m| m.game_id as u32)
+                    .collect();
                 let search_id = session_mgr.create_session(
                     &db_key,
                     query_str,
                     total_games,
-                    match_results,
+                    matches,
                     duration_ms,
                 );
 
@@ -525,11 +537,15 @@ pub fn handle_cql_search(
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let matched_count = match_results.len();
+                let matches: Vec<u32> = match_results
+                    .into_iter()
+                    .map(|m| m.game_id as u32)
+                    .collect();
                 let search_id = session_mgr.create_session(
                     &db_key,
                     query_str,
                     total_games,
-                    match_results,
+                    matches,
                     duration_ms,
                 );
 

@@ -541,19 +541,19 @@ pub fn handle_query_games(
         let games: Vec<GameSummary> = match db {
             DatabaseBackend::Scid(s) => slice
                 .iter()
-                .filter_map(|m| {
-                    let mut summ = s.get_game_summary(m.game_id)?;
-                    summ.matching_plies = Some(m.match_details.matching_plies.clone());
-                    summ.match_count = Some(m.match_details.match_count);
+                .filter_map(|&gid| {
+                    let mut summ = s.get_game_summary(gid as usize)?;
+                    summ.matching_plies = None;
+                    summ.match_count = None;
                     Some(summ)
                 })
                 .collect(),
             DatabaseBackend::Pgn(p) => slice
                 .iter()
-                .map(|m| {
-                    let mut summ = p.get_summary(m.game_id);
-                    summ.matching_plies = Some(m.match_details.matching_plies.clone());
-                    summ.match_count = Some(m.match_details.match_count);
+                .map(|&gid| {
+                    let mut summ = p.get_summary(gid as usize);
+                    summ.matching_plies = None;
+                    summ.match_count = None;
                     summ
                 })
                 .collect(),
