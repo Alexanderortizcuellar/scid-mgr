@@ -69,8 +69,8 @@ impl<'a> BoosterExecutionContext<'a> {
         let mut precompiled_fens = HashMap::new();
         collect_fen_strings(query, &mut precompiled_fens);
 
-        let single_exact_fen = extract_single_exact_fen(query)
-            .and_then(|fen| precompiled_fens.get(fen).cloned());
+        let single_exact_fen =
+            extract_single_exact_fen(query).and_then(|fen| precompiled_fens.get(fen).cloned());
 
         let (min_white_pieces, min_black_pieces) =
             target_piece_counts_bound(query, &precompiled_fens);
@@ -117,8 +117,7 @@ fn collect_fen_strings(query: &SearchQuery, map: &mut HashMap<String, Precompile
                 collect_fen_strings(sub, map);
             }
         }
-        SearchQuery::Symmetric { query: sub, .. }
-        | SearchQuery::Shift { query: sub, .. } => {
+        SearchQuery::Symmetric { query: sub, .. } | SearchQuery::Shift { query: sub, .. } => {
             collect_fen_strings(sub, map);
         }
         _ => {}
@@ -134,8 +133,7 @@ fn query_requires_previous_state(query: &SearchQuery) -> bool {
         | SearchQuery::Terminal(sub)
         | SearchQuery::Not(sub)
         | SearchQuery::VariableBinding { query: sub, .. } => query_requires_previous_state(sub),
-        SearchQuery::Symmetric { query: _sub, .. }
-        | SearchQuery::Shift { query: _sub, .. } => true,
+        SearchQuery::Symmetric { query: _sub, .. } | SearchQuery::Shift { query: _sub, .. } => true,
         SearchQuery::And(subs) | SearchQuery::Or(subs) => {
             subs.iter().any(query_requires_previous_state)
         }
@@ -276,7 +274,8 @@ impl BoosterLanguageSearchAdapter {
                 // 4. Ultra-fast Booster evaluation (~5 ns / move)
                 let moves = boost_idx.get_game_moves(game_id).unwrap_or(&[]);
                 let game_result = boost_entry.map(|e| e.result).unwrap_or(entry.result);
-                let match_details = Self::evaluate_booster_game_with_ctx(&ctx, moves, game_result, None);
+                let match_details =
+                    Self::evaluate_booster_game_with_ctx(&ctx, moves, game_result, None);
 
                 if match_details.is_match {
                     matched.fetch_add(1, Ordering::Relaxed);
@@ -697,7 +696,15 @@ pub fn matches_booster_ply_with_ctx(
             let symmetries = symmetry.expand();
             symmetries.into_iter().any(|sym| {
                 let transformed = sym.transform_query(sub);
-                matches_booster_ply_with_ctx(ctx, &transformed, state, ply, last_move, game_result, moves)
+                matches_booster_ply_with_ctx(
+                    ctx,
+                    &transformed,
+                    state,
+                    ply,
+                    last_move,
+                    game_result,
+                    moves,
+                )
             })
         }
         SearchQuery::Shift { mode, query: sub } => {
@@ -716,18 +723,26 @@ pub fn matches_booster_ply_with_ctx(
             };
             offsets.into_iter().any(|(df, dr)| {
                 if let Some(shifted) = cql_lang::transform::shift_query(sub, df, dr) {
-                    matches_booster_ply_with_ctx(ctx, &shifted, state, ply, last_move, game_result, moves)
+                    matches_booster_ply_with_ctx(
+                        ctx,
+                        &shifted,
+                        state,
+                        ply,
+                        last_move,
+                        game_result,
+                        moves,
+                    )
                 } else {
                     false
                 }
             })
         }
-        SearchQuery::And(subs) => subs
-            .iter()
-            .all(|q| matches_booster_ply_with_ctx(ctx, q, state, ply, last_move, game_result, moves)),
-        SearchQuery::Or(subs) => subs
-            .iter()
-            .any(|q| matches_booster_ply_with_ctx(ctx, q, state, ply, last_move, game_result, moves)),
+        SearchQuery::And(subs) => subs.iter().all(|q| {
+            matches_booster_ply_with_ctx(ctx, q, state, ply, last_move, game_result, moves)
+        }),
+        SearchQuery::Or(subs) => subs.iter().any(|q| {
+            matches_booster_ply_with_ctx(ctx, q, state, ply, last_move, game_result, moves)
+        }),
         SearchQuery::Not(sub) => {
             !matches_booster_ply_with_ctx(ctx, sub, state, ply, last_move, game_result, moves)
         }
@@ -796,7 +811,11 @@ fn match_booster_position(
                 }
                 // Two-phase FIDE rights check
                 if moves.len() >= ply
-                    && !verify_fide_rights(&moves[..ply], pre.target_castling_bits, pre.target_ep_square)
+                    && !verify_fide_rights(
+                        &moves[..ply],
+                        pre.target_castling_bits,
+                        pre.target_ep_square,
+                    )
                 {
                     return false;
                 }
@@ -1280,9 +1299,7 @@ fn target_piece_counts_bound(
         SearchQuery::PlyRange { query: sub, .. }
         | SearchQuery::Initial(sub)
         | SearchQuery::Terminal(sub)
-        | SearchQuery::VariableBinding { query: sub, .. } => {
-            target_piece_counts_bound(sub, fens)
-        }
+        | SearchQuery::VariableBinding { query: sub, .. } => target_piece_counts_bound(sub, fens),
         _ => (0, 0),
     }
 }
