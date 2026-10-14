@@ -6,6 +6,7 @@ use cql_lang::query::{
 use rayon::prelude::*;
 use shakmaty::fen::Fen;
 use shakmaty::{CastlingMode, Chess, Color, FromSetup, Piece, Position, Role, Square};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::pgn_db::{CompactPgnRecord, PgnNameTables};
@@ -13,10 +14,134 @@ use crate::search_adapter::{
     quick_check_entry_headers, quick_check_pgn_entry_headers, ScidMatchResult, ScidSearchAdapter,
 };
 use crate::search_booster::codec::MmapBoostIndex;
-use crate::search_booster::evaluator::{chess_to_board_array, FastReplayState};
+use crate::search_booster::evaluator::{
+    chess_to_board_array, target_castling_rights_bits, target_ep_square_val, verify_fide_rights,
+    FastReplayState,
+};
 use crate::search_booster::types::BoostMove;
 use chess_scid_rw::entry::IndexEntry;
 use chess_scid_rw::names::NameTables;
+
+/// Precompiled representation of an exact FEN target position for zero-allocation matching
+#[derive(Clone, Debug)]
+pub struct PrecompiledExactFen {
+    pub board: [u8; 64],
+    pub turn_parity: u8, // 0 for White, 1 for Black
+    pub target_castling_bits: u8,
+    pub target_ep_square: u8,
+    pub min_white: u8,
+    pub min_black: u8,
+}
+
+impl PrecompiledExactFen {
+    pub fn from_fen(fen_str: &str) -> Option<Self> {
+        let fen: Fen = fen_str.trim().parse().ok()?;
+        let pos: Chess = fen.into_position(CastlingMode::Chess960).ok()?;
+        let board = chess_to_board_array(&pos);
+        let (min_white, min_black) = FastReplayState::count_pieces(&board);
+        let turn_parity = if pos.turn() == Color::White { 0 } else { 1 };
+        let target_castling_bits = target_castling_rights_bits(&pos);
+        let target_ep_square = target_ep_square_val(&pos);
+        Some(Self {
+            board,
+            turn_parity,
+            target_castling_bits,
+            target_ep_square,
+            min_white,
+            min_black,
+        })
+    }
+}
+
+/// Execution context caching precompiled query invariants outside hot search loops
+pub struct BoosterExecutionContext<'a> {
+    pub query: &'a SearchQuery,
+    pub precompiled_fens: HashMap<String, PrecompiledExactFen>,
+    pub single_exact_fen: Option<PrecompiledExactFen>,
+    pub min_white_pieces: u8,
+    pub min_black_pieces: u8,
+    pub needs_prev_state: bool,
+    pub max_cutoff: usize,
+}
+
+impl<'a> BoosterExecutionContext<'a> {
+    pub fn new(query: &'a SearchQuery) -> Self {
+        let mut precompiled_fens = HashMap::new();
+        collect_fen_strings(query, &mut precompiled_fens);
+
+        let single_exact_fen = extract_single_exact_fen(query)
+            .and_then(|fen| precompiled_fens.get(fen).cloned());
+
+        let (min_white_pieces, min_black_pieces) =
+            target_piece_counts_bound(query, &precompiled_fens);
+        let needs_prev_state = query_requires_previous_state(query);
+        let max_cutoff = query.max_ply_cutoff().unwrap_or(usize::MAX);
+
+        Self {
+            query,
+            precompiled_fens,
+            single_exact_fen,
+            min_white_pieces,
+            min_black_pieces,
+            needs_prev_state,
+            max_cutoff,
+        }
+    }
+}
+
+fn extract_single_exact_fen(query: &SearchQuery) -> Option<&str> {
+    match query {
+        SearchQuery::Position(PositionPattern::ExactFen(fen)) => Some(fen.as_str()),
+        SearchQuery::VariableBinding { query: sub, .. } => extract_single_exact_fen(sub),
+        _ => None,
+    }
+}
+
+fn collect_fen_strings(query: &SearchQuery, map: &mut HashMap<String, PrecompiledExactFen>) {
+    match query {
+        SearchQuery::Position(PositionPattern::ExactFen(fen_str)) => {
+            if !map.contains_key(fen_str) {
+                if let Some(compiled) = PrecompiledExactFen::from_fen(fen_str) {
+                    map.insert(fen_str.clone(), compiled);
+                }
+            }
+        }
+        SearchQuery::PlyRange { query: sub, .. }
+        | SearchQuery::Initial(sub)
+        | SearchQuery::Terminal(sub)
+        | SearchQuery::Parent(sub)
+        | SearchQuery::Not(sub)
+        | SearchQuery::VariableBinding { query: sub, .. } => collect_fen_strings(sub, map),
+        SearchQuery::And(subs) | SearchQuery::Or(subs) => {
+            for sub in subs {
+                collect_fen_strings(sub, map);
+            }
+        }
+        SearchQuery::Symmetric { query: sub, .. }
+        | SearchQuery::Shift { query: sub, .. } => {
+            collect_fen_strings(sub, map);
+        }
+        _ => {}
+    }
+}
+
+fn query_requires_previous_state(query: &SearchQuery) -> bool {
+    match query {
+        SearchQuery::Move(m) if m.is_previous => true,
+        SearchQuery::Parent(_) => true,
+        SearchQuery::PlyRange { query: sub, .. }
+        | SearchQuery::Initial(sub)
+        | SearchQuery::Terminal(sub)
+        | SearchQuery::Not(sub)
+        | SearchQuery::VariableBinding { query: sub, .. } => query_requires_previous_state(sub),
+        SearchQuery::Symmetric { query: _sub, .. }
+        | SearchQuery::Shift { query: _sub, .. } => true,
+        SearchQuery::And(subs) | SearchQuery::Or(subs) => {
+            subs.iter().any(query_requires_previous_state)
+        }
+        _ => false,
+    }
+}
 
 /// High-speed booster adapter for executing CQL search queries directly on `.boost.idx`
 pub struct BoosterLanguageSearchAdapter;
@@ -90,6 +215,7 @@ impl BoosterLanguageSearchAdapter {
             return Vec::new();
         }
 
+        let ctx = BoosterExecutionContext::new(query);
         let slice = &entries[start_game..end_game];
         let total = slice.len();
         let scanned = AtomicUsize::new(0);
@@ -150,7 +276,7 @@ impl BoosterLanguageSearchAdapter {
                 // 4. Ultra-fast Booster evaluation (~5 ns / move)
                 let moves = boost_idx.get_game_moves(game_id).unwrap_or(&[]);
                 let game_result = boost_entry.map(|e| e.result).unwrap_or(entry.result);
-                let match_details = Self::evaluate_booster_game(query, moves, game_result, None);
+                let match_details = Self::evaluate_booster_game_with_ctx(&ctx, moves, game_result, None);
 
                 if match_details.is_match {
                     matched.fetch_add(1, Ordering::Relaxed);
@@ -192,11 +318,12 @@ impl BoosterLanguageSearchAdapter {
             return Vec::new();
         }
 
+        let ctx = BoosterExecutionContext::new(query);
         let slice = &entries[start..end];
         let total = slice.len();
         let scanned = AtomicUsize::new(0);
         let matches_count = AtomicUsize::new(0);
-        let chunk_size = 256;
+        let chunk_size = 1024;
 
         let results: Vec<ScidMatchResult> = slice
             .par_chunks(chunk_size)
@@ -230,6 +357,9 @@ impl BoosterLanguageSearchAdapter {
                     }
 
                     let boost_entry = boost_idx.get_game_entry(game_id);
+                    if boost_entry.map(|e| e.is_deleted()).unwrap_or(false) {
+                        continue;
+                    }
 
                     // 3. Fallback for custom start positions
                     if boost_entry.map(|e| e.is_custom_fen()).unwrap_or(true) {
@@ -251,7 +381,7 @@ impl BoosterLanguageSearchAdapter {
                     // 4. Ultra-fast Booster evaluation
                     let moves = boost_idx.get_game_moves(game_id).unwrap_or(&[]);
                     let game_result = boost_entry.map(|e| e.result).unwrap_or(0);
-                    let res = Self::evaluate_booster_game(query, moves, game_result, None);
+                    let res = Self::evaluate_booster_game_with_ctx(&ctx, moves, game_result, None);
 
                     if res.is_match {
                         local_matches += 1;
@@ -288,37 +418,122 @@ impl BoosterLanguageSearchAdapter {
         game_result: u8,
         max_ply: Option<usize>,
     ) -> QueryMatchResult {
-        let max_cutoff = query.max_ply_cutoff().unwrap_or(usize::MAX);
+        let ctx = BoosterExecutionContext::new(query);
+        Self::evaluate_booster_game_with_ctx(&ctx, moves, game_result, max_ply)
+    }
+
+    /// Evaluates using precompiled context for maximum throughput across millions of games
+    pub fn evaluate_booster_game_with_ctx(
+        ctx: &BoosterExecutionContext,
+        moves: &[BoostMove],
+        game_result: u8,
+        max_ply: Option<usize>,
+    ) -> QueryMatchResult {
         let limit = match max_ply {
-            Some(mp) => moves.len().min(mp).min(max_cutoff),
-            None => moves.len().min(max_cutoff),
+            Some(mp) => moves.len().min(mp).min(ctx.max_cutoff),
+            None => moves.len().min(ctx.max_cutoff),
         };
 
-        // Replay timeline positions
         let mut replay = FastReplayState::new();
         let mut matched_plies = Vec::new();
 
+        // ⚡ Dedicated ultra-fast path for single exact FEN queries
+        if let Some(ref pre) = ctx.single_exact_fen {
+            let target_board = &pre.board;
+            let target_turn_parity = pre.turn_parity;
+            let target_castling_bits = pre.target_castling_bits;
+            let target_ep_square = pre.target_ep_square;
+            let min_w = pre.min_white;
+            let min_b = pre.min_black;
+
+            // Check starting position (ply 0)
+            if target_turn_parity == 0
+                && replay.board == *target_board
+                && verify_fide_rights(&[], target_castling_bits, target_ep_square)
+            {
+                matched_plies.push(0);
+            }
+
+            for (ply_idx, &m) in moves[..limit].iter().enumerate() {
+                replay.apply_move(m);
+                if replay.white_pieces < min_w || replay.black_pieces < min_b {
+                    break;
+                }
+
+                let ply = ply_idx + 1;
+                if (ply & 1) as u8 != target_turn_parity {
+                    continue;
+                }
+
+                if replay.board == *target_board {
+                    if !verify_fide_rights(&moves[..ply], target_castling_bits, target_ep_square) {
+                        continue;
+                    }
+                    matched_plies.push(ply);
+                }
+            }
+
+            let is_match = !matched_plies.is_empty();
+            return QueryMatchResult {
+                is_match,
+                match_count: matched_plies.len(),
+                matching_plies: matched_plies,
+            };
+        }
+
         // Check starting position (ply 0)
-        if matches_booster_ply(query, &replay, 0, None, game_result) {
+        if matches_booster_ply_with_ctx(ctx, ctx.query, &replay, 0, None, game_result, moves) {
             matched_plies.push(0);
         }
 
-        // Fast early exit for simple positional queries if target material is higher than available
-        let (min_w, min_b) = target_piece_counts_bound(query);
+        let min_w = ctx.min_white_pieces;
+        let min_b = ctx.min_black_pieces;
 
-        for (ply_idx, &m) in moves[..limit].iter().enumerate() {
-            let prev_replay = replay.clone();
-            replay.apply_move(m);
+        if ctx.needs_prev_state {
+            for (ply_idx, &m) in moves[..limit].iter().enumerate() {
+                let prev_replay = replay.clone();
+                replay.apply_move(m);
 
-            if replay.white_pieces < min_w || replay.black_pieces < min_b {
-                break;
+                if replay.white_pieces < min_w || replay.black_pieces < min_b {
+                    break;
+                }
+
+                let ply = ply_idx + 1;
+                let last_move = Some((&prev_replay, m));
+
+                if matches_booster_ply_with_ctx(
+                    ctx,
+                    ctx.query,
+                    &replay,
+                    ply,
+                    last_move,
+                    game_result,
+                    moves,
+                ) {
+                    matched_plies.push(ply);
+                }
             }
+        } else {
+            for (ply_idx, &m) in moves[..limit].iter().enumerate() {
+                replay.apply_move(m);
 
-            let ply = ply_idx + 1;
-            let last_move = Some((&prev_replay, m));
+                if replay.white_pieces < min_w || replay.black_pieces < min_b {
+                    break;
+                }
 
-            if matches_booster_ply(query, &replay, ply, last_move, game_result) {
-                matched_plies.push(ply);
+                let ply = ply_idx + 1;
+
+                if matches_booster_ply_with_ctx(
+                    ctx,
+                    ctx.query,
+                    &replay,
+                    ply,
+                    None,
+                    game_result,
+                    moves,
+                ) {
+                    matched_plies.push(ply);
+                }
             }
         }
 
@@ -376,8 +591,22 @@ pub fn matches_booster_ply(
     last_move: Option<(&FastReplayState, BoostMove)>,
     game_result: u8,
 ) -> bool {
+    let ctx = BoosterExecutionContext::new(query);
+    matches_booster_ply_with_ctx(&ctx, query, state, ply, last_move, game_result, &[])
+}
+
+/// Internal helper evaluating a single ply with precompiled context and move history for FIDE rights
+pub fn matches_booster_ply_with_ctx(
+    ctx: &BoosterExecutionContext,
+    query: &SearchQuery,
+    state: &FastReplayState,
+    ply: usize,
+    last_move: Option<(&FastReplayState, BoostMove)>,
+    game_result: u8,
+    moves: &[BoostMove],
+) -> bool {
     match query {
-        SearchQuery::Position(pattern) => match_booster_position(pattern, state, ply),
+        SearchQuery::Position(pattern) => match_booster_position(ctx, pattern, state, ply, moves),
         SearchQuery::Material(pred) => match_booster_material(pred, state),
         SearchQuery::Power(pred) => match_booster_power(pred, state),
         SearchQuery::Pawn(pred) => {
@@ -425,14 +654,14 @@ pub fn matches_booster_ply(
         SearchQuery::Header(_) => true,
         SearchQuery::PlyRange { range, query: sub } => {
             if ply >= range.start && ply < range.end {
-                matches_booster_ply(sub, state, ply, last_move, game_result)
+                matches_booster_ply_with_ctx(ctx, sub, state, ply, last_move, game_result, moves)
             } else {
                 false
             }
         }
         SearchQuery::Initial(sub) => {
             if ply == 0 {
-                matches_booster_ply(sub, state, ply, last_move, game_result)
+                matches_booster_ply_with_ctx(ctx, sub, state, ply, last_move, game_result, moves)
             } else {
                 false
             }
@@ -440,7 +669,20 @@ pub fn matches_booster_ply(
         SearchQuery::Parent(sub) => {
             if let Some((prev_state, _)) = last_move {
                 if ply > 0 {
-                    matches_booster_ply(sub, prev_state, ply - 1, None, game_result)
+                    let parent_moves = if moves.len() >= ply {
+                        &moves[..ply - 1]
+                    } else {
+                        &[]
+                    };
+                    matches_booster_ply_with_ctx(
+                        ctx,
+                        sub,
+                        prev_state,
+                        ply - 1,
+                        None,
+                        game_result,
+                        parent_moves,
+                    )
                 } else {
                     false
                 }
@@ -455,7 +697,7 @@ pub fn matches_booster_ply(
             let symmetries = symmetry.expand();
             symmetries.into_iter().any(|sym| {
                 let transformed = sym.transform_query(sub);
-                matches_booster_ply(&transformed, state, ply, last_move, game_result)
+                matches_booster_ply_with_ctx(ctx, &transformed, state, ply, last_move, game_result, moves)
             })
         }
         SearchQuery::Shift { mode, query: sub } => {
@@ -474,7 +716,7 @@ pub fn matches_booster_ply(
             };
             offsets.into_iter().any(|(df, dr)| {
                 if let Some(shifted) = cql_lang::transform::shift_query(sub, df, dr) {
-                    matches_booster_ply(&shifted, state, ply, last_move, game_result)
+                    matches_booster_ply_with_ctx(ctx, &shifted, state, ply, last_move, game_result, moves)
                 } else {
                     false
                 }
@@ -482,17 +724,28 @@ pub fn matches_booster_ply(
         }
         SearchQuery::And(subs) => subs
             .iter()
-            .all(|q| matches_booster_ply(q, state, ply, last_move, game_result)),
+            .all(|q| matches_booster_ply_with_ctx(ctx, q, state, ply, last_move, game_result, moves)),
         SearchQuery::Or(subs) => subs
             .iter()
-            .any(|q| matches_booster_ply(q, state, ply, last_move, game_result)),
-        SearchQuery::Not(sub) => !matches_booster_ply(sub, state, ply, last_move, game_result),
+            .any(|q| matches_booster_ply_with_ctx(ctx, q, state, ply, last_move, game_result, moves)),
+        SearchQuery::Not(sub) => {
+            !matches_booster_ply_with_ctx(ctx, sub, state, ply, last_move, game_result, moves)
+        }
+        SearchQuery::VariableBinding { query: sub, .. } => {
+            matches_booster_ply_with_ctx(ctx, sub, state, ply, last_move, game_result, moves)
+        }
         _ => false,
     }
 }
 
 /// Matches a position pattern directly against `FastReplayState`
-fn match_booster_position(pattern: &PositionPattern, state: &FastReplayState, ply: usize) -> bool {
+fn match_booster_position(
+    ctx: &BoosterExecutionContext,
+    pattern: &PositionPattern,
+    state: &FastReplayState,
+    ply: usize,
+    moves: &[BoostMove],
+) -> bool {
     match pattern {
         PositionPattern::Ply { op, value } => compare_usize(ply, *value, *op),
         PositionPattern::MoveNumber { op, value } => {
@@ -532,16 +785,22 @@ fn match_booster_position(pattern: &PositionPattern, state: &FastReplayState, pl
             compare_usize(actual_count, *count, *op)
         }
         PositionPattern::ExactFen(fen_str) => {
-            if let Ok(fen) = fen_str.trim().parse::<Fen>() {
-                if let Ok(target_pos) = fen.into_position::<Chess>(CastlingMode::Chess960) {
-                    let target_board = chess_to_board_array(&target_pos);
-                    let target_turn_rem = if target_pos.turn() == Color::White {
-                        0
-                    } else {
-                        1
-                    };
-                    return state.board == target_board && (ply % 2) == target_turn_rem;
+            if let Some(pre) = ctx.precompiled_fens.get(fen_str) {
+                // Parity check first (1 cycle)
+                if (ply & 1) as u8 != pre.turn_parity {
+                    return false;
                 }
+                // Vectorized board check
+                if state.board != pre.board {
+                    return false;
+                }
+                // Two-phase FIDE rights check
+                if moves.len() >= ply
+                    && !verify_fide_rights(&moves[..ply], pre.target_castling_bits, pre.target_ep_square)
+                {
+                    return false;
+                }
+                return true;
             }
             if let Some(pos) = board_array_to_shakmaty_chess(&state.board, ply) {
                 cql_lang::pattern::PositionMatcher::matches_at_ply(pattern, &pos, ply)
@@ -962,14 +1221,14 @@ fn match_square_content_booster(piece_code: u8, content: &SquareContent) -> bool
 }
 
 /// Helper extracting lower bound for white/black piece counts for fast branch pruning
-fn target_piece_counts_bound(query: &SearchQuery) -> (u8, u8) {
+fn target_piece_counts_bound(
+    query: &SearchQuery,
+    fens: &HashMap<String, PrecompiledExactFen>,
+) -> (u8, u8) {
     match query {
         SearchQuery::Position(PositionPattern::ExactFen(fen_str)) => {
-            if let Ok(fen) = fen_str.trim().parse::<Fen>() {
-                if let Ok(target_pos) = fen.into_position::<Chess>(CastlingMode::Chess960) {
-                    let arr = chess_to_board_array(&target_pos);
-                    return FastReplayState::count_pieces(&arr);
-                }
+            if let Some(pre) = fens.get(fen_str) {
+                return (pre.min_white, pre.min_black);
             }
             (0, 0)
         }
@@ -1007,6 +1266,22 @@ fn target_piece_counts_bound(query: &SearchQuery) -> (u8, u8) {
                 b += c as u8;
             }
             (w, b)
+        }
+        SearchQuery::And(subs) => {
+            let mut max_w = 0u8;
+            let mut max_b = 0u8;
+            for sub in subs {
+                let (w, b) = target_piece_counts_bound(sub, fens);
+                max_w = max_w.max(w);
+                max_b = max_b.max(b);
+            }
+            (max_w, max_b)
+        }
+        SearchQuery::PlyRange { query: sub, .. }
+        | SearchQuery::Initial(sub)
+        | SearchQuery::Terminal(sub)
+        | SearchQuery::VariableBinding { query: sub, .. } => {
+            target_piece_counts_bound(sub, fens)
         }
         _ => (0, 0),
     }
